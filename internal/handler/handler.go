@@ -36,10 +36,29 @@ func New(chatProxy ChatProxy, modelProvider ModelProvider) *Handler {
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Get("/", h.Root)
 	r.Get("/v1/models", h.ListModels)
 	r.Get("/ready", h.Ready)
 	r.Post("/v1/chat/completions", h.Chat)
 	return r
+}
+
+func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{
+  "service": "freegate - multi-upstream AI proxy",
+  "routes": {
+    "GET  /": "this help",
+    "GET  /ready": "health check",
+    "GET  /v1/models": "list available free models",
+    "POST /v1/chat/completions": "OpenAI-compatible chat completion"
+  },
+  "upstreams": {
+    "opencode": "default, model tanpa prefix",
+    "kilo": "prefix: kilo/, kilo-, openrouter/, suffix: :free"
+  }
+}`))
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
