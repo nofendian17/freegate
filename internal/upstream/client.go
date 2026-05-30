@@ -13,6 +13,8 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+const MaxResponseBodySize = 10 << 20 // 10 MB
+
 type HTTPClient struct {
 	client  *http.Client
 	baseURL string
@@ -75,7 +77,7 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
 }
 
 func (c *HTTPClient) applyAuth(req *http.Request) {

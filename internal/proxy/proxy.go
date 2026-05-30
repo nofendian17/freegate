@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	"freegate/internal/metrics"
 	"freegate/internal/model"
+	"freegate/internal/respond"
 	"freegate/internal/upstream"
 )
 
@@ -30,18 +32,25 @@ type Client struct {
 	router    Router
 	maxRetry  int
 	ipRotator IPRotator
+	metrics   *metrics.Metrics
 }
 
 func NewClient(router Router) *Client {
 	return &Client{
 		router:   router,
 		maxRetry: DefaultMaxRetry,
+		metrics:  metrics.New(),
 	}
 }
 
 func (c *Client) WithTorController(ir IPRotator) *Client {
 	c.ipRotator = ir
 	return c
+}
+
+// Metrics returns the metrics snapshot for the /v1/metrics endpoint.
+func (c *Client) Metrics() map[string]any {
+	return c.metrics.Snapshot()
 }
 
 func (c *Client) AllModels() []model.Model {
@@ -54,6 +63,7 @@ func (c *Client) IsReady() bool {
 
 func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte) {
 	requestID := r.Header.Get("X-Request-ID")
+	c.metrics.TotalRequests.Add(1)
 	slog.Info("chat request",
 		"request_id", requestID,
 		"model", modelID,
@@ -62,6 +72,7 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 	)
 
 	u := c.router.Select(modelID)
+	c.metrics.IncrUpstream(u.Name())
 	slog.Info("upstream selected", "request_id", requestID, "model", modelID, "upstream", u.Name())
 
 	var resp *http.Response
@@ -75,9 +86,10 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 					slog.Info("tor: IP rotated for retry", "request_id", requestID, "attempt", attempt)
 				}
 			}
+			c.metrics.RetryCount.Add(1)
 			select {
 			case <-r.Context().Done():
-				writeJSONError(w, http.StatusGatewayTimeout, "client_closed", "client disconnected during retry")
+				respond.JSONError(w, http.StatusGatewayTimeout, "client_closed", "client disconnected during retry")
 				return
 			case <-time.After(RetryDelay):
 			}
@@ -85,8 +97,9 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 
 		resp, err = u.ChatCompletion(r.Context(), body)
 		if err != nil {
+			c.metrics.UpstreamErrors.Add(1)
 			slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
-			writeJSONError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("upstream request failed: %v", err))
+			respond.JSONError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("upstream request failed: %v", err))
 			return
 		}
 
@@ -133,10 +146,4 @@ func copyHeaders(dst http.ResponseWriter, src *http.Response) {
 			dst.Header().Add(k, v)
 		}
 	}
-}
-
-func writeJSONError(w http.ResponseWriter, status int, tp, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, `{"error":{"type":"%s","message":"%s"}}`, tp, msg)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"freegate/internal/model"
 )
@@ -28,7 +29,7 @@ func (k *KiloUpstream) Name() string {
 	return "kilo"
 }
 
-func (k *KiloUpstream) Start(ctx context.Context) {
+func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	refresher := NewRefresher("kilo", func(ctx context.Context) error {
 		models, err := k.ListModels(ctx)
 		if err != nil {
@@ -36,7 +37,7 @@ func (k *KiloUpstream) Start(ctx context.Context) {
 		}
 		k.cache.Set(models)
 		return nil
-	})
+	}, refreshInterval)
 	refresher.Start(ctx)
 }
 

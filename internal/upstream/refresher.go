@@ -16,11 +16,14 @@ type Refresher struct {
 	maxBack  time.Duration
 }
 
-func NewRefresher(name string, fn RefreshFunc) *Refresher {
+func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refresher {
+	if interval <= 0 {
+		interval = ModelRefreshInterval
+	}
 	return &Refresher{
 		name:     name,
 		refresh:  fn,
-		interval: ModelRefreshInterval,
+		interval: interval,
 		backoff:  InitialBackoff,
 		maxBack:  MaxBackoff,
 	}

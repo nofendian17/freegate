@@ -60,7 +60,6 @@ func (c *Controller) ForceNewIP() error {
 }
 
 func (c *Controller) newIPLocked() error {
-
 	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -92,6 +91,12 @@ func (c *Controller) newIPLocked() error {
 		}
 	}
 	return fmt.Errorf("tor control: no OK response received")
+}
+
+// Close performs any cleanup needed for the Tor controller.
+// Since each control connection is self-contained, this primarily logs shutdown.
+func (c *Controller) Close() {
+	slog.Info("tor: controller closed")
 }
 
 // getIP fetches the current exit IP by making an HTTP request through the SOCKS5 proxy.

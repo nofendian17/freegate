@@ -59,12 +59,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	opencode.Start(ctx)
-	kilo.Start(ctx)
+	opencode.Start(ctx, time.Duration(cfg.UpstreamRefreshOpenCode)*time.Second)
+	kilo.Start(ctx, time.Duration(cfg.UpstreamRefreshKilo)*time.Second)
 
 	pc := proxy.NewClient(router).WithTorController(tc)
 
-	h := handler.New(pc, pc)
+	h := handler.New(pc)
 
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
@@ -107,6 +107,7 @@ func main() {
 
 	cancel()
 
+	tc.Close()
 	rl.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)

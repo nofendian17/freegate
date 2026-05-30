@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"freegate/internal/model"
 )
@@ -20,8 +21,8 @@ func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error) { 
 func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
 	return nil, nil
 }
-func (m *mockUpstream) Models() []model.Model { return m.models }
-func (m *mockUpstream) Start(ctx context.Context)  {}
+func (m *mockUpstream) Models() []model.Model                                    { return m.models }
+func (m *mockUpstream) Start(ctx context.Context, refreshInterval time.Duration) {}
 
 func TestRouter_Select_Match(t *testing.T) {
 	kilo := &mockUpstream{

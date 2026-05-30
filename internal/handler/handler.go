@@ -9,103 +9,92 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/model"
+	"freegate/internal/respond"
 )
 
 const MaxRequestBodySize = 10 << 20
 
-type ChatProxy interface {
+// Upstream is the single interface the handler needs from the proxy client.
+type Upstream interface {
 	ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte)
-}
-
-type ModelProvider interface {
 	AllModels() []model.Model
 	IsReady() bool
+	Metrics() map[string]any
 }
 
 type Handler struct {
-	chatProxy     ChatProxy
-	modelProvider ModelProvider
+	upstream Upstream
 }
 
-func New(chatProxy ChatProxy, modelProvider ModelProvider) *Handler {
-	return &Handler{
-		chatProxy:     chatProxy,
-		modelProvider: modelProvider,
-	}
+func New(upstream Upstream) *Handler {
+	return &Handler{upstream: upstream}
 }
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.Root)
 	r.Get("/v1/models", h.ListModels)
+	r.Get("/v1/metrics", h.Metrics)
 	r.Get("/ready", h.Ready)
 	r.Post("/v1/chat/completions", h.Chat)
 	return r
 }
 
 func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{
-  "service": "freegate - multi-upstream AI proxy",
-  "routes": {
-    "GET  /": "this help",
-    "GET  /ready": "health check",
-    "GET  /v1/models": "list available free models",
-    "POST /v1/chat/completions": "OpenAI-compatible chat completion"
-  },
-  "upstreams": {
-    "opencode": "default, model tanpa prefix",
-    "kilo": "prefix: kilo/, kilo-, openrouter/, suffix: :free"
-  }
-}`))
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"service": "freegate - multi-upstream AI proxy",
+		"routes": map[string]string{
+			"GET  /":                    "this help",
+			"GET  /ready":               "health check",
+			"GET  /v1/models":           "list available free models",
+			"POST /v1/chat/completions": "OpenAI-compatible chat completion",
+		},
+		"upstreams": map[string]string{
+			"opencode": "default, model tanpa prefix",
+			"kilo":     "prefix: kilo/, kilo-, openrouter/, suffix: :free",
+		},
+	})
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	models := h.modelProvider.AllModels()
+	models := h.upstream.AllModels()
 	if len(models) == 0 {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"error":{"type":"unavailable","message":"models not ready"}}`))
+		respond.JSONError(w, http.StatusServiceUnavailable, "unavailable", "models not ready")
 		return
 	}
 
 	resp := model.ModelList{Object: "list", Data: models}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	respond.JSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if h.modelProvider.IsReady() {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-		return
-	}
-	w.WriteHeader(http.StatusServiceUnavailable)
-	w.Write([]byte(`{"status":"not ready"}`))
+	respond.Ready(w, h.upstream.IsReady())
+}
+
+func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, h.upstream.Metrics())
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodySize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 10 MB limit")
+		respond.JSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 10 MB limit")
 		return
 	}
 
 	if len(body) == 0 {
-		writeJSONError(w, http.StatusBadRequest, "bad_request", "empty request body")
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", "empty request body")
 		return
 	}
 
 	modelID, err := extractModelID(body)
 	if err != nil {
-		writeJSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 
-	h.chatProxy.ProxyChat(w, r, modelID, body)
+	h.upstream.ProxyChat(w, r, modelID, body)
 }
 
 func extractModelID(body []byte) (string, error) {
@@ -119,10 +108,4 @@ func extractModelID(body []byte) (string, error) {
 		return "", fmt.Errorf("missing required field: model")
 	}
 	return req.Model, nil
-}
-
-func writeJSONError(w http.ResponseWriter, status int, tp, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, `{"error":{"type":"%s","message":"%s"}}`, tp, msg)
 }

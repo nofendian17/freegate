@@ -20,7 +20,7 @@ type Upstream interface {
 	ListModels(ctx context.Context) ([]model.Model, error)
 	ChatCompletion(ctx context.Context, body []byte) (*http.Response, error)
 	Models() []model.Model
-	Start(ctx context.Context)
+	Start(ctx context.Context, refreshInterval time.Duration)
 }
 
 type Router struct {

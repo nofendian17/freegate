@@ -24,7 +24,12 @@ func (c *ModelCache) Set(models []model.Model) {
 func (c *ModelCache) Get() []model.Model {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.models
+	if c.models == nil {
+		return nil
+	}
+	result := make([]model.Model, len(c.models))
+	copy(result, c.models)
+	return result
 }
 
 func (c *ModelCache) Len() int {

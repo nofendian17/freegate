@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"freegate/internal/model"
 )
@@ -27,7 +28,7 @@ func (o *OpenCodeUpstream) Name() string {
 	return "opencode"
 }
 
-func (o *OpenCodeUpstream) Start(ctx context.Context) {
+func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	refresher := NewRefresher("opencode", func(ctx context.Context) error {
 		models, err := o.ListModels(ctx)
 		if err != nil {
@@ -35,7 +36,7 @@ func (o *OpenCodeUpstream) Start(ctx context.Context) {
 		}
 		o.cache.Set(models)
 		return nil
-	})
+	}, refreshInterval)
 	refresher.Start(ctx)
 }
 

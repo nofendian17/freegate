@@ -74,6 +74,8 @@ All settings are environment variables:
 | `UPSTREAM_KEY_KILO` | `anonymous` | Kilo API key |
 | `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models |
 | `UPSTREAM_KILO_PREFIXES` | `kilo/,kilo-,openrouter/` | Comma-separated prefix list for Kilo routing |
+| `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
+| `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
 
 ## Reasoning Normalization
 
@@ -99,6 +101,7 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 |--------|------|-------------|
 | `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors) |
 | `GET` | `/ready` | Health check |
 
 ## Architecture
@@ -123,10 +126,12 @@ freegate
 ├── cmd/server/main.go        # Entry point
 ├── internal/
 │   ├── config/                # Env-based config with validation
-│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready
+│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready, Metrics
+│   ├── metrics/               # Request counters (per-upstream, retries, errors)
 │   ├── middleware/            # Logging, auth, rate limit, CORS, request ID
 │   ├── model/                 # Shared model types
 │   ├── proxy/                 # Upstream-agnostic proxy + reasoning normalization
+│   ├── respond/               # Shared HTTP response utilities (JSON, errors)
 │   ├── tor/                   # Tor controller for IP rotation
 │   └── upstream/              # Upstream interface + Router + implementations
 │       ├── client.go          # HTTP client (SOCKS5 + auth headers)

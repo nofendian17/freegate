@@ -26,6 +26,9 @@ type Config struct {
 	UpstreamDefault      string
 	UpstreamKiloPrefixes []string
 
+	UpstreamRefreshOpenCode int
+	UpstreamRefreshKilo     int
+
 	SOCKSAddr string
 }
 
@@ -48,6 +51,9 @@ func Load() *Config {
 
 		UpstreamDefault:      envStr("UPSTREAM_DEFAULT", "opencode"),
 		UpstreamKiloPrefixes: envSlice("UPSTREAM_KILO_PREFIXES", "kilo/,kilo-,openrouter/"),
+
+		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
+		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
 	}
 
 	cfg.SOCKSAddr = cfg.TorHost + ":" + strconv.Itoa(cfg.TorPort)
