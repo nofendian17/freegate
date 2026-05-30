@@ -77,7 +77,7 @@ All settings are environment variables:
 
 ## Reasoning Normalization
 
-OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `reasoning`. freegate normalizes so **both fields** appear in every response:
+OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `reasoning`. freegate normalizes so both fields appear in every response:
 
 ```json
 {
@@ -116,6 +116,31 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 └──────────┘     └──────────────┘     └────────────┘     └──────────────────┘
 ```
 
+## Project Structure
+
+```
+freegate
+├── cmd/server/main.go        # Entry point
+├── internal/
+│   ├── config/                # Env-based config with validation
+│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready
+│   ├── middleware/            # Logging, auth, rate limit, CORS, request ID
+│   ├── model/                 # Shared model types
+│   ├── proxy/                 # Upstream-agnostic proxy + reasoning normalization
+│   ├── tor/                   # Tor controller for IP rotation
+│   └── upstream/              # Upstream interface + Router + implementations
+│       ├── client.go          # HTTP client (SOCKS5 + auth headers)
+│       ├── cache.go           # Thread-safe model cache
+│       ├── refresher.go       # Background model refresh loop
+│       ├── opencode.go        # OpenCode upstream adapter
+│       ├── kilocode.go        # Kilo/OpenRouter upstream adapter
+│       └── upstream.go        # Upstream interface + Router
+├── docker-compose.yml         # Proxy + Tor containers
+├── Dockerfile                 # Multi-stage Go build
+├── Dockerfile.tor             # Tor daemon with health check
+└── .env.example               # Environment variable reference
+```
+
 ## Development
 
 ```bash
@@ -135,3 +160,7 @@ docker compose build
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration
+
+## Disclaimer
+
+This project is not affiliated with OpenAI, OpenCode.ai, Kilo.ai, or any other upstream provider. It is a personal tool that routes requests to publicly available free-tier API endpoints. Users are responsible for complying with each upstream provider's terms of service. The software is provided "as is", without warranty of any kind.
