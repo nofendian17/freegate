@@ -1,0 +1,13 @@
+# Environment files with secrets
+.env
+
+# Compiled binary
+/server
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude
+.claude/
