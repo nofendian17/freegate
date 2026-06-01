@@ -22,6 +22,8 @@ docker compose up -d
 
 The proxy will be available at `http://localhost:1234`.
 
+A read-only dashboard is available at **http://localhost:1234/ui/** — see [Dashboard](#dashboard) below.
+
 ## Usage
 
 ```bash
@@ -103,6 +105,38 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors) |
 | `GET` | `/ready` | Health check |
+| `GET` | `/ui/` | **Dashboard** (read-only monitoring UI, see below) |
+
+## Dashboard
+
+A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. It is built with HTMX + Chart.js, no JS framework, no SPA, no database — everything is in-memory and embedded into the single Go binary.
+
+### Features
+
+- **Stat cards** — total requests, retries, upstream errors, rate-limit hits (auto-refresh 5s)
+- **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
+- **Upstream split** — opencode vs kilo counts with proportional bars
+- **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
+- **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, IP, error), auto-refresh 5s
+- **Health badge** — green dot when models are loaded, amber when empty
+
+### Endpoints used by the dashboard
+
+| Path | Description |
+|------|-------------|
+| `GET /ui/` | HTML dashboard (server-rendered initial state) |
+| `GET /ui/partials/stats` | HTMX fragment: 4 stat cards |
+| `GET /ui/partials/requests` | HTMX fragment: recent-requests table rows |
+| `GET /ui/partials/models?provider=…` | HTMX fragment: models table rows |
+| `GET /ui/api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
+| `GET /ui/api/health` | JSON: `{ok, uptime, started_at, has_models, model_count}` |
+| `GET /ui/static/{css,js}/…` | Vendored HTMX, Chart.js, dark-theme CSS |
+
+### Notes
+
+- **No login, no auth.** The dashboard is open. The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default.
+- **In-memory only.** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
+- **No persistence layer.** A future revision could add SQLite for historical requests; for now, this is a live-only monitoring surface.
 
 ## Architecture
 
@@ -116,8 +150,51 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 │           │     │              │     ┌────────────┐     ├─ api.kilo.ai     │
 │           │     │  Models      │────▶│ Tor SOCKS5 │────▶│  /api/openrouter │
 │           │     │  (free only) │     │  :9050     │     │  key: anonymous  │
-└──────────┘     └──────────────┘     └────────────┘     └──────────────────┘
+│           │     │              │     └────────────┘     └──────────────────┘
+│           │     │  Dashboard   │                              ▲
+│  Browser  │────▶│  /ui/*  (HTMX)│ ── reads in-memory stats ──┘
+└──────────┘     └──────────────┘
 ```
+
+## Project Structure
+
+```
+freegate
+├── cmd/server/main.go        # Entry point
+├── internal/
+│   ├── config/                # Env-based config with validation
+│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready, Metrics
+│   ├── metrics/               # Request counters (per-upstream, retries, errors)
+│   ├── middleware/            # Logging, auth, rate limit, CORS, request ID
+│   ├── model/                 # Shared model types
+│   ├── proxy/                 # Upstream-agnostic proxy + reasoning normalization
+│   │                          # + RequestLogEntry for UI observability
+│   ├── respond/               # Shared HTTP response utilities (JSON, errors)
+│   ├── ringbuffer/            # Generic typed ring buffer (used by UI)
+│   ├── tor/                   # Tor controller for IP rotation
+│   ├── ui/                    # Dashboard: HTMX handlers, templates, recorder
+│   │   ├── recorder.go        # In-memory timeseries + recent requests
+│   │   ├── dashboard.go       # GET /ui/
+│   │   ├── partials.go        # GET /ui/partials/* (HTMX fragments)
+│   │   ├── routes.go          # chi router with all UI routes
+│   │   ├── handler.go         # Public handler methods exposed to main.go
+│   │   └── loader.go          # Embedded template loader
+│   └── upstream/              # Upstream interface + Router + implementations
+│       ├── client.go          # HTTP client (SOCKS5 + auth headers)
+│       ├── cache.go           # Thread-safe model cache
+│       ├── refresher.go        # Background model refresh loop
+│       ├── opencode.go        # OpenCode upstream adapter
+│       ├── kilocode.go        # Kilo/OpenRouter upstream adapter
+│       └── upstream.go        # Upstream interface + Router
+├── web/                       # Embedded assets (templates, CSS, JS)
+│   ├── templates/             # html/template sources
+│   └── static/                # Vendored HTMX, Chart.js, app.css
+├── docker-compose.yml         # Proxy + Tor containers
+├── Dockerfile                 # Multi-stage Go build
+├── Dockerfile.tor             # Tor daemon with health check
+└── .env.example               # Environment variable reference
+```
+
 
 ## Project Structure
 
@@ -165,6 +242,7 @@ docker compose build
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration
+- **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)
 
 ## Disclaimer
 

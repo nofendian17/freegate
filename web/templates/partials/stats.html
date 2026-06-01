@@ -1,0 +1,10 @@
+{{define "partials/stats.html"}}
+{{range .Cards}}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">{{.Label}}</span>
+  </div>
+  <div class="card-value tone-{{.Tone}}">{{.Value}}</div>
+</div>
+{{end}}
+{{end}}

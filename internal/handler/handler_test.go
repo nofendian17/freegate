@@ -44,17 +44,14 @@ func TestHandler_Root(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	h.Root(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected status 302, got %d", w.Code)
 	}
-	var result map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-	if result["service"] != "freegate - multi-upstream AI proxy" {
-		t.Errorf("unexpected service field: %v", result["service"])
+	loc := w.Header().Get("Location")
+	if loc != "/ui/" {
+		t.Errorf("expected Location /ui/, got %q", loc)
 	}
 }
 
