@@ -114,7 +114,7 @@ a:hover { color: var(--orange-hover); text-decoration: underline; }
   justify-content: space-between;
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border);
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
 .header-left {
