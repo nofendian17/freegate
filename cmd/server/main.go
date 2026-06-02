@@ -92,10 +92,8 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CORS)
 
-	// Root redirect + UI dashboard — no rate limit, no auth
-	r.Get("/", h.Root)
-	r.Get("/ui", func(w http.ResponseWriter, req *http.Request) { http.Redirect(w, req, "/ui/", http.StatusMovedPermanently) })
-	r.Mount("/ui/", uiHandler.Routes())
+	// UI dashboard at root — no rate limit, no auth
+	uiHandler.RegisterRoutes(r)
 
 	// API (OpenAI-compatible) — rate limit + auth apply to these only
 	r.Group(func(r chi.Router) {

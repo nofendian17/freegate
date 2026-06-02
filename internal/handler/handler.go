@@ -39,10 +39,6 @@ func (h *Handler) Routes() chi.Router {
 	return r
 }
 
-func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/ui/", http.StatusFound)
-}
-
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 	models := h.upstream.AllModels()
 	if len(models) == 0 {

@@ -38,14 +38,19 @@ func NewHandler(data DataSource, tpl *template.Template, staticFS fs.FS) *Handle
 }
 
 // Routes returns a chi.Router with all UI routes relative to its mount point.
-// Mount it at a prefix (e.g. r.Mount("/ui", h.Routes())) and the subrouter
-// handles paths like "/", "/partials/stats", "/static/*", etc.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	h.RegisterRoutes(r)
+	return r
+}
 
+// RegisterRoutes registers UI handler routes onto an existing router.
+// Use this when mounting at root alongside other routes to avoid
+// consuming unmatched paths with a blanket Mount.
+func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.dashboard)
-	r.Get("/index.html", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/", http.StatusMovedPermanently)
+	r.Get("/index.html", func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "/", http.StatusMovedPermanently)
 	})
 
 	r.Get("/partials/stats", h.partialStats)
@@ -55,10 +60,10 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/api/timeseries", h.apiTimeseries)
 	r.Get("/api/health", h.apiHealth)
 
-	r.Get("/static/*", func(w http.ResponseWriter, req *http.Request) {
-		req.URL.Path = "/" + chi.URLParam(req, "*")
-		http.FileServer(http.FS(h.staticFS)).ServeHTTP(w, req)
-	})
+	r.Get("/static/*", h.serveStatic)
+}
 
-	return r
+func (h *Handler) serveStatic(w http.ResponseWriter, req *http.Request) {
+	req.URL.Path = "/" + chi.URLParam(req, "*")
+	http.FileServer(http.FS(h.staticFS)).ServeHTTP(w, req)
 }

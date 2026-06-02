@@ -184,6 +184,12 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 	if usage.Total > 0 {
 		c.metrics.TotalTokens.Add(int64(usage.Total))
 	}
+	if usage.Prompt > 0 {
+		c.metrics.PromptTokens.Add(int64(usage.Prompt))
+	}
+	if usage.Completion > 0 {
+		c.metrics.CompletionTokens.Add(int64(usage.Completion))
+	}
 }
 
 func copyHeaders(dst http.ResponseWriter, src *http.Response) {

@@ -25,7 +25,8 @@ func buildStatsData(m map[string]any) statCardsView {
 	retries := asInt64(m["retry_count"])
 	errors := asInt64(m["upstream_errors"])
 	rlHits := asInt64(m["rate_limit_hits"])
-	tokens := asInt64(m["total_tokens"])
+	prompt := asInt64(m["prompt_tokens"])
+	completion := asInt64(m["completion_tokens"])
 
 	perUp := map[string]int64{}
 	if raw, ok := m["per_upstream"].(map[string]int64); ok {
@@ -37,7 +38,8 @@ func buildStatsData(m map[string]any) statCardsView {
 		{Label: "Retries", Value: fmt.Sprintf("%d", retries), Tone: "amber"},
 		{Label: "Upstream Errors", Value: fmt.Sprintf("%d", errors), Tone: "red"},
 		{Label: "Rate-Limit Hits", Value: fmt.Sprintf("%d", rlHits), Tone: "purple"},
-		{Label: "Total Tokens", Value: fmt.Sprintf("%d", tokens), Tone: "green"},
+		{Label: "Input Tokens", Value: fmt.Sprintf("%d", prompt), Tone: "blue"},
+		{Label: "Output Tokens", Value: fmt.Sprintf("%d", completion), Tone: "green"},
 	}
 
 	return statCardsView{

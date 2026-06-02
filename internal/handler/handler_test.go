@@ -38,22 +38,6 @@ func (m *mockUpstream) AllModels() []model.Model { return m.models }
 func (m *mockUpstream) IsReady() bool            { return m.ready }
 func (m *mockUpstream) Metrics() map[string]any  { return m.metrics }
 
-func TestHandler_Root(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-
-	h.Root(w, req)
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("expected status 302, got %d", w.Code)
-	}
-	loc := w.Header().Get("Location")
-	if loc != "/ui/" {
-		t.Errorf("expected Location /ui/, got %q", loc)
-	}
-}
 
 func TestHandler_Ready_Ready(t *testing.T) {
 	u := newMockUpstream()
