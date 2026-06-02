@@ -34,11 +34,11 @@ type IPRotator interface {
 }
 
 type Client struct {
-	router       Router
-	maxRetry     int
-	ipRotator    IPRotator
-	metrics      *metrics.Metrics
-	requestLog   RequestLogger
+	router     Router
+	maxRetry   int
+	ipRotator  IPRotator
+	metrics    *metrics.Metrics
+	requestLog RequestLogger
 }
 
 func NewClient(router Router) *Client {
@@ -81,12 +81,12 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 
 	// Track the final outcome so we can emit a single log entry on return.
 	var (
-		finalStatus     int
-		finalUpstream   string
-		finalErr        error
-		finalTotalTokens   int
-		finalPrompt     int
-		finalCompletion int
+		finalStatus      int
+		finalUpstream    string
+		finalErr         error
+		finalTotalTokens int
+		finalPrompt      int
+		finalCompletion  int
 	)
 	defer func() {
 		if c.requestLog == nil {

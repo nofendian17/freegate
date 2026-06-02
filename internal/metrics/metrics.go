@@ -8,13 +8,13 @@ import (
 
 // Metrics holds simple request counters for observability.
 type Metrics struct {
-	TotalRequests     atomic.Int64
-	RetryCount        atomic.Int64
-	RateLimitHits     atomic.Int64
-	UpstreamErrors    atomic.Int64
-	TotalTokens       atomic.Int64
-	PromptTokens      atomic.Int64
-	CompletionTokens  atomic.Int64
+	TotalRequests    atomic.Int64
+	RetryCount       atomic.Int64
+	RateLimitHits    atomic.Int64
+	UpstreamErrors   atomic.Int64
+	TotalTokens      atomic.Int64
+	PromptTokens     atomic.Int64
+	CompletionTokens atomic.Int64
 
 	mu    sync.RWMutex
 	perUp map[string]*atomic.Int64

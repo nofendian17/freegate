@@ -13,8 +13,9 @@
     <header class="header">
       <div class="header-left">
         <h1>
+          <span class="status-dot" id="status-dot"></span>
           <svg class="brand-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="var(--orange)"/>
+            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="currentColor"/>
           </svg>
           <span class="brand-wordmark">freegate</span>
         </h1>
@@ -50,16 +51,16 @@
           <span class="card-title">Upstreams</span>
         </div>
         <div style="padding:8px 0">
-          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <div class="upstream-row">
             <span class="card-sub">opencode</span>
-            <span class="card-value tone-blue" style="font-size:20px">{{.OpenCodeCount}}</span>
+            <span class="upstream-value tone-blue">{{.OpenCodeCount}}</span>
           </div>
           <div class="progress-track" style="margin-bottom:18px">
             <div class="progress-fill" style="background:var(--blue);width:{{.UpstreamPct.OpenCode}}%"></div>
           </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <div class="upstream-row">
             <span class="card-sub">kilo</span>
-            <span class="card-value tone-purple" style="font-size:20px">{{.KiloCount}}</span>
+            <span class="upstream-value tone-purple">{{.KiloCount}}</span>
           </div>
           <div class="progress-track">
             <div class="progress-fill" style="background:var(--purple);width:{{.UpstreamPct.Kilo}}%"></div>
@@ -118,8 +119,8 @@
           <thead>
             <tr>
               <th>Model</th>
-              <th style="width:120px">Provider</th>
-              <th style="width:80px">Free</th>
+              <th class="col-provider">Provider</th>
+              <th class="col-free">Free</th>
             </tr>
           </thead>
           <tbody id="models-body"
@@ -142,13 +143,13 @@
         <table>
           <thead>
             <tr>
-              <th style="width:90px">Time</th>
+              <th class="col-time">Time</th>
               <th>Model</th>
-              <th style="width:100px">Upstream</th>
-              <th style="width:80px">Status</th>
-              <th style="width:80px">Duration</th>
-              <th style="width:110px">Tokens</th>
-              <th style="width:120px">IP</th>
+              <th class="col-upstream">Upstream</th>
+              <th class="col-status">Status</th>
+              <th class="col-duration">Duration</th>
+              <th class="col-tokens">Tokens</th>
+              <th class="col-ip">IP</th>
               <th>Error</th>
             </tr>
           </thead>
@@ -246,8 +247,7 @@
         if (!resp.ok) return;
         const h = await resp.json();
         const dot = document.getElementById('status-dot');
-        if (h.ok) { dot.className = 'dot'; dot.style.background = '#16A34A'; }
-        else { dot.className = 'dot'; dot.style.background = '#D97706'; }
+        dot.className = 'status-dot' + (h.ok ? ' ok' : ' warn');
         const u = document.getElementById('uptime');
         if (u && h.uptime) u.textContent = h.uptime;
         const mc = document.getElementById('model-count');

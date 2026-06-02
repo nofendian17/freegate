@@ -12,12 +12,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"freegate/internal/collector"
 	"freegate/internal/config"
 	"freegate/internal/handler"
 	"freegate/internal/middleware"
 	"freegate/internal/proxy"
 	"freegate/internal/tor"
-	"freegate/internal/collector"
 	"freegate/internal/ui"
 	"freegate/internal/upstream"
 	"freegate/web"

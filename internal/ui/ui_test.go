@@ -19,13 +19,13 @@ type fakeData struct {
 	torIP   string
 }
 
-func (f *fakeData) Metrics() map[string]any              { return f.metrics }
-func (f *fakeData) Models() []model.Model                { return f.models }
-func (f *fakeData) Requests() []model.RequestLogEntry    { return f.reqs }
-func (f *fakeData) Timeseries() []model.TimeseriesEntry  { return f.ts }
-func (f *fakeData) UptimeSeconds() int64                 { return f.uptime }
-func (f *fakeData) StartedAtUnix() int64                 { return f.start }
-func (f *fakeData) TorIP() string                        { return f.torIP }
+func (f *fakeData) Metrics() map[string]any             { return f.metrics }
+func (f *fakeData) Models() []model.Model               { return f.models }
+func (f *fakeData) Requests() []model.RequestLogEntry   { return f.reqs }
+func (f *fakeData) Timeseries() []model.TimeseriesEntry { return f.ts }
+func (f *fakeData) UptimeSeconds() int64                { return f.uptime }
+func (f *fakeData) StartedAtUnix() int64                { return f.start }
+func (f *fakeData) TorIP() string                       { return f.torIP }
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()

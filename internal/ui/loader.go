@@ -60,4 +60,3 @@ func LoadTemplates(fsys fs.FS) (*template.Template, error) {
 	}
 	return tpl, nil
 }
-

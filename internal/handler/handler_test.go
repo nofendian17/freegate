@@ -38,7 +38,6 @@ func (m *mockUpstream) AllModels() []model.Model { return m.models }
 func (m *mockUpstream) IsReady() bool            { return m.ready }
 func (m *mockUpstream) Metrics() map[string]any  { return m.metrics }
 
-
 func TestHandler_Ready_Ready(t *testing.T) {
 	u := newMockUpstream()
 	u.ready = true
