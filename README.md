@@ -10,8 +10,12 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `cost == "0"` for OpenCode); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
 - **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
+- **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
+- **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` header
+- **Read-only dashboard** — HTMX + Chart.js monitoring UI at `/ui/`
+- **Mobile responsive** — dashboard adapts to small screens
 - **Docker Compose** — single command to start both proxy and Tor
 
 ## Quick Start
@@ -103,7 +107,7 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 |--------|------|-------------|
 | `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
-| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors) |
+| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
 | `GET` | `/ready` | Health check |
 | `GET` | `/ui/` | **Dashboard** (read-only monitoring UI, see below) |
 
@@ -113,24 +117,27 @@ A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. 
 
 ### Features
 
-- **Stat cards** — total requests, retries, upstream errors, rate-limit hits (auto-refresh 5s)
+- **Stat cards** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
 - **Upstream split** — opencode vs kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
-- **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, IP, error), auto-refresh 5s
+- **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
+- **Tor exit IP** — current Tor circuit IP displayed in header, refreshed every 3s
+- **API Endpoints card** — quick reference for available REST endpoints
 - **Health badge** — green dot when models are loaded, amber when empty
+- **Mobile responsive** — adapts layout for small screens
 
 ### Endpoints used by the dashboard
 
 | Path | Description |
 |------|-------------|
 | `GET /ui/` | HTML dashboard (server-rendered initial state) |
-| `GET /ui/partials/stats` | HTMX fragment: 4 stat cards |
+| `GET /ui/partials/stats` | HTMX fragment: 5 stat cards |
 | `GET /ui/partials/requests` | HTMX fragment: recent-requests table rows |
-| `GET /ui/partials/models?provider=…` | HTMX fragment: models table rows |
+| `GET /ui/partials/models?provider=...` | HTMX fragment: models table rows |
 | `GET /ui/api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
-| `GET /ui/api/health` | JSON: `{ok, uptime, started_at, has_models, model_count}` |
-| `GET /ui/static/{css,js}/…` | Vendored HTMX, Chart.js, dark-theme CSS |
+| `GET /ui/api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
+| `GET /ui/static/{css,js}/...` | Vendored HTMX, Chart.js, dark-theme CSS |
 
 ### Notes
 
@@ -140,20 +147,40 @@ A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. 
 
 ## Architecture
 
-```
-┌──────────┐     ┌──────────────┐     ┌────────────┐     ┌──────────────────┐
-│  Client   │────▶│  freegate     │────▶│ Tor SOCKS5 │────▶│  Upstream         │
-│           │     │  (:1234)      │     │  :9050     │     │                  │
-│ CLI/IDE   │     │  Router       │     └────────────┘     ├─ opencode.ai     │
-│ curl      │     │  ├─ kilo/   ──┼────────────────────────┤  /zen/v1         │
-│           │     │  └─ default──┼────────────────────────┤  key: public     │
-│           │     │              │     ┌────────────┐     ├─ api.kilo.ai     │
-│           │     │  Models      │────▶│ Tor SOCKS5 │────▶│  /api/openrouter │
-│           │     │  (free only) │     │  :9050     │     │  key: anonymous  │
-│           │     │              │     └────────────┘     └──────────────────┘
-│           │     │  Dashboard   │                              ▲
-│  Browser  │────▶│  /ui/*  (HTMX)│ ── reads in-memory stats ──┘
-└──────────┘     └──────────────┘
+```mermaid
+flowchart TB
+    subgraph Clients["Clients"]
+        CLI["curl / IDE"]
+        Browser["Browser"]
+    end
+
+    subgraph Freegate["freegate (:1234)"]
+        Router["Router<br/>kilo/ → Kilo<br/>default → OpenCode"]
+        Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
+        Dashboard["Dashboard /ui/*<br/>HTMX + Chart.js"]
+        Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
+    end
+
+    subgraph Tor["Tor SOCKS5 (:9050)"]
+        Tor1["Circuit A"]
+        Tor2["Circuit B"]
+    end
+
+    subgraph Upstreams["Upstreams"]
+        OC["opencode.ai<br/>/zen/v1<br/>key: public"]
+        Kilo["api.kilo.ai<br/>/api/openrouter<br/>key: anonymous"]
+    end
+
+    CLI --> Router
+    Router --> Proxy
+    Proxy --> Tor1
+    Proxy --> Tor2
+    Tor1 --> OC
+    Tor2 --> Kilo
+    Proxy -.->|"log entry"| Recorder
+    Recorder -.->|"reads"| Dashboard
+    Browser --> Dashboard
+    Dashboard -.->|"poll 5s"| Recorder
 ```
 
 ## Project Structure
@@ -162,65 +189,24 @@ A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. 
 freegate
 ├── cmd/server/main.go        # Entry point
 ├── internal/
-│   ├── config/                # Env-based config with validation
-│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready, Metrics
-│   ├── metrics/               # Request counters (per-upstream, retries, errors)
-│   ├── middleware/            # Logging, auth, rate limit, CORS, request ID
-│   ├── model/                 # Shared model types
-│   ├── proxy/                 # Upstream-agnostic proxy + reasoning normalization
-│   │                          # + RequestLogEntry for UI observability
-│   ├── respond/               # Shared HTTP response utilities (JSON, errors)
-│   ├── ringbuffer/            # Generic typed ring buffer (used by UI)
-│   ├── tor/                   # Tor controller for IP rotation
-│   ├── ui/                    # Dashboard: HTMX handlers, templates, recorder
-│   │   ├── recorder.go        # In-memory timeseries + recent requests
-│   │   ├── dashboard.go       # GET /ui/
-│   │   ├── partials.go        # GET /ui/partials/* (HTMX fragments)
-│   │   ├── routes.go          # chi router with all UI routes
-│   │   ├── handler.go         # Public handler methods exposed to main.go
-│   │   └── loader.go          # Embedded template loader
-│   └── upstream/              # Upstream interface + Router + implementations
-│       ├── client.go          # HTTP client (SOCKS5 + auth headers)
-│       ├── cache.go           # Thread-safe model cache
-│       ├── refresher.go        # Background model refresh loop
-│       ├── opencode.go        # OpenCode upstream adapter
-│       ├── kilocode.go        # Kilo/OpenRouter upstream adapter
-│       └── upstream.go        # Upstream interface + Router
-├── web/                       # Embedded assets (templates, CSS, JS)
-│   ├── templates/             # html/template sources
-│   └── static/                # Vendored HTMX, Chart.js, app.css
-├── docker-compose.yml         # Proxy + Tor containers
-├── Dockerfile                 # Multi-stage Go build
-├── Dockerfile.tor             # Tor daemon with health check
-└── .env.example               # Environment variable reference
-```
-
-
-## Project Structure
-
-```
-freegate
-├── cmd/server/main.go        # Entry point
-├── internal/
-│   ├── config/                # Env-based config with validation
-│   ├── handler/               # HTTP handlers: Chat, ListModels, Ready, Metrics
-│   ├── metrics/               # Request counters (per-upstream, retries, errors)
-│   ├── middleware/            # Logging, auth, rate limit, CORS, request ID
-│   ├── model/                 # Shared model types
-│   ├── proxy/                 # Upstream-agnostic proxy + reasoning normalization
-│   ├── respond/               # Shared HTTP response utilities (JSON, errors)
-│   ├── tor/                   # Tor controller for IP rotation
-│   └── upstream/              # Upstream interface + Router + implementations
-│       ├── client.go          # HTTP client (SOCKS5 + auth headers)
-│       ├── cache.go           # Thread-safe model cache
-│       ├── refresher.go       # Background model refresh loop
-│       ├── opencode.go        # OpenCode upstream adapter
-│       ├── kilocode.go        # Kilo/OpenRouter upstream adapter
-│       └── upstream.go        # Upstream interface + Router
-├── docker-compose.yml         # Proxy + Tor containers
-├── Dockerfile                 # Multi-stage Go build
-├── Dockerfile.tor             # Tor daemon with health check
-└── .env.example               # Environment variable reference
+│   ├── config/               # Env-based config with validation
+│   ├── handler/              # HTTP handlers: Chat, ListModels, Ready, Metrics
+│   ├── metrics/              # Request counters + token tracking
+│   ├── middleware/           # Logging, auth, rate limit, CORS, request ID
+│   ├── model/                # Shared model types + request log
+│   ├── proxy/                # Upstream-agnostic proxy + normalization
+│   ├── respond/              # Shared HTTP response utilities
+│   ├── ringbuffer/           # Generic typed ring buffer
+│   ├── tor/                  # Tor controller for IP rotation + monitoring
+│   ├── ui/                   # Dashboard: HTMX handlers, templates, recorder
+│   └── upstream/             # Upstream interface + Router + implementations
+├── web/                      # Embedded assets (templates, CSS, JS)
+│   ├── templates/            # html/template sources
+│   └── static/               # Vendored HTMX, Chart.js, app.css
+├── docker-compose.yml        # Proxy + Tor containers
+├── Dockerfile                # Multi-stage Go build
+├── Dockerfile.tor            # Tor daemon with health check
+└── .env.example              # Environment variable reference
 ```
 
 ## Development
