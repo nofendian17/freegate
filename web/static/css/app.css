@@ -557,6 +557,20 @@ button.btn:active { background: var(--border); }
   letter-spacing: -0.01em;
 }
 
+/* mobile (< 768px) */
+@media (max-width: 768px) {
+  .col-tokens,
+  .col-ip {
+    display: none;
+  }
+  .model-cell {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 /* mobile (< 640px) */
 @media (max-width: 640px) {
   .shell {
