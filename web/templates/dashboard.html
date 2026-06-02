@@ -11,7 +11,14 @@
 <body>
   <div class="shell">
     <header class="header">
-      <h1><span class="dot" id="status-dot"></span>freegate</h1>
+      <div class="header-left">
+        <h1>
+          <svg class="brand-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="var(--orange)"/>
+          </svg>
+          <span class="brand-wordmark">freegate</span>
+        </h1>
+      </div>
       <div class="meta">
         <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
         <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
@@ -20,7 +27,7 @@
       </div>
     </header>
 
-    <!-- stats cards (server-rendered initially, HTMX refreshes) -->
+    <!-- stats cards (HTMX refreshes every 5s) -->
     <section class="grid-cards"
              hx-get="/partials/stats"
              hx-trigger="every 5s"
@@ -45,27 +52,25 @@
         <div style="padding:8px 0">
           <div style="display:flex;justify-content:space-between;margin-bottom:6px">
             <span class="card-sub">opencode</span>
-            <span class="card-value tone-blue" style="font-size:18px">{{.OpenCodeCount}}</span>
+            <span class="card-value tone-blue" style="font-size:20px">{{.OpenCodeCount}}</span>
           </div>
-          <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden;margin-bottom:14px">
-            <div style="background:var(--blue);height:100%;width:{{.UpstreamPct.OpenCode}}%"></div>
+          <div class="progress-track" style="margin-bottom:18px">
+            <div class="progress-fill" style="background:var(--blue);width:{{.UpstreamPct.OpenCode}}%"></div>
           </div>
           <div style="display:flex;justify-content:space-between;margin-bottom:6px">
             <span class="card-sub">kilo</span>
-            <span class="card-value tone-purple" style="font-size:18px">{{.KiloCount}}</span>
+            <span class="card-value tone-purple" style="font-size:20px">{{.KiloCount}}</span>
           </div>
-          <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden">
-            <div style="background:var(--purple);height:100%;width:{{.UpstreamPct.Kilo}}%"></div>
+          <div class="progress-track">
+            <div class="progress-fill" style="background:var(--purple);width:{{.UpstreamPct.Kilo}}%"></div>
           </div>
         </div>
       </div>
     </section>
 
     <!-- api endpoints -->
-    <section class="card endpoint-card" style="margin-bottom:16px">
-      <div class="card-header">
-        <span class="card-title">API Endpoints</span>
-      </div>
+    <div class="section-title">API Endpoints</div>
+    <section class="card" style="margin-bottom:var(--space-4)">
       <div class="endpoint-list">
         <div class="endpoint-row">
           <span class="method get">GET</span>
@@ -91,10 +96,11 @@
     </section>
 
     <!-- models -->
-    <section class="card" style="margin-bottom:16px">
+    <div class="section-title">Free Models</div>
+    <section class="card" style="margin-bottom:var(--space-4)">
       <div class="card-header">
-        <span class="card-title">Free Models</span>
-        <div class="filter-bar" style="margin:0">
+        <div><!-- spacer for layout --></div>
+        <div class="filter-bar">
           <select id="model-filter"
                   hx-get="/partials/models"
                   hx-trigger="change, every 10s"
@@ -127,9 +133,9 @@
     </section>
 
     <!-- recent requests -->
+    <div class="section-title">Recent Requests (last 100)</div>
     <section class="card">
       <div class="card-header">
-        <span class="card-title">Recent Requests (last 100)</span>
         <span class="card-sub" id="req-count">{{.RequestCount}} shown</span>
       </div>
       <div class="table-wrap" style="max-height:480px;overflow-y:auto">
@@ -196,15 +202,15 @@
               datasets: [{
                 label: 'req/min',
                 data: values,
-                borderColor: '#F6821F',
-                backgroundColor: 'rgba(246,130,31,0.1)',
+                borderColor: '#FF6600',
+                backgroundColor: 'rgba(255,102,0,0.08)',
                 borderWidth: 2,
                 fill: true,
                 tension: 0.25,
                 pointRadius: 0,
                 pointHoverRadius: 4,
-                pointHoverBackgroundColor: '#F6821F',
-                pointHoverBorderColor: '#F6821F',
+                pointHoverBackgroundColor: '#FF6600',
+                pointHoverBorderColor: '#FF6600',
               }]
             },
             options: {
@@ -214,13 +220,13 @@
               plugins: { legend: { display: false } },
               scales: {
                 x: {
-                  ticks: { color: '#6B7280', maxTicksLimit: 8, font: { size: 10 } },
-                  grid: { color: '#2A2C38' },
+                  ticks: { color: '#8B8B8B', maxTicksLimit: 8, font: { size: 10 } },
+                  grid: { color: '#E8E8E8' },
                 },
                 y: {
                   beginAtZero: true,
-                  ticks: { color: '#6B7280', font: { size: 10 } },
-                  grid: { color: '#2A2C38' },
+                  ticks: { color: '#8B8B8B', font: { size: 10 } },
+                  grid: { color: '#E8E8E8' },
                 }
               }
             }
@@ -240,8 +246,8 @@
         if (!resp.ok) return;
         const h = await resp.json();
         const dot = document.getElementById('status-dot');
-        if (h.ok) { dot.className = 'dot'; }
-        else { dot.className = 'dot'; dot.style.background = '#f59e0b'; dot.style.boxShadow = '0 0 8px #f59e0b'; }
+        if (h.ok) { dot.className = 'dot'; dot.style.background = '#16A34A'; }
+        else { dot.className = 'dot'; dot.style.background = '#D97706'; }
         const u = document.getElementById('uptime');
         if (u && h.uptime) u.textContent = h.uptime;
         const mc = document.getElementById('model-count');
