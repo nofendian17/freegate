@@ -81,9 +81,12 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 
 	// Track the final outcome so we can emit a single log entry on return.
 	var (
-		finalStatus   int
-		finalUpstream string
-		finalErr      error
+		finalStatus     int
+		finalUpstream   string
+		finalErr        error
+		finalTotalTokens   int
+		finalPrompt     int
+		finalCompletion int
 	)
 	defer func() {
 		if c.requestLog == nil {
@@ -94,15 +97,18 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 			errStr = finalErr.Error()
 		}
 		c.requestLog(model.RequestLogEntry{
-			Ts:         start,
-			Method:     r.Method,
-			Path:       r.URL.Path,
-			Model:      modelID,
-			Upstream:   finalUpstream,
-			Status:     finalStatus,
-			DurationMs: time.Since(start).Milliseconds(),
-			IP:         clientIPFromRequest(r),
-			Error:      errStr,
+			Ts:               start,
+			Method:           r.Method,
+			Path:             r.URL.Path,
+			Model:            modelID,
+			Upstream:         finalUpstream,
+			Status:           finalStatus,
+			DurationMs:       time.Since(start).Milliseconds(),
+			IP:               clientIPFromRequest(r),
+			Error:            errStr,
+			TotalTokens:      finalTotalTokens,
+			PromptTokens:     finalPrompt,
+			CompletionTokens: finalCompletion,
 		})
 	}()
 
@@ -171,7 +177,13 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
 
-	copyNormalized(w, resp, requestID)
+	usage := copyNormalized(w, resp, requestID)
+	finalTotalTokens += usage.Total
+	finalPrompt += usage.Prompt
+	finalCompletion += usage.Completion
+	if usage.Total > 0 {
+		c.metrics.TotalTokens.Add(int64(usage.Total))
+	}
 }
 
 func copyHeaders(dst http.ResponseWriter, src *http.Response) {

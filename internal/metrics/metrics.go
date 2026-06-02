@@ -12,6 +12,7 @@ type Metrics struct {
 	RetryCount     atomic.Int64
 	RateLimitHits  atomic.Int64
 	UpstreamErrors atomic.Int64
+	TotalTokens    atomic.Int64
 
 	mu    sync.RWMutex
 	perUp map[string]*atomic.Int64
@@ -56,6 +57,7 @@ func (m *Metrics) Snapshot() map[string]any {
 		"retry_count":     m.RetryCount.Load(),
 		"rate_limit_hits": m.RateLimitHits.Load(),
 		"upstream_errors": m.UpstreamErrors.Load(),
+		"total_tokens":    m.TotalTokens.Load(),
 		"per_upstream":    upstreams,
 	}
 }

@@ -70,6 +70,7 @@ func main() {
 	// Wire the collector: receives one log entry per completed proxied request.
 	recorder := collector.NewRecorder(pc.Metrics)
 	recorder.SetModelsFunc(pc.AllModels)
+	recorder.SetTorIPFunc(tc.CurrentIP)
 	pc.WithRequestLogger(recorder.RecordRequestLog)
 	recorder.Start(ctx)
 

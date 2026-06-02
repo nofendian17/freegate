@@ -25,6 +25,7 @@ func buildStatsData(m map[string]any) statCardsView {
 	retries := asInt64(m["retry_count"])
 	errors := asInt64(m["upstream_errors"])
 	rlHits := asInt64(m["rate_limit_hits"])
+	tokens := asInt64(m["total_tokens"])
 
 	perUp := map[string]int64{}
 	if raw, ok := m["per_upstream"].(map[string]int64); ok {
@@ -36,6 +37,7 @@ func buildStatsData(m map[string]any) statCardsView {
 		{Label: "Retries", Value: fmt.Sprintf("%d", retries), Tone: "amber"},
 		{Label: "Upstream Errors", Value: fmt.Sprintf("%d", errors), Tone: "red"},
 		{Label: "Rate-Limit Hits", Value: fmt.Sprintf("%d", rlHits), Tone: "purple"},
+		{Label: "Total Tokens", Value: fmt.Sprintf("%d", tokens), Tone: "green"},
 	}
 
 	return statCardsView{
@@ -61,6 +63,7 @@ type requestRow struct {
 	Status     string
 	StatusTone string
 	Duration   string
+	Tokens     string
 	IP         string
 	Error      string
 }
@@ -92,6 +95,7 @@ func (h *Handler) buildRequestRows() requestRowsView {
 			Status:     fmt.Sprintf("%d", e.Status),
 			StatusTone: toneForStatus(e.Status),
 			Duration:   fmt.Sprintf("%dms", e.DurationMs),
+			Tokens:     tokenDisplay(e.TotalTokens, e.PromptTokens, e.CompletionTokens),
 			IP:         e.IP,
 			Error:      errStr,
 		})
@@ -174,6 +178,16 @@ func asInt64(v any) int64 {
 	}
 }
 
+func tokenDisplay(total, prompt, completion int) string {
+	if total == 0 {
+		return "—"
+	}
+	if prompt > 0 || completion > 0 {
+		return fmt.Sprintf("%d (%d↑ %d↓)", total, prompt, completion)
+	}
+	return fmt.Sprintf("%d", total)
+}
+
 func toneForProvider(p string) string {
 	switch strings.ToLower(p) {
 	case "opencode":
@@ -199,6 +213,7 @@ type healthResp struct {
 	StartedAt  string `json:"started_at"`
 	HasModels  bool   `json:"has_models"`
 	ModelCount int    `json:"model_count"`
+	TorIP      string `json:"tor_ip"`
 }
 
 func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +224,7 @@ func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
 		StartedAt:  fmt.Sprintf("%d", h.data.StartedAtUnix()),
 		HasModels:  len(models) > 0,
 		ModelCount: len(models),
+		TorIP:      h.data.TorIP(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

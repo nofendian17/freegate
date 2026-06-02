@@ -19,6 +19,7 @@ type Recorder struct {
 	requests   *ringbuffer.RingBuffer[model.RequestLogEntry]
 	timeseries *ringbuffer.RingBuffer[model.TimeseriesEntry]
 	modelsFn   func() []model.Model
+	torIPFn    func() string
 	startedAt  time.Time
 }
 
@@ -70,12 +71,25 @@ func (r *Recorder) SetModelsFunc(fn func() []model.Model) {
 	r.modelsFn = fn
 }
 
+// SetTorIPFunc wires a callback that returns the current Tor exit IP.
+func (r *Recorder) SetTorIPFunc(fn func() string) {
+	r.torIPFn = fn
+}
+
 // Models returns the current model list, or empty if no callback is set.
 func (r *Recorder) Models() []model.Model {
 	if r.modelsFn == nil {
 		return nil
 	}
 	return r.modelsFn()
+}
+
+// TorIP returns the current Tor exit IP, or empty if no callback is set.
+func (r *Recorder) TorIP() string {
+	if r.torIPFn == nil {
+		return ""
+	}
+	return r.torIPFn()
 }
 
 // Metrics returns the current metrics snapshot.

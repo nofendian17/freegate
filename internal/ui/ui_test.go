@@ -16,6 +16,7 @@ type fakeData struct {
 	ts      []model.TimeseriesEntry
 	uptime  int64
 	start   int64
+	torIP   string
 }
 
 func (f *fakeData) Metrics() map[string]any              { return f.metrics }
@@ -24,6 +25,7 @@ func (f *fakeData) Requests() []model.RequestLogEntry    { return f.reqs }
 func (f *fakeData) Timeseries() []model.TimeseriesEntry  { return f.ts }
 func (f *fakeData) UptimeSeconds() int64                 { return f.uptime }
 func (f *fakeData) StartedAtUnix() int64                 { return f.start }
+func (f *fakeData) TorIP() string                        { return f.torIP }
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()

@@ -16,7 +16,7 @@
         <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
         <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
         <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
-        <span class="htmx-indicator">refreshing…</span>
+        <span><span class="label">tor ip</span><span id="tor-ip">{{if .TorIP}}{{.TorIP}}{{else}}—{{end}}</span></span>
       </div>
     </header>
 
@@ -24,8 +24,7 @@
     <section class="grid-cards"
              hx-get="/ui/partials/stats"
              hx-trigger="every 5s"
-             hx-swap="innerHTML"
-             hx-indicator=".htmx-indicator">
+             hx-swap="innerHTML">
       {{.Stats}}
     </section>
 
@@ -58,6 +57,35 @@
           <div style="background:var(--border);height:4px;border-radius:2px;overflow:hidden">
             <div style="background:var(--purple);height:100%;width:{{.UpstreamPct.Kilo}}%"></div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- api endpoints -->
+    <section class="card endpoint-card" style="margin-bottom:16px">
+      <div class="card-header">
+        <span class="card-title">API Endpoints</span>
+      </div>
+      <div class="endpoint-list">
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/v1/models</code>
+          <span class="endpoint-desc">list available free models</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method post">POST</span>
+          <code class="endpoint-path">/v1/chat/completions</code>
+          <span class="endpoint-desc">OpenAI-compatible chat completion</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/v1/metrics</code>
+          <span class="endpoint-desc">request metrics per upstream</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/ready</code>
+          <span class="endpoint-desc">health check</span>
         </div>
       </div>
     </section>
@@ -113,6 +141,7 @@
               <th style="width:100px">Upstream</th>
               <th style="width:80px">Status</th>
               <th style="width:80px">Duration</th>
+              <th style="width:110px">Tokens</th>
               <th style="width:120px">IP</th>
               <th>Error</th>
             </tr>
@@ -214,6 +243,8 @@
         if (u && h.uptime) u.textContent = h.uptime;
         const mc = document.getElementById('model-count');
         if (mc) mc.textContent = h.model_count;
+        const tip = document.getElementById('tor-ip');
+        if (tip) tip.textContent = h.tor_ip || '—';
       } catch (e) { /* ignore */ }
     }
     setInterval(refreshHealth, 3000);

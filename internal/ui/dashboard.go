@@ -20,6 +20,7 @@ type pageData struct {
 	OpenCodeCount int64
 	KiloCount     int64
 	UpstreamPct   upstreamPercents
+	TorIP         string
 }
 
 type upstreamPercents struct {
@@ -56,6 +57,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		OpenCodeCount: opencode,
 		KiloCount:     kilo,
 		UpstreamPct:   pct,
+		TorIP:         h.data.TorIP(),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

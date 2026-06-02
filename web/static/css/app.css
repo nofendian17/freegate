@@ -104,6 +104,77 @@ a:hover { text-decoration: underline; }
   .grid-charts { grid-template-columns: 1fr; }
 }
 
+/* mobile (< 640px) */
+@media (max-width: 640px) {
+  .shell {
+    padding: 12px 10px;
+  }
+
+  .header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .header h1 {
+    font-size: 14px;
+  }
+
+  .meta {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    font-size: 11px;
+  }
+
+  .grid-cards {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+
+  .card {
+    padding: 10px 12px;
+  }
+
+  .card-value {
+    font-size: 20px;
+  }
+
+  .chart-wrap {
+    height: 160px;
+  }
+
+  .table-wrap {
+    margin: 0 -10px;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+
+  th, td {
+    padding: 6px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  td:last-child, th:last-child {
+    padding-right: 12px;
+  }
+
+  .error-text {
+    max-width: 120px;
+  }
+
+  .endpoint-row {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
+  .endpoint-desc {
+    width: 100%;
+    margin-left: 0;
+    padding-left: 54px;
+  }
+}
+
 /* card */
 .card {
   background: var(--bg-card);
@@ -301,6 +372,62 @@ button.btn:active { background: var(--border); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* api endpoint list */
+.endpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.endpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.endpoint-row:last-child {
+  border-bottom: 0;
+}
+
+.method {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.method.get {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.method.post {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.endpoint-path {
+  font-family: var(--mono);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.endpoint-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: auto;
 }
 
 /* scrollbar (dark) */

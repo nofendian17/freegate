@@ -18,6 +18,7 @@ type DataSource interface {
 	Timeseries() []model.TimeseriesEntry
 	UptimeSeconds() int64
 	StartedAtUnix() int64
+	TorIP() string
 }
 
 // Handler serves the dashboard UI.
