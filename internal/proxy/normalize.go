@@ -9,20 +9,27 @@ import (
 	"strings"
 )
 
-func copyNormalized(dst http.ResponseWriter, src *http.Response, requestID string) {
+// TokenUsage holds token counts extracted from an upstream response.
+type TokenUsage struct {
+	Prompt     int
+	Completion int
+	Total      int
+}
+
+func copyNormalized(dst http.ResponseWriter, src *http.Response, requestID string) TokenUsage {
 	ct := src.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
 
 	if isStreaming {
-		normalizeStream(dst, src.Body, requestID)
-	} else {
-		normalizeJSON(dst, src.Body, requestID)
+		return normalizeStream(dst, src.Body, requestID)
 	}
+	return normalizeJSON(dst, src.Body, requestID)
 }
 
-func normalizeStream(dst io.Writer, src io.Reader, requestID string) {
+func normalizeStream(dst io.Writer, src io.Reader, requestID string) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	rd := bufio.NewReader(src)
+	var usage TokenUsage
 
 	for {
 		line, err := rd.ReadString('\n')
@@ -32,6 +39,8 @@ func normalizeStream(dst io.Writer, src io.Reader, requestID string) {
 		}
 
 		if len(line) > 0 {
+			// Check for usage in this SSE line before normalizing
+			usage = extractUsageFromSSE(line, usage)
 			normalized := normalizeSSELine(line)
 			if _, werr := io.WriteString(dst, normalized); werr != nil {
 				slog.Warn("stream write error", "request_id", requestID, "error", werr)
@@ -46,6 +55,35 @@ func normalizeStream(dst io.Writer, src io.Reader, requestID string) {
 			break
 		}
 	}
+	return usage
+}
+
+// extractUsageFromSSE checks if line contains a data: JSON with usage.
+func extractUsageFromSSE(line string, current TokenUsage) TokenUsage {
+	if !strings.HasPrefix(line, "data: ") {
+		return current
+	}
+	data := strings.TrimPrefix(line, "data: ")
+	data = strings.TrimRight(data, "\r\n")
+	if data == "[DONE]" {
+		return current
+	}
+	var chunk struct {
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return current
+	}
+	if chunk.Usage != nil {
+		current.Prompt = chunk.Usage.PromptTokens
+		current.Completion = chunk.Usage.CompletionTokens
+		current.Total = chunk.Usage.TotalTokens
+	}
+	return current
 }
 
 func normalizeSSELine(line string) string {
@@ -94,18 +132,32 @@ func syncDeltaReasoning(chunk map[string]interface{}) {
 	}
 }
 
-func normalizeJSON(dst io.Writer, src io.Reader, requestID string) {
+func normalizeJSON(dst io.Writer, src io.Reader, requestID string) TokenUsage {
 	body, err := io.ReadAll(src)
 	if err != nil {
 		slog.Warn("failed to read response body", "request_id", requestID, "error", err)
 		dst.Write(body)
-		return
+		return TokenUsage{}
 	}
 
 	var resp map[string]interface{}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		dst.Write(body)
-		return
+		return TokenUsage{}
+	}
+
+	// Extract usage before normalizing
+	usage := TokenUsage{}
+	if u, ok := resp["usage"].(map[string]interface{}); ok {
+		if p, ok := u["prompt_tokens"].(float64); ok {
+			usage.Prompt = int(p)
+		}
+		if c, ok := u["completion_tokens"].(float64); ok {
+			usage.Completion = int(c)
+		}
+		if t, ok := u["total_tokens"].(float64); ok {
+			usage.Total = int(t)
+		}
 	}
 
 	syncMessageReasoning(resp)
@@ -113,10 +165,11 @@ func normalizeJSON(dst io.Writer, src io.Reader, requestID string) {
 	transformed, err := json.Marshal(resp)
 	if err != nil {
 		dst.Write(body)
-		return
+		return usage
 	}
 
 	dst.Write(transformed)
+	return usage
 }
 
 func syncMessageReasoning(resp map[string]interface{}) {

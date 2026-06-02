@@ -38,26 +38,6 @@ func (m *mockUpstream) AllModels() []model.Model { return m.models }
 func (m *mockUpstream) IsReady() bool            { return m.ready }
 func (m *mockUpstream) Metrics() map[string]any  { return m.metrics }
 
-func TestHandler_Root(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-
-	h.Routes().ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-	if result["service"] != "freegate - multi-upstream AI proxy" {
-		t.Errorf("unexpected service field: %v", result["service"])
-	}
-}
-
 func TestHandler_Ready_Ready(t *testing.T) {
 	u := newMockUpstream()
 	u.ready = true

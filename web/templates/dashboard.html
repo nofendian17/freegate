@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/htmx.min.js" defer></script>
+  <script src="/static/js/chart.umd.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div class="header-left">
+        <h1>
+          <span class="status-dot" id="status-dot"></span>
+          <svg class="brand-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" fill="currentColor"/>
+          </svg>
+          <span class="brand-wordmark">freegate</span>
+        </h1>
+      </div>
+      <div class="meta">
+        <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
+        <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
+        <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
+        <span><span class="label">tor ip</span><span id="tor-ip">{{if .TorIP}}{{.TorIP}}{{else}}—{{end}}</span></span>
+      </div>
+    </header>
+
+    <!-- stats cards (HTMX refreshes every 5s) -->
+    <section class="grid-cards"
+             hx-get="/partials/stats"
+             hx-trigger="every 5s"
+             hx-swap="innerHTML">
+      {{.Stats}}
+    </section>
+
+    <!-- charts row -->
+    <section class="grid-charts">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Requests / min (last 1h)</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="ts-chart"></canvas>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Upstreams</span>
+        </div>
+        <div style="padding:8px 0">
+          <div class="upstream-row">
+            <span class="card-sub">opencode</span>
+            <span class="upstream-value tone-blue">{{.OpenCodeCount}}</span>
+          </div>
+          <div class="progress-track" style="margin-bottom:18px">
+            <div class="progress-fill" style="background:var(--blue);width:{{.UpstreamPct.OpenCode}}%"></div>
+          </div>
+          <div class="upstream-row">
+            <span class="card-sub">kilo</span>
+            <span class="upstream-value tone-purple">{{.KiloCount}}</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" style="background:var(--purple);width:{{.UpstreamPct.Kilo}}%"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- api endpoints -->
+    <div class="section-title">API Endpoints</div>
+    <section class="card" style="margin-bottom:var(--space-4)">
+      <div class="endpoint-list">
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/v1/models</code>
+          <span class="endpoint-desc">list available free models</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method post">POST</span>
+          <code class="endpoint-path">/v1/chat/completions</code>
+          <span class="endpoint-desc">OpenAI-compatible chat completion</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/v1/metrics</code>
+          <span class="endpoint-desc">request metrics per upstream</span>
+        </div>
+        <div class="endpoint-row">
+          <span class="method get">GET</span>
+          <code class="endpoint-path">/ready</code>
+          <span class="endpoint-desc">health check</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- models -->
+    <div class="section-title">Free Models</div>
+    <section class="card" style="margin-bottom:var(--space-4)">
+      <div class="card-header">
+        <div><!-- spacer for layout --></div>
+        <div class="filter-bar">
+          <select id="model-filter"
+                  hx-get="/partials/models"
+                  hx-trigger="change, every 10s"
+                  hx-target="#models-body"
+                  hx-swap="innerHTML"
+                  name="provider">
+            <option value="all">all</option>
+            <option value="opencode">opencode</option>
+            <option value="kilo">kilo</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap" style="max-height:320px;overflow-y:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th class="col-provider">Provider</th>
+              <th class="col-free">Free</th>
+            </tr>
+          </thead>
+          <tbody id="models-body"
+                 hx-get="/partials/models"
+                 hx-trigger="every 10s"
+                 hx-swap="innerHTML">
+            {{.Models}}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- recent requests -->
+    <div class="section-title">Recent Requests (last 100)</div>
+    <section class="card">
+      <div class="card-header">
+        <span class="card-sub" id="req-count">{{.RequestCount}} shown</span>
+      </div>
+      <div class="table-wrap" style="max-height:480px;overflow-y:auto">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-time">Time</th>
+              <th>Model</th>
+              <th class="col-upstream">Upstream</th>
+              <th class="col-status">Status</th>
+              <th class="col-duration">Duration</th>
+              <th class="col-tokens">Tokens</th>
+              <th class="col-ip">IP</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="requests-body"
+                 hx-get="/partials/requests"
+                 hx-trigger="every 5s"
+                 hx-swap="innerHTML">
+            {{.Requests}}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      freegate · auto-refresh 5s · in-memory only (lost on restart)
+    </footer>
+  </div>
+
+  <!-- error detail modal -->
+  <div id="error-modal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <span class="modal-title">Error Detail</span>
+        <button class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <pre class="modal-body" id="error-modal-body"></pre>
+    </div>
+  </div>
+
+  <script>
+    // error modal — event delegation (survives HTMX swaps)
+    document.addEventListener('click', function (e) {
+      var el = e.target.closest('.error-clickable');
+      if (!el) return;
+      var err = el.getAttribute('data-error');
+      if (!err) return;
+      document.getElementById('error-modal-body').textContent = err;
+      document.getElementById('error-modal').hidden = false;
+      e.stopPropagation();
+    });
+    document.addEventListener('click', function (e) {
+      var modal = document.getElementById('error-modal');
+      if (!modal || modal.hidden) return;
+      if (e.target === modal || e.target.closest('.modal-close')) {
+        modal.hidden = true;
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        var modal = document.getElementById('error-modal');
+        if (modal) modal.hidden = true;
+      }
+    });
+
+    // timeseries chart
+    let tsChart = null;
+    async function refreshChart() {
+      try {
+        const resp = await fetch('/api/timeseries');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data || data.length < 2) return;
+        const labels = data.map(d => {
+          const dt = new Date(d.ts);
+          return dt.getHours().toString().padStart(2,'0') + ':' +
+                 dt.getMinutes().toString().padStart(2,'0') + ':' +
+                 dt.getSeconds().toString().padStart(2,'0');
+        });
+        // delta per 10s sample, scaled to per-minute
+        const values = [];
+        for (let i = 1; i < data.length; i++) {
+          const delta = data[i].total_requests - data[i-1].total_requests;
+          values.push(Math.max(0, delta * 6));
+        }
+        const ctx = document.getElementById('ts-chart');
+        if (!ctx) return;
+        if (tsChart) {
+          tsChart.data.labels = labels.slice(1);
+          tsChart.data.datasets[0].data = values;
+          tsChart.update('none');
+        } else {
+          tsChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: labels.slice(1),
+              datasets: [{
+                label: 'req/min',
+                data: values,
+                borderColor: '#FF6600',
+                backgroundColor: 'rgba(255,102,0,0.08)',
+                borderWidth: 2,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: '#FF6600',
+                pointHoverBorderColor: '#FF6600',
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              plugins: { legend: { display: false } },
+              scales: {
+                x: {
+                  ticks: { color: '#8B8B8B', maxTicksLimit: 8, font: { size: 10 } },
+                  grid: { color: '#E8E8E8' },
+                },
+                y: {
+                  beginAtZero: true,
+                  ticks: { color: '#8B8B8B', font: { size: 10 } },
+                  grid: { color: '#E8E8E8' },
+                }
+              }
+            }
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshChart();
+      setInterval(refreshChart, 10000);
+    });
+
+    // health badge + uptime
+    async function refreshHealth() {
+      try {
+        const resp = await fetch('/api/health');
+        if (!resp.ok) return;
+        const h = await resp.json();
+        const dot = document.getElementById('status-dot');
+        dot.className = 'status-dot' + (h.ok ? ' ok' : ' warn');
+        const u = document.getElementById('uptime');
+        if (u && h.uptime) u.textContent = h.uptime;
+        const mc = document.getElementById('model-count');
+        if (mc) mc.textContent = h.model_count;
+        const tip = document.getElementById('tor-ip');
+        if (tip) tip.textContent = h.tor_ip || '—';
+      } catch (e) { /* ignore */ }
+    }
+    setInterval(refreshHealth, 3000);
+    document.addEventListener('DOMContentLoaded', refreshHealth);
+  </script>
+</body>
+</html>

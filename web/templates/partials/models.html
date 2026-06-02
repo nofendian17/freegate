@@ -1,0 +1,19 @@
+{{define "partials/models.html"}}
+{{if .}}
+{{range .}}
+<tr>
+  <td>{{.ID}}</td>
+  <td>
+    <span class="pill bg-{{.ProviderTone}} tone-{{.ProviderTone}}">{{.Provider}}</span>
+  </td>
+  <td>
+    {{if .IsFree}}<span class="pill bg-green tone-green">free</span>
+    {{else}}<span class="pill bg-gray tone-gray">—</span>
+    {{end}}
+  </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="3" class="dim">no models loaded</td></tr>
+{{end}}
+{{end}}

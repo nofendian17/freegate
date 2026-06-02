@@ -17,8 +17,8 @@ func TestKilo_Match_Prefix(t *testing.T) {
 		{"kilo-default", true},
 		{"openrouter/owl-alpha", true},
 		{"openrouter/free", true},
-		{"nvidia/nemotron-3:free", true},  // :free suffix matches
-		{"nvidia/nemotron-3", false},      // no :free suffix, no prefix
+		{"nvidia/nemotron-3:free", true}, // :free suffix matches
+		{"nvidia/nemotron-3", false},     // no :free suffix, no prefix
 		{"unknown-model", false},
 		{"", false},
 	}

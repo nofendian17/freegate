@@ -32,28 +32,11 @@ func New(upstream Upstream) *Handler {
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.Root)
 	r.Get("/v1/models", h.ListModels)
 	r.Get("/v1/metrics", h.Metrics)
 	r.Get("/ready", h.Ready)
 	r.Post("/v1/chat/completions", h.Chat)
 	return r
-}
-
-func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"service": "freegate - multi-upstream AI proxy",
-		"routes": map[string]string{
-			"GET  /":                    "this help",
-			"GET  /ready":               "health check",
-			"GET  /v1/models":           "list available free models",
-			"POST /v1/chat/completions": "OpenAI-compatible chat completion",
-		},
-		"upstreams": map[string]string{
-			"opencode": "default, model tanpa prefix",
-			"kilo":     "prefix: kilo/, kilo-, openrouter/, suffix: :free",
-		},
-	})
 }
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
