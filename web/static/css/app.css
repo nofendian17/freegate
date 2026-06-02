@@ -610,7 +610,7 @@ button.btn:active { background: var(--border); }
   }
 
   .table-wrap {
-    margin: 0 calc(-1 * var(--space-gutter) + var(--space-3));
+    margin: 0 calc(-1 * var(--space-3));
     border-radius: 0;
     border-left: 0;
     border-right: 0;
