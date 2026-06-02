@@ -14,12 +14,12 @@
     <span class="pill bg-{{.StatusTone}} tone-{{.StatusTone}}">{{.Status}}</span>
   </td>
   <td class="dim">{{.Duration}}</td>
-  <td class="dim">{{.Tokens}}</td>
-  <td class="mono-faint">{{.IP}}</td>
+  <td class="dim col-tokens">{{.Tokens}}</td>
+  <td class="mono-faint col-ip">{{.IP}}</td>
   <td>{{if .Error}}<span class="error-text error-clickable" title="{{.Error}}" data-error="{{.ErrorFull}}">{{.Error}}</span>{{end}}</td>
 </tr>
 {{end}}
 {{else}}
-<tr><td colspan="8" class="dim">no requests yet</td></tr>
+<tr><td colspan="6" class="dim">no requests yet</td></tr>
 {{end}}
 {{end}}
