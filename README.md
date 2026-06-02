@@ -14,7 +14,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` header
-- **Read-only dashboard** — HTMX + Chart.js monitoring UI at `/ui/`
+- **Read-only dashboard** — HTMX + Chart.js monitoring UI at root `/`
 - **Mobile responsive** — dashboard adapts to small screens
 - **Docker Compose** — single command to start both proxy and Tor
 
@@ -26,7 +26,7 @@ docker compose up -d
 
 The proxy will be available at `http://localhost:1234`.
 
-A read-only dashboard is available at **http://localhost:1234/ui/** — see [Dashboard](#dashboard) below.
+A read-only dashboard is available at **http://localhost:1234/** — see [Dashboard](#dashboard) below.
 
 ## Usage
 
@@ -109,19 +109,19 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
 | `GET` | `/ready` | Health check |
-| `GET` | `/ui/` | **Dashboard** (read-only monitoring UI, see below) |
+| `GET` | `/` | **Dashboard** (read-only monitoring UI, see below) |
 
 ## Dashboard
 
-A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. It is built with HTMX + Chart.js, no JS framework, no SPA, no database — everything is in-memory and embedded into the single Go binary.
+A lightweight, embedded dashboard is served at **`http://localhost:1234/`**. It is built with HTMX + Chart.js, no JS framework, no SPA, no database — everything is in-memory and embedded into the single Go binary.
 
 ### Features
 
-- **Stat cards** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
+- **Stat cards** — total requests, retries, upstream errors, rate-limit hits, input tokens, output tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
 - **Upstream split** — opencode vs kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
-- **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
+- **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s; click truncated error text to open modal with full detail
 - **Tor exit IP** — current Tor circuit IP displayed in header, refreshed every 3s
 - **API Endpoints card** — quick reference for available REST endpoints
 - **Health badge** — green dot when models are loaded, amber when empty
@@ -131,13 +131,13 @@ A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. 
 
 | Path | Description |
 |------|-------------|
-| `GET /ui/` | HTML dashboard (server-rendered initial state) |
-| `GET /ui/partials/stats` | HTMX fragment: 5 stat cards |
-| `GET /ui/partials/requests` | HTMX fragment: recent-requests table rows |
-| `GET /ui/partials/models?provider=...` | HTMX fragment: models table rows |
-| `GET /ui/api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
-| `GET /ui/api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
-| `GET /ui/static/{css,js}/...` | Vendored HTMX, Chart.js, dark-theme CSS |
+| `GET /` | HTML dashboard (server-rendered initial state) |
+| `GET /partials/stats` | HTMX fragment: 6 stat cards |
+| `GET /partials/requests` | HTMX fragment: recent-requests table rows |
+| `GET /partials/models?provider=...` | HTMX fragment: models table rows |
+| `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
+| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
+| `GET /static/{css,js}/...` | Vendored HTMX, Chart.js, app.css |
 
 ### Notes
 
@@ -157,7 +157,7 @@ flowchart TB
     subgraph Freegate["freegate (:1234)"]
         Router["Router<br/>kilo/ → Kilo<br/>default → OpenCode"]
         Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
-        Dashboard["Dashboard /ui/*<br/>HTMX + Chart.js"]
+        Dashboard["Dashboard /*<br/>HTMX + Chart.js"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 

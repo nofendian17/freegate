@@ -16,7 +16,7 @@
   <td class="dim">{{.Duration}}</td>
   <td class="dim">{{.Tokens}}</td>
   <td class="mono-faint">{{.IP}}</td>
-  <td>{{if .Error}}<span class="error-text" title="{{.Error}}">{{.Error}}</span>{{end}}</td>
+  <td>{{if .Error}}<span class="error-text error-clickable" title="{{.Error}}" data-error="{{.ErrorFull}}">{{.Error}}</span>{{end}}</td>
 </tr>
 {{end}}
 {{else}}

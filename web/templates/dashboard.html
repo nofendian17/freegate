@@ -168,7 +168,42 @@
     </footer>
   </div>
 
+  <!-- error detail modal -->
+  <div id="error-modal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <span class="modal-title">Error Detail</span>
+        <button class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <pre class="modal-body" id="error-modal-body"></pre>
+    </div>
+  </div>
+
   <script>
+    // error modal — event delegation (survives HTMX swaps)
+    document.addEventListener('click', function (e) {
+      var el = e.target.closest('.error-clickable');
+      if (!el) return;
+      var err = el.getAttribute('data-error');
+      if (!err) return;
+      document.getElementById('error-modal-body').textContent = err;
+      document.getElementById('error-modal').hidden = false;
+      e.stopPropagation();
+    });
+    document.addEventListener('click', function (e) {
+      var modal = document.getElementById('error-modal');
+      if (!modal || modal.hidden) return;
+      if (e.target === modal || e.target.closest('.modal-close')) {
+        modal.hidden = true;
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        var modal = document.getElementById('error-modal');
+        if (modal) modal.hidden = true;
+      }
+    });
+
     // timeseries chart
     let tsChart = null;
     async function refreshChart() {

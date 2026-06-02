@@ -114,6 +114,7 @@ a:hover { color: var(--orange-hover); text-decoration: underline; }
   justify-content: space-between;
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-3);
 }
 
 .header-left {
@@ -399,6 +400,75 @@ button.btn:active { background: var(--border); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.error-clickable {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--red);
+  transition: background var(--duration-fast) var(--easing);
+}
+.error-clickable:hover {
+  background: var(--red-soft);
+}
+
+/* error detail modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+.modal-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-elevated);
+  max-width: 640px;
+  width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  font-family: var(--sans);
+  color: var(--text);
+}
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--easing);
+}
+.modal-close:hover {
+  color: var(--text);
+}
+.modal-body {
+  padding: var(--space-3) var(--space-4);
+  margin: 0;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
 }
 
 /* api endpoint list */
