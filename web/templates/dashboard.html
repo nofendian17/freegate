@@ -196,12 +196,15 @@
               datasets: [{
                 label: 'req/min',
                 data: values,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59,130,246,0.1)',
+                borderColor: '#F6821F',
+                backgroundColor: 'rgba(246,130,31,0.1)',
                 borderWidth: 2,
                 fill: true,
                 tension: 0.25,
                 pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: '#F6821F',
+                pointHoverBorderColor: '#F6821F',
               }]
             },
             options: {
@@ -211,13 +214,13 @@
               plugins: { legend: { display: false } },
               scales: {
                 x: {
-                  ticks: { color: '#5c6776', maxTicksLimit: 8, font: { size: 10 } },
-                  grid: { color: '#232c39' },
+                  ticks: { color: '#6B7280', maxTicksLimit: 8, font: { size: 10 } },
+                  grid: { color: '#2A2C38' },
                 },
                 y: {
                   beginAtZero: true,
-                  ticks: { color: '#5c6776', font: { size: 10 } },
-                  grid: { color: '#232c39' },
+                  ticks: { color: '#6B7280', font: { size: 10 } },
+                  grid: { color: '#2A2C38' },
                 }
               }
             }
