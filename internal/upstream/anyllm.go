@@ -87,10 +87,17 @@ func (a *anyllmProvider) ListModels(ctx context.Context) ([]model.Model, error) 
 // Models returns the cached free models. Returns nil if no refresh has run yet.
 func (a *anyllmProvider) Models() []model.Model { return a.cache.Get() }
 
-// Start is a no-op stub. The real implementation, which uses Refresher, is
-// added in a follow-up change.
+// Start kicks off the periodic model-refresh loop using the shared Refresher.
 func (a *anyllmProvider) Start(ctx context.Context, refreshInterval time.Duration) {
-	// no-op; replaced in Task 5
+	r := NewRefresher(a.name, func(ctx context.Context) error {
+		models, err := a.ListModels(ctx)
+		if err != nil {
+			return err
+		}
+		a.cache.Set(models)
+		return nil
+	}, refreshInterval)
+	r.Start(ctx)
 }
 
 // ChatCompletion is a stub kept to satisfy the existing upstream.Upstream
