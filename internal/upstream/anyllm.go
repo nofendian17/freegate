@@ -30,9 +30,10 @@ type anyllmProvider struct {
 	freePred func(providers.Model) bool
 }
 
-// newAnyLLMProvider builds an anyllmProvider that talks to baseURL through
-// SOCKS5 (socksAddr) and filters ListModels results with freePred.
-func newAnyLLMProvider(name, baseURL, apiKey, socksAddr string, headers map[string]string, prefixes []string, freePred func(providers.Model) bool) (*anyllmProvider, error) {
+// NewAnyLLMProvider builds an Upstream that talks to baseURL through SOCKS5
+// (socksAddr) and filters ListModels results with freePred. If freePred is
+// nil, every model is kept.
+func NewAnyLLMProvider(name, baseURL, apiKey, socksAddr string, headers map[string]string, prefixes []string, freePred func(providers.Model) bool) (Upstream, error) {
 	hc := newTorClient(socksAddr, headers)
 	p, err := openai.New(
 		anyllm.WithAPIKey(apiKey),
@@ -100,12 +101,9 @@ func (a *anyllmProvider) Start(ctx context.Context, refreshInterval time.Duratio
 	r.Start(ctx)
 }
 
-// ChatCompletion is a stub kept to satisfy the existing upstream.Upstream
-// interface until the new proxy signature (which calls a.Provider()
-// directly) lands.
-func (a *anyllmProvider) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
-	return nil, fmt.Errorf("ChatCompletion is no longer used; the proxy calls Provider() directly")
-}
+// Provider returns the underlying any-llm-go Provider so the proxy can call
+// Completion / CompletionStream directly.
+func (a *anyllmProvider) Provider() anyllm.Provider { return a.provider }
 
 func (a *anyllmProvider) Match(modelID string) bool {
 	if len(a.prefixes) == 0 {
@@ -162,8 +160,3 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	return t.base.RoundTrip(req)
 }
-
-// Ensure the unused-time import doesn't break the build when other parts
-// of the file are removed in later tasks. The `_ = time.Duration(0)` line
-// is a no-op and is removed in the final cleanup of this file.
-var _ = time.Duration(0)

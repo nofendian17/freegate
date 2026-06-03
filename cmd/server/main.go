@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mozilla-ai/any-llm-go/providers"
 
 	"freegate/internal/collector"
 	"freegate/internal/config"
@@ -45,17 +47,32 @@ func main() {
 
 	tc := tor.NewController(cfg.TorHost, cfg.CtrlPort, cfg.CtrlPass, cfg.SOCKSAddr)
 
-	opencode := upstream.NewOpenCodeUpstream(
+	opencode, err := upstream.NewAnyLLMProvider(
+		"opencode",
 		cfg.UpstreamURLOpenCode,
 		cfg.UpstreamKeyOpenCode,
 		cfg.SOCKSAddr,
+		nil,
+		nil,
+		func(m providers.Model) bool { return strings.HasSuffix(m.ID, "-free") },
 	)
-	kilo := upstream.NewKiloUpstream(
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to construct opencode upstream: %v\n", err)
+		os.Exit(1)
+	}
+	kilo, err := upstream.NewAnyLLMProvider(
+		"kilo",
 		cfg.UpstreamURLKilo,
 		cfg.UpstreamKeyKilo,
 		cfg.SOCKSAddr,
+		nil,
 		cfg.UpstreamKiloPrefixes,
+		func(m providers.Model) bool { return strings.Contains(m.ID, "free") },
 	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to construct kilo upstream: %v\n", err)
+		os.Exit(1)
+	}
 
 	router := upstream.NewRouter(opencode, kilo)
 

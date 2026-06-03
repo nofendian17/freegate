@@ -2,9 +2,10 @@ package upstream
 
 import (
 	"context"
-	"net/http"
 	"testing"
 	"time"
+
+	anyllm "github.com/mozilla-ai/any-llm-go"
 
 	"freegate/internal/model"
 )
@@ -18,11 +19,9 @@ type mockUpstream struct {
 func (m *mockUpstream) Name() string                                          { return m.name }
 func (m *mockUpstream) Match(modelID string) bool                             { return m.match(modelID) }
 func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
-func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
-	return nil, nil
-}
-func (m *mockUpstream) Models() []model.Model                                    { return m.models }
+func (m *mockUpstream) Models() []model.Model                                 { return m.models }
 func (m *mockUpstream) Start(ctx context.Context, refreshInterval time.Duration) {}
+func (m *mockUpstream) Provider() anyllm.Provider                             { return nil }
 
 func TestRouter_Select_Match(t *testing.T) {
 	kilo := &mockUpstream{
@@ -81,7 +80,6 @@ func TestRouter_AllModels_Dedup(t *testing.T) {
 		t.Fatalf("expected 3 models after dedup, got %d", len(models))
 	}
 
-	// kilo should take priority for model-a
 	seen := make(map[string]bool)
 	for _, m := range models {
 		if seen[m.ID] {

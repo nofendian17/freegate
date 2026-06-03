@@ -2,14 +2,14 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
 
-freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), automatically routing by model ID prefix. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses include dual reasoning fields (`reasoning` + `reasoning_content`) for compatibility with both OpenCode and OpenRouter/Kilo clients.
+freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), automatically routing by model ID prefix. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served.
 
 ## Features
 
 - **Multi-upstream routing** — model prefix determines the upstream: `kilo/`, `kilo-`, `openrouter/` → Kilo; prefixless → OpenCode
-- **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `cost == "0"` for OpenCode); merged & deduped on `/v1/models`
+- **Free only** — automatically filters out paid models (suffix `-free` for OpenCode, contains `free` for Kilo); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
-- **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
+- **any-llm-go translation** — request/response conversion is delegated to [mozilla-ai/any-llm-go](https://github.com/mozilla-ai/any-llm-go), so the proxy speaks OpenAI types end-to-end and can swap providers without rewriting serialization
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
@@ -83,24 +83,6 @@ All settings are environment variables:
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
 
-## Reasoning Normalization
-
-OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `reasoning`. freegate normalizes so both fields appear in every response:
-
-```json
-{
-  "choices": [{
-    "message": {
-      "content": "Final answer here",
-      "reasoning": "Step-by-step thought process...",
-      "reasoning_content": "Step-by-step thought process..."
-    }
-  }]
-}
-```
-
-This applies to both streaming (`delta`) and non-streaming (`message`) responses.
-
 ## API Endpoints
 
 | Method | Path | Description |
@@ -156,7 +138,7 @@ flowchart TB
 
     subgraph Freegate["freegate (:1234)"]
         Router["Router<br/>kilo/ → Kilo<br/>default → OpenCode"]
-        Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
+        Proxy["Proxy<br/>· retry + IP rotation<br/>· any-llm-go translation<br/>· token extraction"]
         Dashboard["Dashboard /*<br/>HTMX + Chart.js"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
@@ -194,7 +176,7 @@ freegate
 │   ├── metrics/              # Request counters + token tracking
 │   ├── middleware/           # Logging, auth, rate limit, CORS, request ID
 │   ├── model/                # Shared model types + request log
-│   ├── proxy/                # Upstream-agnostic proxy + normalization
+│   ├── proxy/                # Upstream-agnostic proxy + serialize (any-llm-go types)
 │   ├── respond/              # Shared HTTP response utilities
 │   ├── ringbuffer/           # Generic typed ring buffer
 │   ├── tor/                  # Tor controller for IP rotation + monitoring
@@ -224,8 +206,10 @@ docker compose build
 
 ## Tech Stack
 
-- **Go 1.23+** — core proxy server
+- **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
+- **[mozilla-ai/any-llm-go](https://github.com/mozilla-ai/any-llm-go)** — typed OpenAI-compatible request/response handling
+- **[openai-go](https://github.com/openai/openai-go)** — OpenAI SDK types (used inside any-llm-go)
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration
 - **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)

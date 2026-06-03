@@ -2,8 +2,9 @@ package upstream
 
 import (
 	"context"
-	"net/http"
 	"time"
+
+	anyllm "github.com/mozilla-ai/any-llm-go"
 
 	"freegate/internal/model"
 )
@@ -14,13 +15,16 @@ const (
 	MaxBackoff           = 5 * time.Minute
 )
 
+// Upstream is the contract that the proxy Router consumes. Each
+// implementation is typically an anyllmProvider that filters free models,
+// caches them, and exposes the underlying any-llm-go Provider.
 type Upstream interface {
 	Name() string
 	Match(modelID string) bool
 	ListModels(ctx context.Context) ([]model.Model, error)
-	ChatCompletion(ctx context.Context, body []byte) (*http.Response, error)
 	Models() []model.Model
 	Start(ctx context.Context, refreshInterval time.Duration)
+	Provider() anyllm.Provider
 }
 
 type Router struct {

@@ -33,9 +33,9 @@ func TestAnyLLMProvider_ListModels_OpenCodeFreeFilter(t *testing.T) {
 		return strings.HasSuffix(m.ID, "-free")
 	}
 
-	p, err := newAnyLLMProvider("opencode", srv.URL, "test-key", "", nil, nil, openCodeFree)
+	p, err := NewAnyLLMProvider("opencode", srv.URL, "test-key", "", nil, nil, openCodeFree)
 	if err != nil {
-		t.Fatalf("newAnyLLMProvider: %v", err)
+		t.Fatalf("NewAnyLLMProvider: %v", err)
 	}
 	got, err := p.ListModels(context.Background())
 	if err != nil {
@@ -74,9 +74,9 @@ func TestAnyLLMProvider_ListModels_KiloFreeFilter(t *testing.T) {
 
 	kiloFree := func(m providers.Model) bool { return strings.Contains(m.ID, "free") }
 
-	p, err := newAnyLLMProvider("kilo", srv.URL, "test-key", "", nil, []string{"kilo/"}, kiloFree)
+	p, err := NewAnyLLMProvider("kilo", srv.URL, "test-key", "", nil, []string{"kilo/"}, kiloFree)
 	if err != nil {
-		t.Fatalf("newAnyLLMProvider: %v", err)
+		t.Fatalf("NewAnyLLMProvider: %v", err)
 	}
 	got, err := p.ListModels(context.Background())
 	if err != nil {

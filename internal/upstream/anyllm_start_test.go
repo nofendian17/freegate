@@ -15,9 +15,9 @@ func TestAnyLLMProvider_Start_PopulatesCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := newAnyLLMProvider("test", srv.URL, "k", "", nil, nil, nil)
+	p, err := NewAnyLLMProvider("test", srv.URL, "k", "", nil, nil, nil)
 	if err != nil {
-		t.Fatalf("newAnyLLMProvider: %v", err)
+		t.Fatalf("NewAnyLLMProvider: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
