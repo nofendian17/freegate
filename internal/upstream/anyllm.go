@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/mozilla-ai/any-llm-go/providers"
 	"github.com/mozilla-ai/any-llm-go/providers/openai"
 	"golang.org/x/net/proxy"
+
+	"freegate/internal/model"
 )
 
 const providerRequestTimeout = 0
@@ -52,6 +55,50 @@ func newAnyLLMProvider(name, baseURL, apiKey, socksAddr string, headers map[stri
 }
 
 func (a *anyllmProvider) Name() string { return a.name }
+
+// ListModels calls the upstream's /models endpoint, applies freePred, and
+// returns the matching free models.
+func (a *anyllmProvider) ListModels(ctx context.Context) ([]model.Model, error) {
+	lister, ok := a.provider.(providers.ModelLister)
+	if !ok {
+		return nil, fmt.Errorf("%s: provider does not support ListModels", a.name)
+	}
+	resp, err := lister.ListModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: list models: %w", a.name, err)
+	}
+	out := make([]model.Model, 0, len(resp.Data))
+	for _, m := range resp.Data {
+		if !a.freePred(m) {
+			continue
+		}
+		out = append(out, model.Model{
+			ID:       m.ID,
+			Object:   m.Object,
+			Created:  m.Created,
+			OwnedBy:  m.OwnedBy,
+			IsFree:   true,
+			Provider: a.name,
+		})
+	}
+	return out, nil
+}
+
+// Models returns the cached free models. Returns nil if no refresh has run yet.
+func (a *anyllmProvider) Models() []model.Model { return a.cache.Get() }
+
+// Start is a no-op stub. The real implementation, which uses Refresher, is
+// added in a follow-up change.
+func (a *anyllmProvider) Start(ctx context.Context, refreshInterval time.Duration) {
+	// no-op; replaced in Task 5
+}
+
+// ChatCompletion is a stub kept to satisfy the existing upstream.Upstream
+// interface until the new proxy signature (which calls a.Provider()
+// directly) lands.
+func (a *anyllmProvider) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
+	return nil, fmt.Errorf("ChatCompletion is no longer used; the proxy calls Provider() directly")
+}
 
 func (a *anyllmProvider) Match(modelID string) bool {
 	if len(a.prefixes) == 0 {
