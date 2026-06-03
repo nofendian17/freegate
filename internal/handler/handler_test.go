@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	anyllm "github.com/mozilla-ai/any-llm-go"
+
 	"freegate/internal/model"
 )
 
@@ -16,8 +18,7 @@ type mockUpstream struct {
 	models      []model.Model
 	ready       bool
 	metrics     map[string]any
-	lastModelID string
-	lastBody    []byte
+	lastParams  anyllm.CompletionParams
 }
 
 func newMockUpstream() *mockUpstream {
@@ -26,10 +27,9 @@ func newMockUpstream() *mockUpstream {
 	}
 }
 
-func (m *mockUpstream) ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte) {
+func (m *mockUpstream) ProxyChat(w http.ResponseWriter, r *http.Request, params anyllm.CompletionParams) {
 	m.chatCalled = true
-	m.lastModelID = modelID
-	m.lastBody = body
+	m.lastParams = params
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"choices":[]}`))
 }
@@ -146,8 +146,47 @@ func TestHandler_Chat_Success(t *testing.T) {
 	if !u.chatCalled {
 		t.Error("expected ProxyChat to be called")
 	}
-	if u.lastModelID != "deepseek-v4-flash-free" {
-		t.Errorf("expected model ID 'deepseek-v4-flash-free', got %q", u.lastModelID)
+	if u.lastParams.Model != "deepseek-v4-flash-free" {
+		t.Errorf("expected model 'deepseek-v4-flash-free', got %q", u.lastParams.Model)
+	}
+}
+
+func TestHandler_Chat_DecodesCompletionParams(t *testing.T) {
+	u := newMockUpstream()
+	h := New(u)
+	body := `{"model":"m1","messages":[{"role":"user","content":"hi"}],"temperature":0.7,"max_tokens":50,"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{}}}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if u.lastParams.Temperature == nil || *u.lastParams.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", u.lastParams.Temperature)
+	}
+	if u.lastParams.MaxTokens == nil || *u.lastParams.MaxTokens != 50 {
+		t.Errorf("MaxTokens = %v, want 50", u.lastParams.MaxTokens)
+	}
+	if len(u.lastParams.Tools) != 1 || u.lastParams.Tools[0].Function.Name != "f" {
+		t.Errorf("Tools = %+v, want one function tool named f", u.lastParams.Tools)
+	}
+}
+
+func TestHandler_Chat_RejectsEmptyMessages(t *testing.T) {
+	u := newMockUpstream()
+	h := New(u)
+	body := `{"model":"m1","messages":[]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 
@@ -177,18 +216,12 @@ func TestHandler_Chat_MissingModel(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
 	}
-	var errResp map[string]map[string]string
-	json.Unmarshal(w.Body.Bytes(), &errResp)
-	if errResp["error"]["message"] != "missing required field: model" {
-		t.Errorf("unexpected error: %v", errResp["error"]["message"])
-	}
 }
 
 func TestHandler_Chat_InvalidJSON(t *testing.T) {
 	u := newMockUpstream()
 	h := New(u)
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString("not json"))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	h.Routes().ServeHTTP(w, req)

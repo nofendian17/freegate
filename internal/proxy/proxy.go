@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -8,14 +9,13 @@ import (
 	"strings"
 	"time"
 
+	anyllm "github.com/mozilla-ai/any-llm-go"
+
 	"freegate/internal/metrics"
 	"freegate/internal/model"
 	"freegate/internal/respond"
 	"freegate/internal/upstream"
 )
-
-// RequestLogger is a callback type for request logging.
-type RequestLogger = model.RequestLogger
 
 const (
 	StreamBufferSize = 32 * 1024
@@ -23,6 +23,10 @@ const (
 	DefaultMaxRetry  = 2
 )
 
+// RequestLogger is a callback type for request logging.
+type RequestLogger = model.RequestLogger
+
+// Router is the subset of upstream.Router that proxy.Client needs.
 type Router interface {
 	Select(modelID string) upstream.Upstream
 	AllModels() []model.Model
@@ -74,12 +78,13 @@ func (c *Client) IsReady() bool {
 	return c.router.IsReady()
 }
 
-func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte) {
+// ProxyChat proxies an OpenAI-compatible chat completion to the selected
+// upstream. params.Model determines routing. params.Stream toggles SSE.
+func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, params anyllm.CompletionParams) {
 	start := time.Now()
 	requestID := r.Header.Get("X-Request-ID")
 	c.metrics.TotalRequests.Add(1)
 
-	// Track the final outcome so we can emit a single log entry on return.
 	var (
 		finalStatus      int
 		finalUpstream    string
@@ -100,7 +105,7 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 			Ts:               start,
 			Method:           r.Method,
 			Path:             r.URL.Path,
-			Model:            modelID,
+			Model:            params.Model,
 			Upstream:         finalUpstream,
 			Status:           finalStatus,
 			DurationMs:       time.Since(start).Milliseconds(),
@@ -114,18 +119,27 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 
 	slog.Info("chat request",
 		"request_id", requestID,
-		"model", modelID,
-		"content_length", len(body),
+		"model", params.Model,
+		"stream", params.Stream,
 		"remote", r.RemoteAddr,
 	)
 
-	u := c.router.Select(modelID)
+	u := c.router.Select(params.Model)
 	c.metrics.IncrUpstream(u.Name())
 	finalUpstream = u.Name()
-	slog.Info("upstream selected", "request_id", requestID, "model", modelID, "upstream", u.Name())
+	slog.Info("upstream selected", "request_id", requestID, "model", params.Model, "upstream", u.Name())
 
-	var resp *http.Response
-	var err error
+	// any-llm-go providers expose themselves via upstream.Upstream.Provider().
+	pAny, ok := u.(interface{ Provider() anyllm.Provider })
+	if !ok {
+		finalStatus = http.StatusInternalServerError
+		finalErr = fmt.Errorf("upstream %s does not expose a any-llm-go Provider", u.Name())
+		respond.JSONError(w, http.StatusInternalServerError, "internal_error", finalErr.Error())
+		return
+	}
+	provider := pAny.Provider()
+
+	var usage TokenUsage
 	for attempt := 0; attempt <= c.maxRetry; attempt++ {
 		if attempt > 0 {
 			if c.ipRotator != nil {
@@ -146,7 +160,44 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 			}
 		}
 
-		resp, err = u.ChatCompletion(r.Context(), body)
+		if params.Stream {
+			chunks, errs := provider.CompletionStream(r.Context(), params)
+			streamErr := writeStreaming(w, chunks, errs, &usage)
+			if streamErr == nil {
+				finalStatus = http.StatusOK
+				finalTotalTokens += usage.Total
+				finalPrompt += usage.Prompt
+				finalCompletion += usage.Completion
+				if usage.Total > 0 {
+					c.metrics.TotalTokens.Add(int64(usage.Total))
+				}
+				if usage.Prompt > 0 {
+					c.metrics.PromptTokens.Add(int64(usage.Prompt))
+				}
+				if usage.Completion > 0 {
+					c.metrics.CompletionTokens.Add(int64(usage.Completion))
+				}
+				return
+			}
+			if errors.Is(streamErr, anyllm.ErrRateLimit) {
+				slog.Warn("upstream returned rate limit, rotating IP and retrying",
+					"request_id", requestID, "upstream", u.Name(), "attempt", attempt+1, "max_retry", c.maxRetry)
+				continue
+			}
+			c.metrics.UpstreamErrors.Add(1)
+			finalStatus = http.StatusBadGateway
+			finalErr = streamErr
+			slog.Error("streaming upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", streamErr)
+			respond.JSONError(w, http.StatusBadGateway, "upstream_error", fmt.Sprintf("upstream request failed: %v", streamErr))
+			return
+		}
+
+		resp, err := provider.Completion(r.Context(), params)
+		if errors.Is(err, anyllm.ErrRateLimit) {
+			slog.Warn("upstream returned rate limit, rotating IP and retrying",
+				"request_id", requestID, "upstream", u.Name(), "attempt", attempt+1, "max_retry", c.maxRetry)
+			continue
+		}
 		if err != nil {
 			c.metrics.UpstreamErrors.Add(1)
 			finalStatus = http.StatusBadGateway
@@ -156,62 +207,27 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 			return
 		}
 
-		if resp.StatusCode != http.StatusTooManyRequests {
-			break
+		finalStatus = http.StatusOK
+		writeNonStreaming(w, resp, &usage)
+		finalTotalTokens += usage.Total
+		finalPrompt += usage.Prompt
+		finalCompletion += usage.Completion
+		if usage.Total > 0 {
+			c.metrics.TotalTokens.Add(int64(usage.Total))
 		}
-
-		resp.Body.Close()
-		slog.Warn("upstream returned 429, rotating IP and retrying",
-			"request_id", requestID,
-			"upstream", u.Name(),
-			"attempt", attempt+1,
-			"max_retry", c.maxRetry,
-		)
-	}
-	defer resp.Body.Close()
-
-	slog.Info("upstream response", "request_id", requestID, "upstream", u.Name(), "status", resp.StatusCode)
-	finalStatus = resp.StatusCode
-
-	copyHeaders(w, resp)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(resp.StatusCode)
-
-	usage := copyNormalized(w, resp, requestID)
-	finalTotalTokens += usage.Total
-	finalPrompt += usage.Prompt
-	finalCompletion += usage.Completion
-	if usage.Total > 0 {
-		c.metrics.TotalTokens.Add(int64(usage.Total))
-	}
-	if usage.Prompt > 0 {
-		c.metrics.PromptTokens.Add(int64(usage.Prompt))
-	}
-	if usage.Completion > 0 {
-		c.metrics.CompletionTokens.Add(int64(usage.Completion))
-	}
-}
-
-func copyHeaders(dst http.ResponseWriter, src *http.Response) {
-	hopByHop := map[string]bool{
-		"Connection":          true,
-		"Proxy-Connection":    true,
-		"Keep-Alive":          true,
-		"Proxy-Authenticate":  true,
-		"Proxy-Authorization": true,
-		"TE":                  true,
-		"Trailers":            true,
-		"Transfer-Encoding":   true,
-		"Upgrade":             true,
-	}
-	for k, vs := range src.Header {
-		if hopByHop[k] {
-			continue
+		if usage.Prompt > 0 {
+			c.metrics.PromptTokens.Add(int64(usage.Prompt))
 		}
-		for _, v := range vs {
-			dst.Header().Add(k, v)
+		if usage.Completion > 0 {
+			c.metrics.CompletionTokens.Add(int64(usage.Completion))
 		}
+		return
 	}
+
+	c.metrics.UpstreamErrors.Add(1)
+	finalStatus = http.StatusBadGateway
+	finalErr = anyllm.ErrRateLimit
+	respond.JSONError(w, http.StatusBadGateway, "upstream_error", "upstream returned rate limit after all retries")
 }
 
 // clientIPFromRequest extracts the client IP from request headers or RemoteAddr.

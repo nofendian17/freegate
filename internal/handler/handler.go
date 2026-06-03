@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	anyllm "github.com/mozilla-ai/any-llm-go"
+
 	"freegate/internal/model"
 	"freegate/internal/respond"
 )
@@ -16,7 +18,7 @@ const MaxRequestBodySize = 10 << 20
 
 // Upstream is the single interface the handler needs from the proxy client.
 type Upstream interface {
-	ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte)
+	ProxyChat(w http.ResponseWriter, r *http.Request, params anyllm.CompletionParams)
 	AllModels() []model.Model
 	IsReady() bool
 	Metrics() map[string]any
@@ -65,30 +67,22 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 10 MB limit")
 		return
 	}
-
 	if len(body) == 0 {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", "empty request body")
 		return
 	}
-
-	modelID, err := extractModelID(body)
-	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var params anyllm.CompletionParams
+	if err := json.Unmarshal(body, &params); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
-
-	h.upstream.ProxyChat(w, r, modelID, body)
-}
-
-func extractModelID(body []byte) (string, error) {
-	var req struct {
-		Model string `json:"model"`
+	if params.Model == "" {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", "missing required field: model")
+		return
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return "", fmt.Errorf("invalid request body: %w", err)
+	if len(params.Messages) == 0 {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", "messages is required and must be non-empty")
+		return
 	}
-	if req.Model == "" {
-		return "", fmt.Errorf("missing required field: model")
-	}
-	return req.Model, nil
+	h.upstream.ProxyChat(w, r, params)
 }
