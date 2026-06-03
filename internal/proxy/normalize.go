@@ -187,16 +187,15 @@ func syncMessageReasoning(resp map[string]interface{}) {
 	}
 }
 
+// syncReasoning normalizes the reasoning field to the OpenAI-compatible
+// canonical name `reasoning_content` (used by DeepSeek, Qwen, Moonshot, etc.).
+// The non-standard alias `reasoning` is always dropped from the output so
+// strict OpenAI clients don't see a schema-invalid field.
 func syncReasoning(m map[string]interface{}) {
-	_, hasRC := m["reasoning_content"]
-	_, hasR := m["reasoning"]
-
-	if hasRC && !hasR {
-		m["reasoning"] = m["reasoning_content"]
-	} else if hasR && !hasRC {
-		m["reasoning_content"] = m["reasoning"]
-	} else if !hasRC && !hasR {
-		m["reasoning"] = nil
-		m["reasoning_content"] = nil
+	if r, hasR := m["reasoning"]; hasR {
+		if _, hasRC := m["reasoning_content"]; !hasRC {
+			m["reasoning_content"] = r
+		}
+		delete(m, "reasoning")
 	}
 }

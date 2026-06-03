@@ -14,8 +14,8 @@ func TestSyncReasoning_BothPresent(t *testing.T) {
 		"reasoning_content": "step by step",
 	}
 	syncReasoning(m)
-	if m["reasoning"] != "step by step" {
-		t.Errorf("expected reasoning='step by step', got %v", m["reasoning"])
+	if _, ok := m["reasoning"]; ok {
+		t.Errorf("expected reasoning alias to be dropped, got %v", m["reasoning"])
 	}
 	if m["reasoning_content"] != "step by step" {
 		t.Errorf("expected reasoning_content='step by step', got %v", m["reasoning_content"])
@@ -27,8 +27,8 @@ func TestSyncReasoning_OnlyRC(t *testing.T) {
 		"reasoning_content": "from opencode",
 	}
 	syncReasoning(m)
-	if m["reasoning"] != "from opencode" {
-		t.Errorf("expected reasoning='from opencode', got %v", m["reasoning"])
+	if _, ok := m["reasoning"]; ok {
+		t.Errorf("expected reasoning to be absent, got %v", m["reasoning"])
 	}
 	if m["reasoning_content"] != "from opencode" {
 		t.Errorf("expected reasoning_content='from opencode', got %v", m["reasoning_content"])
@@ -40,8 +40,8 @@ func TestSyncReasoning_OnlyR(t *testing.T) {
 		"reasoning": "from kilo",
 	}
 	syncReasoning(m)
-	if m["reasoning"] != "from kilo" {
-		t.Errorf("expected reasoning='from kilo', got %v", m["reasoning"])
+	if _, ok := m["reasoning"]; ok {
+		t.Errorf("expected reasoning to be dropped, got %v", m["reasoning"])
 	}
 	if m["reasoning_content"] != "from kilo" {
 		t.Errorf("expected reasoning_content='from kilo', got %v", m["reasoning_content"])
@@ -53,11 +53,11 @@ func TestSyncReasoning_Neither(t *testing.T) {
 		"content": "hello",
 	}
 	syncReasoning(m)
-	if m["reasoning"] != nil {
-		t.Errorf("expected reasoning=nil, got %v", m["reasoning"])
+	if _, ok := m["reasoning"]; ok {
+		t.Errorf("expected reasoning to be absent, got %v", m["reasoning"])
 	}
-	if m["reasoning_content"] != nil {
-		t.Errorf("expected reasoning_content=nil, got %v", m["reasoning_content"])
+	if _, ok := m["reasoning_content"]; ok {
+		t.Errorf("expected reasoning_content to be absent, got %v", m["reasoning_content"])
 	}
 }
 
@@ -110,8 +110,8 @@ func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	normalizeStream(&buf, strings.NewReader(input), "test-req")
 	output := buf.String()
 
-	if !strings.Contains(output, `"reasoning":"thinking"`) {
-		t.Error("expected reasoning field to be synced")
+	if strings.Contains(output, `"reasoning":`) {
+		t.Errorf("expected reasoning alias to be dropped, got %s", output)
 	}
 	if !strings.Contains(output, `"reasoning_content":"thinking"`) {
 		t.Error("expected reasoning_content field to be preserved")
@@ -124,8 +124,8 @@ func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	normalizeJSON(&buf, strings.NewReader(input), "test-req")
 	output := buf.String()
 
-	if !strings.Contains(output, `"reasoning":"analysis"`) {
-		t.Error("expected reasoning field to be synced")
+	if strings.Contains(output, `"reasoning":`) {
+		t.Errorf("expected reasoning alias to be dropped, got %s", output)
 	}
 	if !strings.Contains(output, `"reasoning_content":"analysis"`) {
 		t.Error("expected reasoning_content field to be preserved")
