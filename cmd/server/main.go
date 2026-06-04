@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/config"
-	"freegate/internal/handler"
+	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/proxy"
 	"freegate/internal/infrastructure/tor"
