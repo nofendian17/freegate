@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-// claudeToOpenAI translates a Claude-format request body to OpenAI format.
+// ToOpenAI translates a Claude-format request body to OpenAI format.
 // Claude reference: https://docs.anthropic.com/en/api/messages
 // OpenAI reference: https://platform.openai.com/docs/api-reference/chat
-func claudeToOpenAI(body []byte) ([]byte, error) {
+func ToOpenAI(body []byte) ([]byte, error) {
 	var claude map[string]any
 	if err := json.Unmarshal(body, &claude); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
+		return nil, fmt.Errorf("translate: invalid request body: %w", err)
 	}
 
 	openai := make(map[string]any)
@@ -46,7 +46,7 @@ func claudeToOpenAI(body []byte) ([]byte, error) {
 					}
 				}
 			}
-			sysText = joinStrings(parts, "\n")
+			sysText = strings.Join(parts, "\n")
 		}
 		if sysText != "" {
 			messages = append(messages, map[string]any{
@@ -191,7 +191,7 @@ func convertClaudeUserMessage(msg map[string]any) any {
 	if len(textParts) > 0 {
 		results = append(results, map[string]any{
 			"role":    "user",
-			"content": joinStrings(textParts, "\n"),
+			"content": strings.Join(textParts, "\n"),
 		})
 	}
 	results = append(results, toolMessages...)
@@ -264,7 +264,7 @@ func convertClaudeAssistantMessage(msg map[string]any) any {
 	}
 
 	newMsg := cloneMap(msg)
-	contentText := joinStrings(textParts, "")
+	contentText := strings.Join(textParts, "")
 
 	if toolUseFound {
 		newMsg["content"] = contentText
@@ -409,20 +409,6 @@ func cloneMap(m map[string]any) map[string]any {
 	return result
 }
 
-// joinStrings joins string slices using strings.Builder for efficiency.
-func joinStrings(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(parts[0])
-	for _, p := range parts[1:] {
-		b.WriteString(sep)
-		b.WriteString(p)
-	}
-	return b.String()
-}
-
 // mustJSON marshals v to JSON string, returning "{}" on error.
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
@@ -448,7 +434,7 @@ func contentToString(raw any) string {
 				parts = append(parts, itemStr)
 			}
 		}
-		return joinStrings(parts, "\n")
+		return strings.Join(parts, "\n")
 	case map[string]any:
 		if txt, ok := v["text"].(string); ok {
 			return txt

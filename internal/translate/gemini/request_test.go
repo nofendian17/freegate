@@ -7,7 +7,7 @@ import (
 
 func TestGeminiToOpenAI_Basic(t *testing.T) {
 	gemini := `{"contents":[{"parts":[{"text":"hi"}],"role":"user"}]}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestGeminiToOpenAI_Basic(t *testing.T) {
 
 func TestGeminiToOpenAI_SystemInstruction(t *testing.T) {
 	gemini := `{"systemInstruction":{"parts":[{"text":"You are helpful"}]},"contents":[{"parts":[{"text":"hi"}],"role":"user"}]}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestGeminiToOpenAI_SystemInstruction(t *testing.T) {
 
 func TestGeminiToOpenAI_GenerationConfig(t *testing.T) {
 	gemini := `{"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"generationConfig":{"temperature":0.7,"maxOutputTokens":100,"topP":0.9,"stopSequences":["stop"]}}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestGeminiToOpenAI_GenerationConfig(t *testing.T) {
 
 func TestGeminiToOpenAI_Image(t *testing.T) {
 	gemini := `{"contents":[{"parts":[{"text":"what is this?"},{"inlineData":{"mimeType":"image/jpeg","data":"/9j/4AAQ"}}],"role":"user"}]}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestGeminiToOpenAI_Image(t *testing.T) {
 
 func TestGeminiToOpenAI_ModelField(t *testing.T) {
 	gemini := `{"model":"gemini-pro","contents":[{"parts":[{"text":"hi"}],"role":"user"}]}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestGeminiToOpenAI_ModelField(t *testing.T) {
 }
 
 func TestGeminiToOpenAI_EmptyBody(t *testing.T) {
-	_, err := geminiToOpenAI([]byte{})
+	_, err := ToOpenAI([]byte{})
 	if err == nil {
 		t.Error("expected error for empty body")
 	}
@@ -112,7 +112,7 @@ func TestGeminiToOpenAI_EmptyBody(t *testing.T) {
 
 func TestGeminiToOpenAI_RoleModel(t *testing.T) {
 	gemini := `{"contents":[{"parts":[{"text":"hi"}],"role":"user"},{"parts":[{"text":"hello"}],"role":"model"}]}`
-	result, err := geminiToOpenAI([]byte(gemini))
+	result, err := ToOpenAI([]byte(gemini))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -3,9 +3,10 @@ package gemini
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
-// geminiToOpenAI translates a Gemini-format request body to OpenAI format.
+// ToOpenAI translates a Gemini-format request body to OpenAI format.
 // Gemini reference: https://ai.google.dev/api/generate-content
 //
 // Example Gemini body:
@@ -15,10 +16,10 @@ import (
 //	  "systemInstruction": {"parts":[{"text":"You are helpful"}]},
 //	  "generationConfig": {"temperature":0.7, "maxOutputTokens":100}
 //	}
-func geminiToOpenAI(body []byte) ([]byte, error) {
+func ToOpenAI(body []byte) ([]byte, error) {
 	var gemini map[string]any
 	if err := json.Unmarshal(body, &gemini); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
+		return nil, fmt.Errorf("translate: invalid request body: %w", err)
 	}
 
 	openai := make(map[string]any)
@@ -199,5 +200,5 @@ func joinGeminiParts(parts []any) string {
 			texts = append(texts, txt)
 		}
 	}
-	return joinStrings(texts, "\n")
+	return strings.Join(texts, "\n")
 }

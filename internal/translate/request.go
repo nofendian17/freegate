@@ -1,5 +1,10 @@
 package translate
 
+import (
+	"freegate/internal/translate/claude"
+	"freegate/internal/translate/gemini"
+)
+
 // Request translates a request body from source format to target format.
 // If source == target, returns the body unchanged.
 func Request(body []byte, source, target Format) ([]byte, error) {
@@ -10,9 +15,9 @@ func Request(body []byte, source, target Format) ([]byte, error) {
 	// All translation goes through OpenAI intermediate format
 	switch source {
 	case FormatClaude:
-		return claudeToOpenAI(body)
+		return claude.ToOpenAI(body)
 	case FormatGemini:
-		return geminiToOpenAI(body)
+		return gemini.ToOpenAI(body)
 	default:
 		return body, nil
 	}

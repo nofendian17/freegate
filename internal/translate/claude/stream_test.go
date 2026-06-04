@@ -1,4 +1,4 @@
-package translate
+package claude
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestProcessOpenAIChunkBasic(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkBasic(t *testing.T) {
+	state := NewStreamState()
 
 	// Chunk 1: first delta with content
 	chunk := map[string]any{
@@ -21,7 +21,7 @@ func TestProcessOpenAIChunkBasic(t *testing.T) {
 			},
 		},
 	}
-	events := processOpenAIChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 	if !state.messageStartSent {
 		t.Error("expected message_start to be sent")
 	}
@@ -45,8 +45,8 @@ func TestProcessOpenAIChunkBasic(t *testing.T) {
 	}
 }
 
-func TestProcessOpenAIChunkReasoning(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkReasoning(t *testing.T) {
+	state := NewStreamState()
 
 	// Reasoning content
 	chunk := map[string]any{
@@ -59,7 +59,7 @@ func TestProcessOpenAIChunkReasoning(t *testing.T) {
 			},
 		},
 	}
-	events := processOpenAIChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 
 	hasThinking := false
 	for _, e := range events {
@@ -72,8 +72,8 @@ func TestProcessOpenAIChunkReasoning(t *testing.T) {
 	}
 }
 
-func TestProcessOpenAIChunkFinishStop(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkFinishStop(t *testing.T) {
+	state := NewStreamState()
 
 	// First a content chunk to set up state
 	chunk1 := map[string]any{
@@ -86,7 +86,7 @@ func TestProcessOpenAIChunkFinishStop(t *testing.T) {
 			},
 		},
 	}
-	processOpenAIChunk(chunk1, state)
+	ProcessChunk(chunk1, state)
 
 	// Finish chunk
 	chunk2 := map[string]any{
@@ -102,7 +102,7 @@ func TestProcessOpenAIChunkFinishStop(t *testing.T) {
 			"completion_tokens": 5.0,
 		},
 	}
-	events := processOpenAIChunk(chunk2, state)
+	events := ProcessChunk(chunk2, state)
 
 	hasMessageDelta := false
 	hasMessageStop := false
@@ -134,8 +134,8 @@ func TestProcessOpenAIChunkFinishStop(t *testing.T) {
 	}
 }
 
-func TestProcessOpenAIChunkToolCalls(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkToolCalls(t *testing.T) {
+	state := NewStreamState()
 
 	// Tool call chunk
 	chunk := map[string]any{
@@ -158,7 +158,7 @@ func TestProcessOpenAIChunkToolCalls(t *testing.T) {
 			},
 		},
 	}
-	events := processOpenAIChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 
 	hasToolUse := false
 	for _, e := range events {
@@ -173,16 +173,16 @@ func TestProcessOpenAIChunkToolCalls(t *testing.T) {
 	_ = events
 }
 
-func TestProcessOpenAIChunkFinishToolCalls(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkFinishToolCalls(t *testing.T) {
+	state := NewStreamState()
 
 	// Content
-	processOpenAIChunk(map[string]any{
+	ProcessChunk(map[string]any{
 		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{"content": "Let me check"}}},
 	}, state)
 
 	// Tool call
-	processOpenAIChunk(map[string]any{
+	ProcessChunk(map[string]any{
 		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{
 			"tool_calls": []any{map[string]any{
 				"index": 0.0, "id": "call_1", "type": "function",
@@ -191,7 +191,7 @@ func TestProcessOpenAIChunkFinishToolCalls(t *testing.T) {
 		}}},
 	}, state)
 
-	events := processOpenAIChunk(map[string]any{
+	events := ProcessChunk(map[string]any{
 		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{}, "finish_reason": "tool_calls"}},
 	}, state)
 
@@ -220,8 +220,8 @@ func TestProcessOpenAIChunkFinishToolCalls(t *testing.T) {
 	}
 }
 
-func TestProcessOpenAIChunkStreamEndToEnd(t *testing.T) {
-	state := newClaudeStream()
+func TestProcessChunkStreamEndToEnd(t *testing.T) {
+	state := NewStreamState()
 
 	// Simulate full stream: message_start → content → finish
 	inputs := []string{
@@ -234,7 +234,7 @@ func TestProcessOpenAIChunkStreamEndToEnd(t *testing.T) {
 	for _, input := range inputs {
 		var chunk map[string]any
 		json.Unmarshal([]byte(input), &chunk)
-		events := processOpenAIChunk(chunk, state)
+		events := ProcessChunk(chunk, state)
 		allEvents = append(allEvents, events...)
 	}
 
@@ -278,114 +278,36 @@ func TestMapFinishReason(t *testing.T) {
 	}
 }
 
-func TestOpenAIJSONToClaude(t *testing.T) {
-	body := `{
-		"id":"chatcmpl-123",
-		"model":"gpt-4",
-		"choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"},"finish_reason":"stop"}],
-		"usage":{"prompt_tokens":10,"completion_tokens":3}
-	}`
-
-	result, err := openaiJSONToClaude([]byte(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSSEBuffer(t *testing.T) {
+	sb := &sseBuffer{}
+	lines := sb.Feed([]byte("data: hello\n\n"))
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
-
-	var claude map[string]any
-	json.Unmarshal(result, &claude)
-
-	if claude["type"] != "message" {
-		t.Errorf("expected type=message, got %v", claude["type"])
-	}
-	if claude["role"] != "assistant" {
-		t.Errorf("expected role=assistant, got %v", claude["role"])
-	}
-
-	content, ok := claude["content"].([]any)
-	if !ok || len(content) == 0 {
-		t.Fatalf("expected content array, got %v", claude["content"])
-	}
-	block := content[0].(map[string]any)
-	if block["type"] != "text" {
-		t.Errorf("expected block type=text, got %v", block["type"])
-	}
-	if block["text"] != "Hello world" {
-		t.Errorf("expected text=Hello world, got %v", block["text"])
-	}
-
-	usage, ok := claude["usage"].(map[string]any)
-	if !ok {
-		t.Fatal("expected usage")
-	}
-	if usage["input_tokens"] != float64(10) {
-		t.Errorf("expected input_tokens=10, got %v", usage["input_tokens"])
-	}
-	if usage["output_tokens"] != float64(3) {
-		t.Errorf("expected output_tokens=3, got %v", usage["output_tokens"])
-	}
-
-	stopReason, _ := claude["stop_reason"].(string)
-	if stopReason != "end_turn" {
-		t.Errorf("expected stop_reason=end_turn, got %v", stopReason)
+	if lines[0] != "data: hello" {
+		t.Errorf("unexpected content: %s", lines[0])
 	}
 }
 
-func TestOpenAIJSONToClaudeWithTools(t *testing.T) {
-	body := `{
-		"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"NYC\"}"}}]},"finish_reason":"tool_calls"}],
-		"usage":{"prompt_tokens":5,"completion_tokens":10}
-	}`
-
-	result, err := openaiJSONToClaude([]byte(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSSEBufferPartial(t *testing.T) {
+	sb := &sseBuffer{}
+	// Feed incomplete message
+	lines := sb.Feed([]byte("data: "))
+	if len(lines) != 0 {
+		t.Errorf("expected 0 lines for partial, got %d", len(lines))
 	}
-
-	var claude map[string]any
-	json.Unmarshal(result, &claude)
-
-	content := claude["content"].([]any)
-	block := content[0].(map[string]any)
-	if block["type"] != "tool_use" {
-		t.Errorf("expected tool_use block, got %v", block["type"])
-	}
-	if block["name"] != "get_weather" {
-		t.Errorf("expected name=get_weather, got %v", block["name"])
-	}
-
-	stopReason := claude["stop_reason"].(string)
-	if stopReason != "tool_use" {
-		t.Errorf("expected stop_reason=tool_use, got %v", stopReason)
+	// Complete it
+	lines = sb.Feed([]byte("hello\n\n"))
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 }
 
-func TestExtractUsage(t *testing.T) {
-	u := extractUsage(map[string]any{
-		"prompt_tokens":     20.0,
-		"completion_tokens": 10.0,
-	})
-	if u.InputTokens != 20 || u.OutputTokens != 10 {
-		t.Errorf("expected input=20 output=10, got %+v", u)
-	}
-}
-
-func TestExtractUsageWithCache(t *testing.T) {
-	u := extractUsage(map[string]any{
-		"prompt_tokens":     25.0,
-		"completion_tokens": 10.0,
-		"prompt_tokens_details": map[string]any{
-			"cached_tokens":         5.0,
-			"cache_creation_tokens": 3.0,
-		},
-	})
-	if u.InputTokens != 20 {
-		t.Errorf("expected input_tokens=20 (25-5 cached), got %d", u.InputTokens)
-	}
-	if u.CacheReadTokens != 5 {
-		t.Errorf("expected cache_read=5, got %d", u.CacheReadTokens)
-	}
-	if u.CacheCreateTokens != 3 {
-		t.Errorf("expected cache_create=3, got %d", u.CacheCreateTokens)
+func TestSSEBufferMultiple(t *testing.T) {
+	sb := &sseBuffer{}
+	lines := sb.Feed([]byte("data: a\n\ndata: b\n\n"))
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
 }
 
@@ -400,62 +322,60 @@ func TestRandID(t *testing.T) {
 	}
 }
 
-func TestOpenAIJSONToGemini(t *testing.T) {
-	body := `{
-		"choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"},"finish_reason":"stop"}],
-		"usage":{"prompt_tokens":10,"completion_tokens":3}
-	}`
-
-	result, err := openaiJSONToGemini([]byte(body))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var gemini map[string]any
-	json.Unmarshal(result, &gemini)
-
-	candidates, ok := gemini["candidates"].([]any)
-	if !ok || len(candidates) == 0 {
-		t.Fatalf("expected candidates array")
-	}
-	cand := candidates[0].(map[string]any)
-	if cand["finishReason"] != "STOP" {
-		t.Errorf("expected finishReason=STOP, got %v", cand["finishReason"])
-	}
-
-	content := cand["content"].(map[string]any)
-	parts := content["parts"].([]any)
-	if len(parts) != 1 {
-		t.Fatalf("expected 1 part, got %d", len(parts))
-	}
-	part := parts[0].(map[string]any)
-	if part["text"] != "Hello world" {
-		t.Errorf("expected text=Hello world, got %v", part["text"])
-	}
-
-	um, ok := gemini["usageMetadata"].(map[string]any)
-	if !ok {
-		t.Fatal("expected usageMetadata")
-	}
-	if um["promptTokenCount"] != float64(10) {
-		t.Errorf("expected promptTokenCount=10, got %v", um["promptTokenCount"])
-	}
+// Ensure no data races by running in parallel
+func TestProcessChunkConcurrent(t *testing.T) {
+	t.Parallel()
+	done := make(chan bool, 2)
+	go func() {
+		for i := 0; i < 100; i++ {
+			state := NewStreamState()
+			chunk := map[string]any{
+				"choices": []any{
+					map[string]any{
+						"index": 0.0,
+						"delta": map[string]any{"content": "test"},
+					},
+				},
+			}
+			ProcessChunk(chunk, state)
+		}
+		done <- true
+	}()
+	go func() {
+		for i := 0; i < 100; i++ {
+			state := NewStreamState()
+			ProcessChunk(map[string]any{"choices": []any{map[string]any{
+				"index": 0.0, "delta": map[string]any{
+					"tool_calls": []any{map[string]any{
+						"index": 0.0, "id": "call_1", "type": "function",
+						"function": map[string]any{"name": "test", "arguments": "{}"},
+					}},
+				},
+			}}}, state)
+		}
+		done <- true
+	}()
+	<-done
+	<-done
 }
 
-func TestMapFinishReasonGemini(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"stop", "STOP"},
-		{"length", "MAX_TOKENS"},
-		{"content_filter", "BLOCKED"},
-		{"tool_calls", "STOP"},
+// Benchmark streaming chunk translation
+func BenchmarkProcessChunk(b *testing.B) {
+	state := NewStreamState()
+	chunk := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"role":    "assistant",
+					"content": "Hello world!",
+				},
+			},
+		},
 	}
-	for _, tt := range tests {
-		got := mapFinishReasonGemini(tt.input)
-		if got != tt.want {
-			t.Errorf("mapFinishReasonGemini(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ProcessChunk(chunk, state)
 	}
 }

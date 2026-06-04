@@ -8,7 +8,7 @@ import (
 
 func TestClaudeToOpenAI_BasicText(t *testing.T) {
 	claude := `{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
-	result, err := claudeToOpenAI([]byte(claude))
+	result, err := ToOpenAI([]byte(claude))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestClaudeToOpenAI_BasicText(t *testing.T) {
 
 func TestClaudeToOpenAI_SystemString(t *testing.T) {
 	claude := `{"model":"claude","system":"You are helpful","messages":[{"role":"user","content":"hi"}]}`
-	result, err := claudeToOpenAI([]byte(claude))
+	result, err := ToOpenAI([]byte(claude))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestClaudeToOpenAI_SystemString(t *testing.T) {
 
 func TestClaudeToOpenAI_SystemArray(t *testing.T) {
 	claude := `{"model":"claude","system":[{"type":"text","text":"You are"},{"type":"text","text":"helpful"}],"messages":[{"role":"user","content":"hi"}]}`
-	result, err := claudeToOpenAI([]byte(claude))
+	result, err := ToOpenAI([]byte(claude))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestClaudeToOpenAI_WithTools(t *testing.T) {
 		"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],
 		"tool_choice":{"type":"any"}
 	}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestClaudeToOpenAI_Image(t *testing.T) {
 		"model":"claude","max_tokens":100,
 		"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQ"}}]}]
 	}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestClaudeToOpenAI_ToolUseAndResult(t *testing.T) {
 			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"sunny"}]}
 		]
 	}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestClaudeToOpenAI_ToolUseAndResult(t *testing.T) {
 
 func TestClaudeToOpenAI_StopSequences(t *testing.T) {
 	body := `{"model":"claude","stop_sequences":["\n\nHuman:","\n\nAssistant:"],"max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestClaudeToOpenAI_StopSequences(t *testing.T) {
 
 func TestClaudeToOpenAI_AssistantStringContent(t *testing.T) {
 	body := `{"model":"claude","max_tokens":100,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestClaudeToOpenAI_AssistantStringContent(t *testing.T) {
 
 func TestClaudeToOpenAI_StreamTrue(t *testing.T) {
 	body := `{"model":"claude","stream":true,"max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,14 +224,14 @@ func TestClaudeToOpenAI_StreamTrue(t *testing.T) {
 }
 
 func TestClaudeToOpenAI_EmptyBody(t *testing.T) {
-	_, err := claudeToOpenAI([]byte{})
+	_, err := ToOpenAI([]byte{})
 	if err == nil {
 		t.Error("expected error for empty body")
 	}
 }
 
 func TestClaudeToOpenAI_InvalidJSON(t *testing.T) {
-	_, err := claudeToOpenAI([]byte("not json"))
+	_, err := ToOpenAI([]byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -240,7 +240,7 @@ func TestClaudeToOpenAI_InvalidJSON(t *testing.T) {
 // Helper: round-trip test for tool_choice auto
 func TestClaudeToOpenAI_ToolChoiceAuto(t *testing.T) {
 	body := `{"model":"claude","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"tool_choice":{"type":"auto"}}`
-	result, err := claudeToOpenAI([]byte(body))
+	result, err := ToOpenAI([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,5 +249,25 @@ func TestClaudeToOpenAI_ToolChoiceAuto(t *testing.T) {
 	json.Unmarshal(result, &openai)
 	if openai["tool_choice"] != "auto" {
 		t.Errorf("expected tool_choice=auto, got %v", openai["tool_choice"])
+	}
+}
+
+// Benchmark the Claude→OpenAI request translation
+func BenchmarkClaudeToOpenAI(b *testing.B) {
+	body := []byte(`{
+		"model":"claude-sonnet-4-20250514",
+		"max_tokens":1000,
+		"system":"You are a helpful assistant.",
+		"messages":[
+			{"role":"user","content":[{"type":"text","text":"Hello"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQSkZJRg=="}}]},
+			{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"NYC"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"Sunny"}]}
+		],
+		"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
+	}`)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ToOpenAI(body)
 	}
 }

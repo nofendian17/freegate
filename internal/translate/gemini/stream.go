@@ -48,7 +48,7 @@ func processGeminiChunk(chunk map[string]any, state *geminiStreamState) []string
 	// Build Gemini-format candidate
 	candidate := map[string]any{
 		"index":        0,
-		"finishReason": mapFinishReasonGemini(state.finishReason),
+		"finishReason": MapFinishReasonGemini(state.finishReason),
 		"content": map[string]any{
 			"parts": []any{
 				map[string]any{"text": state.textBuffer},
