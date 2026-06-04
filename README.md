@@ -189,17 +189,25 @@ flowchart TB
 freegate
 ├── cmd/server/main.go        # Entry point
 ├── internal/
+│   ├── application/          # Use cases: ChatService (retry, IP rotation), ModelService
 │   ├── config/               # Env-based config with validation
-│   ├── handler/              # HTTP handlers: Chat, ListModels, Ready, Metrics
-│   ├── metrics/              # Request counters + token tracking
-│   ├── middleware/           # Logging, auth, rate limit, CORS, request ID
+│   ├── delivery/             # HTTP-facing layer
+│   │   ├── handler/          # HTTP handlers: Chat, ListModels, Ready, Metrics
+│   │   ├── middleware/       # Logging, auth, rate limit, CORS, request ID
+│   │   ├── respond/          # Shared HTTP response utilities
+│   │   └── ui/               # Dashboard: HTMX handlers, templates, recorder
+│   ├── domain/               # Core domain types and interfaces
+│   ├── httputil/             # HTTP helpers: header parsing, IP extraction, conversion
+│   ├── infrastructure/       # Out-of-process integrations
+│   │   ├── metrics/          # Request counters + token tracking
+│   │   ├── proxy/            # Upstream-agnostic normalization helpers
+│   │   ├── recorder/         # Request log + timeseries sampler
+│   │   ├── ringbuffer/       # Generic typed ring buffer
+│   │   ├── tor/              # Tor controller for IP rotation + monitoring
+│   │   └── upstream/         # Upstream interface + Router + implementations
 │   ├── model/                # Shared model types + request log
-│   ├── proxy/                # Upstream-agnostic proxy + normalization
-│   ├── respond/              # Shared HTTP response utilities
-│   ├── ringbuffer/           # Generic typed ring buffer
-│   ├── tor/                  # Tor controller for IP rotation + monitoring
-│   ├── ui/                   # Dashboard: HTMX handlers, templates, recorder
-│   └── upstream/             # Upstream interface + Router + implementations
+│   ├── server/               # HTTP server bootstrap (handlers + middleware wiring)
+│   └── translate/            # Format translation: Claude, Gemini detect + request/response
 ├── web/                      # Embedded assets (templates, CSS, JS)
 │   ├── templates/            # html/template sources
 │   └── static/               # Vendored HTMX, Chart.js, app.css
