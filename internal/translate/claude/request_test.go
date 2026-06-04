@@ -1,4 +1,4 @@
-package translate
+package claude
 
 import (
 	"encoding/json"

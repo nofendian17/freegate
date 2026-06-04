@@ -1,4 +1,4 @@
-package translate
+package gemini
 
 import (
 	"encoding/json"
