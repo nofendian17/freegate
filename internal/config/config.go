@@ -17,14 +17,14 @@ type Config struct {
 	APIKey    string
 	RateLimit int
 
-	UpstreamURLOpenCode string
-	UpstreamKeyOpenCode string
+	UpstreamURLOpenCode           string
+	UpstreamKeyOpenCode           string
+	UpstreamOpenCodeFreeAllowlist []string
 
 	UpstreamURLKilo string
 	UpstreamKeyKilo string
 
-	UpstreamDefault      string
-	UpstreamKiloPrefixes []string
+	UpstreamDefault string
 
 	UpstreamRefreshOpenCode int
 	UpstreamRefreshKilo     int
@@ -43,14 +43,14 @@ func Load() *Config {
 		APIKey:    envStr("API_KEY", ""),
 		RateLimit: envInt("RATE_LIMIT", 60),
 
-		UpstreamURLOpenCode: envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
-		UpstreamKeyOpenCode: envStr("UPSTREAM_KEY_OPENCODE", "public"),
+		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
+		UpstreamKeyOpenCode:           envStr("UPSTREAM_KEY_OPENCODE", "public"),
+		UpstreamOpenCodeFreeAllowlist: envSlice("UPSTREAM_OPENCODE_FREE_ALLOWLIST", "big-pickle"),
 
 		UpstreamURLKilo: envStr("UPSTREAM_URL_KILO", "https://api.kilo.ai/api/openrouter"),
 		UpstreamKeyKilo: envStr("UPSTREAM_KEY_KILO", "anonymous"),
 
-		UpstreamDefault:      envStr("UPSTREAM_DEFAULT", "opencode"),
-		UpstreamKiloPrefixes: envSlice("UPSTREAM_KILO_PREFIXES", "kilo/,kilo-,openrouter/"),
+		UpstreamDefault: envStr("UPSTREAM_DEFAULT", "opencode"),
 
 		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
@@ -80,9 +80,6 @@ func (c *Config) Validate() error {
 	}
 	if c.RateLimit <= 0 {
 		errs = append(errs, "RATE_LIMIT must be positive")
-	}
-	if len(c.UpstreamKiloPrefixes) == 0 {
-		errs = append(errs, "UPSTREAM_KILO_PREFIXES must have at least one prefix")
 	}
 
 	if len(errs) > 0 {

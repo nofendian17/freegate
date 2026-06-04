@@ -44,14 +44,6 @@ func TestValidate_NegativePort(t *testing.T) {
 	}
 }
 
-func TestValidate_EmptyPrefixes(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.UpstreamKiloPrefixes = nil
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for empty prefixes")
-	}
-}
-
 func TestEnvInt_Default(t *testing.T) {
 	val := envInt("NONEXISTENT_KEY", 42)
 	if val != 42 {
@@ -115,13 +107,13 @@ func defaultConfig() *Config {
 		LogLevel:  "info",
 		RateLimit: 60,
 
-		UpstreamURLOpenCode: "https://opencode.ai/zen/v1",
-		UpstreamKeyOpenCode: "public",
+		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
+		UpstreamKeyOpenCode:           "public",
+		UpstreamOpenCodeFreeAllowlist: []string{"big-pickle"},
 
 		UpstreamURLKilo: "https://api.kilo.ai/api/openrouter",
 		UpstreamKeyKilo: "anonymous",
 
-		UpstreamDefault:      "opencode",
-		UpstreamKiloPrefixes: []string{"kilo/", "kilo-", "openrouter/"},
+		UpstreamDefault: "opencode",
 	}
 }

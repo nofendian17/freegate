@@ -2,23 +2,27 @@ package upstream
 
 import (
 	"testing"
+
+	"freegate/internal/model"
 )
 
-func TestKilo_Match_Prefix(t *testing.T) {
-	k := &KiloUpstream{
-		prefixes: []string{"kilo/", "kilo-", "openrouter/"},
-	}
+func TestKilo_Match_PrefixInCache(t *testing.T) {
+	k := NewKiloUpstream("", "", "")
+	k.cache.Set([]model.Model{
+		{ID: "kilo-auto/free", Provider: "kilo"},
+		{ID: "openrouter/owl-alpha", Provider: "kilo"},
+		{ID: "openrouter/free", Provider: "kilo"},
+	})
 
 	tests := []struct {
 		modelID string
 		want    bool
 	}{
 		{"kilo-auto/free", true},
-		{"kilo-default", true},
 		{"openrouter/owl-alpha", true},
 		{"openrouter/free", true},
-		{"nvidia/nemotron-3:free", true},  // :free suffix matches
-		{"nvidia/nemotron-3", false},      // no :free suffix, no prefix
+		{"kilo-default", false},
+		{"openrouter/paid", false},
 		{"unknown-model", false},
 		{"", false},
 	}
@@ -31,10 +35,15 @@ func TestKilo_Match_Prefix(t *testing.T) {
 	}
 }
 
-func TestKilo_Match_FreeSuffix(t *testing.T) {
-	k := &KiloUpstream{
-		prefixes: []string{"kilo/", "openrouter/"},
-	}
+func TestKilo_Match_FreeSuffixInCache(t *testing.T) {
+	k := NewKiloUpstream("", "", "")
+	k.cache.Set([]model.Model{
+		{ID: "nvidia/nemotron-3-super-120b-a12b:free", Provider: "kilo"},
+		{ID: "poolside/laguna-m.1:free", Provider: "kilo"},
+		{ID: "poolside/laguna-xs.2:free", Provider: "kilo"},
+		{ID: "nvidia/nemotron-3-nano-omni:free", Provider: "kilo"},
+		{ID: "qwen/qwen3.7-plus:free", Provider: "kilo"},
+	})
 
 	tests := []struct {
 		modelID string
@@ -44,6 +53,7 @@ func TestKilo_Match_FreeSuffix(t *testing.T) {
 		{"poolside/laguna-m.1:free", true},
 		{"poolside/laguna-xs.2:free", true},
 		{"nvidia/nemotron-3-nano-omni:free", true},
+		{"qwen/qwen3.7-plus:free", true},
 		{"model-without-suffix", false},
 		{"model:notfree", false},
 	}
@@ -56,18 +66,16 @@ func TestKilo_Match_FreeSuffix(t *testing.T) {
 	}
 }
 
-func TestKilo_Match_PrefixNoSuffix(t *testing.T) {
-	k := &KiloUpstream{
-		prefixes: []string{"kilo/", "openrouter/"},
-	}
+func TestKilo_Match_EmptyCache(t *testing.T) {
+	k := NewKiloUpstream("", "", "")
 
-	if !k.Match("kilo/default") {
-		t.Error("expected kilo/ prefix to match")
+	if k.Match("kilo-auto/free") {
+		t.Error("expected no match when cache is empty")
 	}
-	if !k.Match("openrouter/owl-alpha") {
-		t.Error("expected openrouter/ prefix to match")
+	if k.Match("openrouter/owl-alpha") {
+		t.Error("expected no match when cache is empty")
 	}
-	if k.Match("unknown-model") {
-		t.Error("expected no match for unknown model")
+	if k.Match("nvidia/nemotron-3-super-120b-a12b:free") {
+		t.Error("expected no match when cache is empty")
 	}
 }

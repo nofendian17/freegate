@@ -92,8 +92,8 @@ func TestProcessChunkFinishStop(t *testing.T) {
 	chunk2 := map[string]any{
 		"choices": []any{
 			map[string]any{
-				"index": 0.0,
-				"delta": map[string]any{},
+				"index":         0.0,
+				"delta":         map[string]any{},
 				"finish_reason": "stop",
 			},
 		},

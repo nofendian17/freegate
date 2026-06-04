@@ -17,12 +17,12 @@ import (
 // It intercepts Write calls and performs format-specific translation
 // for both streaming (SSE) and non-streaming (JSON) responses.
 type ResponseWriter struct {
-	inner        http.ResponseWriter
-	format       Format
-	isStream     bool
-	statusCode   int
-	buf          bytes.Buffer // for non-streaming buffering
-	state        *claude.StreamState
+	inner         http.ResponseWriter
+	format        Format
+	isStream      bool
+	statusCode    int
+	buf           bytes.Buffer // for non-streaming buffering
+	state         *claude.StreamState
 	headerWritten bool
 }
 

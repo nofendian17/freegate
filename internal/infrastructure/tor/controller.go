@@ -24,14 +24,14 @@ const (
 )
 
 type Controller struct {
-	host       string
-	port       int
-	pass       string
-	socks      string
-	mu         sync.Mutex
-	lastIP     time.Time
-	currentIP  string
-	currentMu  sync.RWMutex
+	host      string
+	port      int
+	pass      string
+	socks     string
+	mu        sync.Mutex
+	lastIP    time.Time
+	currentIP string
+	currentMu sync.RWMutex
 }
 
 func NewController(host string, port int, pass string, socksAddr string) *Controller {

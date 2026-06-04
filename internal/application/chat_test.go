@@ -43,7 +43,7 @@ func (m *mockUpstream) ChatCompletion(ctx context.Context, req domain.ChatReques
 	}
 	return m.responses[i], nil
 }
-func (m *mockUpstream) Models() []domain.Model { return nil }
+func (m *mockUpstream) Models() []domain.Model    { return nil }
 func (m *mockUpstream) Start(ctx context.Context) {}
 
 type mockIPRotator struct {

@@ -2,12 +2,12 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
 
-freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), automatically routing by model ID prefix. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses include dual reasoning fields (`reasoning` + `reasoning_content`) for compatibility with both OpenCode and OpenRouter/Kilo clients.
+freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses include dual reasoning fields (`reasoning` + `reasoning_content`) for compatibility with both OpenCode and OpenRouter/Kilo clients.
 
 ## Features
 
-- **Multi-upstream routing** — model prefix determines the upstream: `kilo/`, `kilo-`, `openrouter/` → Kilo; prefixless → OpenCode
-- **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `cost == "0"` for OpenCode); merged & deduped on `/v1/models`
+- **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
+- **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
 - **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
@@ -51,15 +51,12 @@ curl http://localhost:1234/ready
 
 ## Routing Rules
 
-| Model ID pattern | Upstream | Example |
-|-----------------|----------|---------|
-| `kilo/...`, `kilo-...` | Kilo (OpenRouter) | `kilo-auto/free` |
-| `openrouter/...` | Kilo (OpenRouter) | `openrouter/owl-alpha` |
-| `nvidia/...` | Kilo (OpenRouter) | `nvidia/nemotron-3:free` |
-| `poolside/...` | Kilo (OpenRouter) | `poolside/laguna-m.1:free` |
-| Default (no prefix match) | OpenCode.ai | `deepseek-v4-flash-free` |
+A model ID is served by Kilo if Kilo's free catalog contains it (i.e. the upstream
+returned `isFree == true` for that model). Otherwise the request is routed to
+the default upstream (OpenCode).
 
-Models with `:free` suffix are also routed to Kilo.
+The catalog is refreshed periodically from each upstream, so routing is driven
+by upstream truth, not by a hard-coded prefix list.
 
 ## Configuration
 
@@ -77,10 +74,10 @@ All settings are environment variables:
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode upstream URL |
 | `UPSTREAM_KEY_OPENCODE` | `public` | OpenCode API key |
+| `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated model IDs that are free on the OpenCode upstream but don't carry the `-free` suffix |
 | `UPSTREAM_URL_KILO` | `https://api.kilo.ai/api/openrouter` | Kilo upstream URL |
 | `UPSTREAM_KEY_KILO` | `anonymous` | Kilo API key |
 | `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models |
-| `UPSTREAM_KILO_PREFIXES` | `kilo/,kilo-,openrouter/` | Comma-separated prefix list for Kilo routing |
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
 
@@ -171,7 +168,7 @@ flowchart TB
     end
 
     subgraph Freegate["freegate (:1234)"]
-        Router["Router<br/>kilo/ → Kilo<br/>default → OpenCode"]
+        Router["Router<br/>kilo cache hit → Kilo<br/>default → OpenCode"]
         Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
         Dashboard["Dashboard /*<br/>HTMX + Chart.js<br/>TerminalUI design"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
@@ -255,7 +252,7 @@ docker compose build
 
 ## Tech Stack
 
-- **Go 1.23+** — core proxy server
+- **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration

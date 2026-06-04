@@ -5,24 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	"freegate/internal/model"
 	"freegate/internal/infrastructure/upstream/types"
+	"freegate/internal/model"
 )
 
 type KiloUpstream struct {
-	client   *HTTPClient
-	cache    *ModelCache
-	prefixes []string
+	client *HTTPClient
+	cache  *ModelCache
 }
 
-func NewKiloUpstream(baseURL, apiKey, socksAddr string, prefixes []string) *KiloUpstream {
+func NewKiloUpstream(baseURL, apiKey, socksAddr string) *KiloUpstream {
 	return &KiloUpstream{
-		client:   NewHTTPClient(baseURL, apiKey, socksAddr, nil),
-		cache:    NewModelCache(),
-		prefixes: prefixes,
+		client: NewHTTPClient(baseURL, apiKey, socksAddr, nil),
+		cache:  NewModelCache(),
 	}
 }
 
@@ -43,11 +40,11 @@ func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration)
 }
 
 func (k *KiloUpstream) Match(modelID string) bool {
-	if strings.HasSuffix(modelID, ":free") {
-		return true
+	if modelID == "" {
+		return false
 	}
-	for _, p := range k.prefixes {
-		if strings.HasPrefix(modelID, p) {
+	for _, m := range k.cache.Get() {
+		if m.ID == modelID {
 			return true
 		}
 	}
