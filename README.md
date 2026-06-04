@@ -10,6 +10,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `cost == "0"` for OpenCode); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
 - **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
+- **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
@@ -83,7 +84,22 @@ All settings are environment variables:
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
 
-## Reasoning Normalization
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (also accepts Claude and Gemini formats) |
+| `POST` | `/v1/messages` | Claude-native endpoint (auto-translated to OpenAI upstream) |
+| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
+| `GET` | `/ready` | Health check |
+| `GET` | `/` | Terminal-style monitoring dashboard (see below) |
+
+### Format Translation
+
+freegate accepts **OpenAI**, **Claude** (`/v1/messages`), and **Gemini** request formats on `/v1/chat/completions` and `/v1/messages`. Incoming requests are detected and translated to the upstream OpenAI format; responses are translated back. Both streaming and non-streaming responses are supported.
+
+### Reasoning Normalization
 
 OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `reasoning`. freegate normalizes so both fields appear in every response:
 
@@ -100,16 +116,6 @@ OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `rea
 ```
 
 This applies to both streaming (`delta`) and non-streaming (`message`) responses.
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
-| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
-| `GET` | `/ready` | Health check |
-| `GET` | `/` | **Dashboard** (read-only monitoring UI, see below) |
 
 ## Dashboard
 
@@ -144,12 +150,10 @@ The dashboard follows the **TerminalUI** design system:
 | Path | Description |
 |------|-------------|
 | `GET /` | HTML dashboard (server-rendered initial state) |
-| `GET /partials/stats` | HTMX fragment: stat metric blocks |
-| `GET /partials/requests` | HTMX fragment: recent-requests table rows |
-| `GET /partials/models?provider=...` | HTMX fragment: models table rows |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
 | `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
-| `GET /static/{css,js,favicon.ico}` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
+| `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
+| `GET /index.html` | Redirects to `/` |
 
 ### Notes
 
@@ -208,7 +212,7 @@ freegate
 │   │   ├── middleware/       # Logging, auth, rate limit, CORS, request ID
 │   │   ├── respond/          # Shared HTTP response utilities
 │   │   └── ui/               # Dashboard: HTMX handlers, templates, static assets
-│   ├── domain/               # Core domain types (ChatRequest, Upstream, etc.)
+│   ├── domain/               # Core domain types (ChatRequest, Upstream, UpstreamRouter, etc.)
 │   ├── httputil/             # HTTP helpers: header parsing, IP extraction, conversion
 │   ├── infrastructure/       # Out-of-process integrations
 │   │   ├── metrics/          # Request counters + token tracking
@@ -218,14 +222,17 @@ freegate
 │   │   ├── tor/              # Tor controller for IP rotation + monitoring
 │   │   └── upstream/         # Upstream interface + Router + implementations
 │   ├── model/                # Shared data types (request log entries, timeseries entries)
-│   └── server/               # HTTP server bootstrap (wiring + lifecycle)
+│   ├── server/               # HTTP server bootstrap (wiring + lifecycle)
 │   └── translate/            # Format translation: Claude, Gemini detect + request/response
 ├── web/                      # Embedded assets (templates, CSS, JS, fonts)
-│   ├── templates/            # html/template sources (dashboard + partials)
-│   ├── templates/partials/   # HTMX partial fragments (stats, requests, models)
-│   ├── static/css/           # TerminalUI design system
-│   ├── static/js/            # Vendored HTMX 2.x + Chart.js 4.x
-│   ├── static/fonts/         # Self-hosted JetBrains Mono (Latin, 4 weights)
+│   ├── templates/
+│   │   ├── dashboard.html    # Main page
+│   │   └── partials/         # HTMX partial fragments (stats, requests, models)
+│   ├── static/
+│   │   ├── css/app.css       # TerminalUI design system
+│   │   ├── js/               # Vendored HTMX 2.x + Chart.js 4.x
+│   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
+│   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
 ├── docker-compose.yml        # Proxy + Tor containers
 ├── Dockerfile                # Multi-stage Go build
@@ -241,9 +248,6 @@ go build -o server ./cmd/server
 
 # Test
 go test ./... -count=1
-
-# Build with embedded assets
-go build -tags=embed -o server ./cmd/server
 
 # Build Docker
 docker compose build
