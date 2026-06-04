@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"freegate/internal/httputil"
-	"freegate/internal/metrics"
+	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/model"
 	"freegate/internal/respond"
 	"freegate/internal/infrastructure/upstream"
