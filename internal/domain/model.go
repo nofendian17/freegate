@@ -3,12 +3,12 @@ package domain
 // Model describes a single chat-completion model exposed by an upstream
 // provider, in OpenAI-compatible shape.
 type Model struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	OwnedBy   string `json:"owned_by"`
-	Provider  string `json:"-"`
-	Created   int64  `json:"created,omitempty"`
-	BadgeURL  string `json:"badge_url,omitempty"`
+	ID       string `json:"id"`
+	Object   string `json:"object"`
+	Created  int64  `json:"created"`
+	OwnedBy  string `json:"owned_by"`
+	IsFree   bool   `json:"is_free,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 // ModelList is an OpenAI-compatible list of models.
@@ -24,12 +24,11 @@ type ErrorResp struct {
 
 // ErrorDetail is the structured error body returned in ErrorResp.
 type ErrorDetail struct {
-	Message string `json:"message"`
 	Type    string `json:"type"`
-	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
 }
 
-// NewError builds an ErrorResp with the given type, message, and code.
-func NewError(typ, msg, code string) ErrorResp {
-	return ErrorResp{Error: ErrorDetail{Type: typ, Message: msg, Code: code}}
+// NewError builds an ErrorResp with the given type and message.
+func NewError(tp, msg string) ErrorResp {
+	return ErrorResp{Error: ErrorDetail{Type: tp, Message: msg}}
 }
