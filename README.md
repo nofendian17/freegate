@@ -14,8 +14,8 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` header
-- **Read-only dashboard** — HTMX + Chart.js monitoring UI at `/ui/`
-- **Mobile responsive** — dashboard adapts to small screens
+- **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
+- **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
 - **Docker Compose** — single command to start both proxy and Tor
 
 ## Quick Start
@@ -26,7 +26,7 @@ docker compose up -d
 
 The proxy will be available at `http://localhost:1234`.
 
-A read-only dashboard is available at **http://localhost:1234/ui/** — see [Dashboard](#dashboard) below.
+A read-only terminal-style dashboard is served at **`http://localhost:1234/`** — see [Dashboard](#dashboard) below.
 
 ## Usage
 
@@ -109,35 +109,47 @@ This applies to both streaming (`delta`) and non-streaming (`message`) responses
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
 | `GET` | `/ready` | Health check |
-| `GET` | `/ui/` | **Dashboard** (read-only monitoring UI, see below) |
+| `GET` | `/` | **Dashboard** (read-only monitoring UI, see below) |
 
 ## Dashboard
 
-A lightweight, embedded dashboard is served at **`http://localhost:1234/ui/`**. It is built with HTMX + Chart.js, no JS framework, no SPA, no database — everything is in-memory and embedded into the single Go binary.
+A lightweight, embedded terminal-style dashboard is served at **`http://localhost:1234/`** (mounted at the root). It uses HTMX for live partial updates and Chart.js for the timeseries line chart — no JavaScript framework, no SPA, no database. Everything is in-memory and embedded into the single Go binary.
+
+### Design
+
+The dashboard follows the **TerminalUI** design system:
+- Dark canvas (`#0D0D0D`), phosphor green (`#00FF41`) brand accent
+- **JetBrains Mono** throughout — self-hosted WOFF2 in four weights (400 / 500 / 600 / 700)
+- Zero border radius on all elements
+- Borders and dashed ASCII-style dividers instead of shadows for hierarchy
+- Transparent buttons that invert (green text → green background on hover)
+- Uppercase pill badges with colored borders
+- CLI comment `//` prefix on descriptions and `$` / `#` prefixes on headings
+- All transitions are instant (`step-start`, no easing curves)
 
 ### Features
 
-- **Stat cards** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
+- **Stat blocks** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
 - **Upstream split** — opencode vs kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
 - **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
 - **Tor exit IP** — current Tor circuit IP displayed in header, refreshed every 3s
 - **API Endpoints card** — quick reference for available REST endpoints
-- **Health badge** — green dot when models are loaded, amber when empty
-- **Mobile responsive** — adapts layout for small screens
+- **Health badge** — green square dot when models are loaded, amber when empty
+- **Mobile responsive** — adapts layout for small screens (compact nav grid, 2-col metrics, tighter spacing)
 
 ### Endpoints used by the dashboard
 
 | Path | Description |
 |------|-------------|
-| `GET /ui/` | HTML dashboard (server-rendered initial state) |
-| `GET /ui/partials/stats` | HTMX fragment: 5 stat cards |
-| `GET /ui/partials/requests` | HTMX fragment: recent-requests table rows |
-| `GET /ui/partials/models?provider=...` | HTMX fragment: models table rows |
-| `GET /ui/api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
-| `GET /ui/api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
-| `GET /ui/static/{css,js}/...` | Vendored HTMX, Chart.js, dark-theme CSS |
+| `GET /` | HTML dashboard (server-rendered initial state) |
+| `GET /partials/stats` | HTMX fragment: stat metric blocks |
+| `GET /partials/requests` | HTMX fragment: recent-requests table rows |
+| `GET /partials/models?provider=...` | HTMX fragment: models table rows |
+| `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
+| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
+| `GET /static/{css,js,favicon.ico}` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
 
 ### Notes
 
@@ -157,7 +169,7 @@ flowchart TB
     subgraph Freegate["freegate (:1234)"]
         Router["Router<br/>kilo/ → Kilo<br/>default → OpenCode"]
         Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
-        Dashboard["Dashboard /ui/*<br/>HTMX + Chart.js"]
+        Dashboard["Dashboard /*<br/>HTMX + Chart.js<br/>TerminalUI design"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 
@@ -195,8 +207,8 @@ freegate
 │   │   ├── handler/          # HTTP handlers: Chat, ListModels, Ready, Metrics
 │   │   ├── middleware/       # Logging, auth, rate limit, CORS, request ID
 │   │   ├── respond/          # Shared HTTP response utilities
-│   │   └── ui/               # Dashboard: HTMX handlers, templates, recorder
-│   ├── domain/               # Core domain types and interfaces
+│   │   └── ui/               # Dashboard: HTMX handlers, templates, static assets
+│   ├── domain/               # Core domain types (ChatRequest, Upstream, etc.)
 │   ├── httputil/             # HTTP helpers: header parsing, IP extraction, conversion
 │   ├── infrastructure/       # Out-of-process integrations
 │   │   ├── metrics/          # Request counters + token tracking
@@ -205,12 +217,16 @@ freegate
 │   │   ├── ringbuffer/       # Generic typed ring buffer
 │   │   ├── tor/              # Tor controller for IP rotation + monitoring
 │   │   └── upstream/         # Upstream interface + Router + implementations
-│   ├── model/                # Shared model types + request log
-│   ├── server/               # HTTP server bootstrap (handlers + middleware wiring)
+│   ├── model/                # Shared data types (request log entries, timeseries entries)
+│   └── server/               # HTTP server bootstrap (wiring + lifecycle)
 │   └── translate/            # Format translation: Claude, Gemini detect + request/response
-├── web/                      # Embedded assets (templates, CSS, JS)
-│   ├── templates/            # html/template sources
-│   └── static/               # Vendored HTMX, Chart.js, app.css
+├── web/                      # Embedded assets (templates, CSS, JS, fonts)
+│   ├── templates/            # html/template sources (dashboard + partials)
+│   ├── templates/partials/   # HTMX partial fragments (stats, requests, models)
+│   ├── static/css/           # TerminalUI design system
+│   ├── static/js/            # Vendored HTMX 2.x + Chart.js 4.x
+│   ├── static/fonts/         # Self-hosted JetBrains Mono (Latin, 4 weights)
+│   └── embed.go              # go:embed directives
 ├── docker-compose.yml        # Proxy + Tor containers
 ├── Dockerfile                # Multi-stage Go build
 ├── Dockerfile.tor            # Tor daemon with health check
@@ -226,6 +242,9 @@ go build -o server ./cmd/server
 # Test
 go test ./... -count=1
 
+# Build with embedded assets
+go build -tags=embed -o server ./cmd/server
+
 # Build Docker
 docker compose build
 ```
@@ -237,6 +256,8 @@ docker compose build
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration
 - **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)
+- **JetBrains Mono** — terminal-inspired monospace typeface (self-hosted WOFF2)
+- **TerminalUI** — green-on-black design system (zero radius, no shadows, instant transitions)
 
 ## Disclaimer
 
