@@ -6,7 +6,7 @@ import (
 
 	"freegate/internal/httputil"
 	"freegate/internal/model"
-	"freegate/internal/ringbuffer"
+	"freegate/internal/infrastructure/ringbuffer"
 )
 
 const (
