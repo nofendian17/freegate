@@ -3,6 +3,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,7 +67,13 @@ func (c *HTTPClient) Post(ctx context.Context, path string, body []byte) (*http.
 		return nil, fmt.Errorf("build POST request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	var probe struct {
+		Stream *bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	if probe.Stream != nil && *probe.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	c.applyAuth(req)
 	return c.client.Do(req)
 }
