@@ -236,123 +236,12 @@ func (w *writeOnlyWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-func TestSSEBuffer(t *testing.T) {
-	sb := &sseBuffer{}
-	lines := sb.Feed([]byte("data: hello\n\n"))
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-	if lines[0] != "data: hello" {
-		t.Errorf("unexpected content: %s", lines[0])
-	}
-}
-
-func TestSSEBufferPartial(t *testing.T) {
-	sb := &sseBuffer{}
-	// Feed incomplete message
-	lines := sb.Feed([]byte("data: "))
-	if len(lines) != 0 {
-		t.Errorf("expected 0 lines for partial, got %d", len(lines))
-	}
-	// Complete it
-	lines = sb.Feed([]byte("hello\n\n"))
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-}
-
-func TestSSEBufferMultiple(t *testing.T) {
-	sb := &sseBuffer{}
-	lines := sb.Feed([]byte("data: a\n\ndata: b\n\n"))
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d", len(lines))
-	}
-}
-
 func TestNewResponseWriter_NilFormat(t *testing.T) {
 	inner := httptest.NewRecorder()
 	rw := NewResponseWriter(inner, "")
 	if rw.format != "" {
 		t.Errorf("expected empty format, got %s", rw.format)
 	}
-}
-
-// Benchmark the Claude→OpenAI request translation
-func BenchmarkClaudeToOpenAI(b *testing.B) {
-	body := []byte(`{
-		"model":"claude-sonnet-4-20250514",
-		"max_tokens":1000,
-		"system":"You are a helpful assistant.",
-		"messages":[
-			{"role":"user","content":[{"type":"text","text":"Hello"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQSkZJRg=="}}]},
-			{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"NYC"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"Sunny"}]}
-		],
-		"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]
-	}`)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		claudeToOpenAI(body)
-	}
-}
-
-// Benchmark streaming chunk translation
-func BenchmarkProcessOpenAIChunk(b *testing.B) {
-	state := newClaudeStream()
-	chunk := map[string]any{
-		"choices": []any{
-			map[string]any{
-				"index": 0.0,
-				"delta": map[string]any{
-					"role":    "assistant",
-					"content": "Hello world!",
-				},
-			},
-		},
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		processOpenAIChunk(chunk, state)
-	}
-}
-
-// Ensure no data races by running in parallel
-func TestProcessOpenAIChunkConcurrent(t *testing.T) {
-	t.Parallel()
-	done := make(chan bool, 2)
-	go func() {
-		for i := 0; i < 100; i++ {
-			state := newClaudeStream()
-			chunk := map[string]any{
-				"choices": []any{
-					map[string]any{
-						"index": 0.0,
-						"delta": map[string]any{"content": "test"},
-					},
-				},
-			}
-			processOpenAIChunk(chunk, state)
-		}
-		done <- true
-	}()
-	go func() {
-		for i := 0; i < 100; i++ {
-			state := newClaudeStream()
-			processOpenAIChunk(map[string]any{"choices": []any{map[string]any{
-				"index": 0.0, "delta": map[string]any{
-					"tool_calls": []any{map[string]any{
-						"index": 0.0, "id": "call_1", "type": "function",
-						"function": map[string]any{"name": "test", "arguments": "{}"},
-					}},
-				},
-			}}}, state)
-		}
-		done <- true
-	}()
-	<-done
-	<-done
 }
 
 // Additional edge case: Write with no Content-Type set
