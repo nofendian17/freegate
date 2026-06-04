@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/model"
-	"freegate/internal/respond"
+	"freegate/internal/delivery/respond"
 	"freegate/internal/translate"
 )
 

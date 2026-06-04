@@ -9,7 +9,7 @@ import (
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/model"
-	"freegate/internal/respond"
+	"freegate/internal/delivery/respond"
 	proxyinfra "freegate/internal/infrastructure/proxy"
 	"freegate/internal/infrastructure/upstream"
 )
