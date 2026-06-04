@@ -10,6 +10,7 @@ import (
 	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
+	proxyinfra "freegate/internal/infrastructure/proxy"
 )
 
 const (
@@ -202,7 +203,16 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalStatus = resp.StatusCode
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	httputil.CopyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
+	usage, err := proxyinfra.NormalizeResponse(w, resp)
+	if err != nil {
+		slog.Warn("normalize response failed", "request_id", requestID, "upstream", u.Name(), "error", err)
+	} else {
+		finalTotalTokens = usage.Total
+		finalPromptTokens = usage.Prompt
+		finalComplTokens = usage.Completion
+		if s.metrics != nil && usage.Total > 0 {
+			s.metrics.TotalTokens.Add(int64(usage.Total))
+		}
+	}
 	return nil
 }
