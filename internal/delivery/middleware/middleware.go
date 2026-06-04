@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"freegate/internal/delivery/respond"
 	"freegate/internal/httputil"
 )
 
@@ -67,7 +68,7 @@ func Recoverer(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("panic recovered", "error", rec)
-				http.Error(w, `{"error":{"type":"internal","message":"internal server error"}}`, http.StatusInternalServerError)
+				respond.JSONError(w, http.StatusInternalServerError, "internal", "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -110,9 +111,7 @@ func Auth(requiredKey string) func(http.Handler) http.Handler {
 				}
 			}
 			if subtle.ConstantTimeCompare([]byte(key), []byte(requiredKey)) != 1 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"error":{"type":"unauthorized","message":"invalid or missing API key"}}`))
+				respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
 				return
 			}
 			next.ServeHTTP(w, r)

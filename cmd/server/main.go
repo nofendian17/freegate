@@ -14,7 +14,7 @@ import (
 
 	"freegate/internal/config"
 	"freegate/internal/handler"
-	"freegate/internal/middleware"
+	"freegate/internal/delivery/middleware"
 	"freegate/internal/proxy"
 	"freegate/internal/infrastructure/tor"
 	"freegate/internal/infrastructure/recorder"
