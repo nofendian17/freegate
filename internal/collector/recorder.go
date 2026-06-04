@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"freegate/internal/httputil"
 	"freegate/internal/model"
 	"freegate/internal/ringbuffer"
 )
@@ -127,24 +128,13 @@ func (r *Recorder) sampleLoop(ctx context.Context) {
 
 			entry := model.TimeseriesEntry{
 				Ts:            t,
-				TotalRequests: asInt64(snap["total_requests"]),
-				Errors:        asInt64(snap["upstream_errors"]),
-				Retries:       asInt64(snap["retry_count"]),
-				RateLimitHits: asInt64(snap["rate_limit_hits"]),
+				TotalRequests: httputil.Int64(snap["total_requests"]),
+				Errors:        httputil.Int64(snap["upstream_errors"]),
+				Retries:       httputil.Int64(snap["retry_count"]),
+				RateLimitHits: httputil.Int64(snap["rate_limit_hits"]),
 				PerUpstream:   perUp,
 			}
 			r.timeseries.Push(entry)
 		}
-	}
-}
-
-func asInt64(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	default:
-		return 0
 	}
 }

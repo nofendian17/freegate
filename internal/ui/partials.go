@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"freegate/internal/httputil"
 )
 
 type statCard struct {
@@ -21,11 +23,11 @@ type statCardsView struct {
 }
 
 func buildStatsData(m map[string]any) statCardsView {
-	total := asInt64(m["total_requests"])
-	retries := asInt64(m["retry_count"])
-	errors := asInt64(m["upstream_errors"])
-	rlHits := asInt64(m["rate_limit_hits"])
-	tokens := asInt64(m["total_tokens"])
+	total := httputil.Int64(m["total_requests"])
+	retries := httputil.Int64(m["retry_count"])
+	errors := httputil.Int64(m["upstream_errors"])
+	rlHits := httputil.Int64(m["rate_limit_hits"])
+	tokens := httputil.Int64(m["total_tokens"])
 
 	perUp := map[string]int64{}
 	if raw, ok := m["per_upstream"].(map[string]int64); ok {
@@ -164,17 +166,6 @@ func toneForStatus(code int) string {
 		return "red"
 	default:
 		return "gray"
-	}
-}
-
-func asInt64(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	default:
-		return 0
 	}
 }
 
