@@ -5,13 +5,13 @@
   <td class="dim">{{.Time}}</td>
   <td>{{.Model}}</td>
   <td>
-    {{if eq .Upstream "opencode"}}<span class="pill bg-blue tone-blue">opencode</span>
-    {{else if eq .Upstream "kilo"}}<span class="pill bg-purple tone-purple">kilo</span>
-    {{else}}<span class="pill bg-gray tone-gray">{{.Upstream}}</span>
+    {{if eq .Upstream "opencode"}}<span class="pill tone-blue">opencode</span>
+    {{else if eq .Upstream "kilo"}}<span class="pill tone-purple">kilo</span>
+    {{else}}<span class="pill tone-gray">{{.Upstream}}</span>
     {{end}}
   </td>
   <td>
-    <span class="pill bg-{{.StatusTone}} tone-{{.StatusTone}}">{{.Status}}</span>
+    <span class="pill tone-{{.StatusTone}}">{{.Status}}</span>
   </td>
   <td class="dim">{{.Duration}}</td>
   <td class="dim">{{.Tokens}}</td>

@@ -1,207 +1,121 @@
----
-version: alpha
-name: Cloudflare Investor Relations
-description: A clean, high-contrast corporate system with a vivid orange accent and spacious editorial hierarchy.
-colors:
-  primary: "#f48120"
-  secondary: "#000000"
-  tertiary: "#ffffff"
-  neutral: "#f5f5f5"
-  surface: "#ffffff"
-  on-surface: "#000000"
-  on-primary: "#ffffff"
-  border: "#e6e6e6"
-  muted: "#666666"
-  accent: "#f48120"
-typography:
-  headline-display:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 45px
-    fontWeight: 600
-    lineHeight: 54px
-    letterSpacing: 0px
-  headline-lg:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 38px
-    fontWeight: 600
-    lineHeight: 46px
-    letterSpacing: -1px
-  headline-md:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 33px
-    fontWeight: 600
-    lineHeight: 40px
-    letterSpacing: 0px
-  headline-sm:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 28px
-    fontWeight: 600
-    lineHeight: 40px
-    letterSpacing: 0px
-  body-lg:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 24px
-    fontWeight: 400
-    lineHeight: 36px
-    letterSpacing: 0px
-  body-md:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 18px
-    fontWeight: 400
-    lineHeight: 28px
-    letterSpacing: 0px
-  body-sm:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 16px
-    fontWeight: 400
-    lineHeight: 24px
-    letterSpacing: 0px
-  label-lg:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 14px
-    fontWeight: 400
-    lineHeight: 20px
-    letterSpacing: 0px
-  label-md:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif"
-    fontSize: 14px
-    fontWeight: 300
-    lineHeight: 20px
-    letterSpacing: 0px
-  label-sm:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Helvetica Neue, sans-serif"
-    fontSize: 12px
-    fontWeight: 400
-    lineHeight: 16px
-    letterSpacing: 0px
-rounded:
-  none: 0px
-  sm: 4px
-  md: 5px
-  lg: 8px
-  xl: 12px
-  full: 9999px
-spacing:
-  xs: 10px
-  sm: 20px
-  md: 30px
-  lg: 50px
-  xl: 72px
-  gutter: 24px
-  section: 96px
-components:
-  button-primary:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    typography: "{typography.label-lg}"
-    rounded: "{rounded.md}"
-    padding: 13px 20px
-    height: 44px
-  button-secondary:
-    backgroundColor: "transparent"
-    textColor: "{colors.primary}"
-    typography: "{typography.label-lg}"
-    rounded: "{rounded.sm}"
-    padding: 13px 20px
-    height: 44px
-  button-tertiary:
-    backgroundColor: "transparent"
-    textColor: "{colors.primary}"
-    typography: "{typography.label-md}"
-    rounded: "{rounded.none}"
-    padding: 0px
-  card:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.on-surface}"
-    rounded: "{rounded.lg}"
-    padding: 8px 8px 8px 16px
-  input:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.on-surface}"
-    rounded: "{rounded.sm}"
-    padding: 13px 20px
-  chip:
-    backgroundColor: "{colors.neutral}"
-    textColor: "{colors.on-surface}"
-    rounded: "{rounded.full}"
-    padding: 6px 12px
----
-
-# Cloudflare Investor Relations
+# TerminalUI Design System
 
 ## Overview
-This interface feels crisp, corporate, and highly legible, with a strong investor-relations tone rather than a consumer-product feel. The composition is spacious and editorial, using a very light background, centered content, and a vivid orange brand accent to signal confidence and energy. It is professional and minimal, with enough visual warmth from the accent color to keep the experience approachable.
+
+TerminalUI is a dark, monospaced, hacker-green-on-black design system built for CLI-inspired web apps and terminal emulators. It channels the aesthetics of classic terminal interfaces with phosphor green text, sharp corners, and zero ornamentation. Every element is rendered in monospace type for authentic command-line fidelity. The system is unapologetically minimal, using colored borders and text instead of shadows or gradients for all visual hierarchy.
+
+---
 
 ## Colors
-- **Primary (#f48120):** A bright Cloudflare orange used for the brand mark, active navigation, key metrics, and the sweeping hero graphic. It should be reserved for emphasis and calls to action.
-- **Secondary (#000000):** Deep black used for the main headline treatment, body copy, and high-contrast text hierarchy.
-- **Tertiary (#ffffff):** Pure white used as the main page canvas and to preserve clarity inside the large orange hero shape.
-- **Neutral (#f5f5f5):** A soft off-white supporting tone for subtle surfaces, quiet sectioning, or low-emphasis containers.
-- **Surface (#ffffff):** The default panel and page surface color, keeping the layout clean and editorial.
-- **On-surface (#000000):** The primary text color on white surfaces; it provides the strong, institutional readability seen in the screenshot.
-- **On-primary (#ffffff):** Text and icon color on orange backgrounds when contrast must remain maximized.
-- **Border (#e6e6e6):** A restrained divider tone for subtle rules, column separators, and lightweight UI boundaries.
-- **Muted (#666666):** A secondary text tone for less prominent labels or supporting copy, used sparingly to maintain the otherwise stark contrast.
-- **Accent (#f48120):** A duplicate semantic accent token for flexibility when a design needs the same brand orange in multiple contexts.
+
+- **Primary** (#00FF41): Green — commands, active elements, success
+- **Secondary** (#FF6600): Amber — warnings, highlights, prompts
+- **Tertiary** (#00BFFF): Cyan — links, info, selection accents
+- **Background** (#0D0D0D): Terminal background, page base
+- **Surface** (#141414): Panel backgrounds, card fills
+- **Success** (#00FF41): Exit code 0, passed tests
+- **Warning** (#FF6600): Deprecation notices, caution
+- **Error** (#FF0040): Exit errors, failed processes
+- **Info** (#00BFFF): Informational output, hints
 
 ## Typography
-The system is built on the native Apple/system sans stack: `-apple-system` first, followed by common platform fallbacks. This gives the site a modern, trustworthy, slightly utilitarian voice that suits finance and corporate communications.
 
-Headlines are heavy and restrained, with `headline-display` used for the main page title, `headline-lg` and `headline-md` for section titles, and `headline-sm` for smaller subsection headings like “Corporate Overview.” The hierarchy relies more on weight, size, and spacing than on decorative styling.
+All text in TerminalUI uses monospace to maintain terminal authenticity.
 
-Body text is large and comfortable, with `body-lg` reflecting the prominent centered paragraph treatment visible in the screenshot. Labels and navigation use lighter or smaller styles such as `label-lg`, `label-md`, and `label-sm`, staying concise and functional. Letter spacing is essentially neutral; the system avoids visible uppercase tracking or ornamental typographic effects.
+- **Headline Font**: JetBrains Mono
+- **Body Font**: JetBrains Mono
+- **Mono Font**: JetBrains Mono
 
-## Layout
-The layout is centered and wide, with generous whitespace around the main content blocks. Content is organized in stacked sections: top navigation, large hero area, centered overview copy, then a metrics grid.
+- **Display**: JetBrains Mono 32px bold, 1.2 line height, 0.01em tracking
+- **Headline**: JetBrains Mono 24px bold, 1.25 line height
+- **Subhead**: JetBrains Mono 18px bold, 1.3 line height
+- **Body Large**: JetBrains Mono 16px regular, 1.6 line height, 0.02em tracking
+- **Body**: JetBrains Mono 14px regular, 1.6 line height, 0.02em tracking
+- **Body Small**: JetBrains Mono 13px regular, 1.5 line height, 0.02em tracking
+- **Caption**: JetBrains Mono 12px regular, 1.4 line height, 0.03em tracking
+- **Overline**: JetBrains Mono 11px medium, 1.4 line height, 0.1em tracking
+- **Code**: JetBrains Mono 14px regular, 1.6 line height, 0.02em tracking
 
-Spacing follows a clear rhythm based on 10px, 20px, 30px, 50px, and 72px increments, which creates measured breathing room without feeling loose. Section separation should remain generous, and inner groupings should use smaller tokens to keep the page grounded. Cards, metric columns, and navigation elements should align to a simple grid with ample horizontal padding and visually balanced center alignment.
+---
 
-## Elevation & Depth
-The design is mostly flat and tonal rather than shadow-driven. Depth is created through contrast, whitespace, and the subtle separation of sections and columns instead of heavy layering.
+## Spacing
 
-Where depth is needed, it should be understated: a light shadow on cards is acceptable, but borders and spacing are preferred for structure. The strongest visual hierarchy comes from the orange hero shape against the white field and from bold black typography, not from material-like elevation.
+- **Base unit:** 4px
+- **Scale:** `4px / 8px / 12px / 16px / 24px / 32px / 48px / 64px`
+- **Component padding:** Buttons `8px 16px`, Panels 16px, Inputs `8px 12px`
+- **Section spacing:** 32px between sections, 48px for page-level breaks
+- **Terminal line height:** 20px fixed for output lines
+- **Tab width:** `8ch` (8 characters) for indentation
 
-## Shapes
-The shape language is minimal and slightly softened. Interactive elements use small radii, with `rounded.md` at 5px for primary buttons and `rounded.sm` at 4px for secondary controls and inputs.
+## Border Radius
 
-Overall, the system feels architectural and precise rather than rounded or playful. Large graphic curves in the hero area provide the only expressive shape, while UI controls stay disciplined and unobtrusive.
+- **None** (0px): All standard elements
+- **Small** (0px): Identical to None
+- **Medium** (0px): Identical to None
+- **Large** (0px): Identical to None
+- **XL** (0px): Identical to None
+- **Full** (0px): Even avatars use sharp squares
+
+## Elevation
+
+TerminalUI uses no shadows. All elevation is communicated through colored borders.
+- **Subtle**: None (use 1px #222222). Panels, containers.
+- **Medium**: None (use 1px #444444). Active inputs, hover panels.
+- **Large**: None (use 1px #00FF41). Focus states, modals.
+- **Overlay**: None (use `background: #000000 at 80%). Backdrop behind modals.
+- **Scanline**: repeating-linear-gradient(0deg, transparent, transparent 1px, #00FF41 at 3% 1px, #00FF41 at 3% 2px). Optional CRT scanline overlay.
 
 ## Components
-**Buttons**
-- Use `button-primary` for the main action. It should be orange with white text, 13px by 20px padding, and a 44px height for dependable click targets.
-- Use `button-secondary` for lower-emphasis actions. It should be transparent with orange text and border, maintaining the same footprint but slightly softer corners.
-- Use `button-tertiary` for inline or text-only actions. It should appear as plain orange text with no fill and no border.
-- Buttons should remain compact and restrained; avoid oversized pill shapes or loud shadows.
 
-**Cards**
-- Use `card` for summary modules and metric containers.
-- Cards are white, minimally bordered, and lightly shadowed, with padding biased slightly left (`8px 8px 8px 16px`) to support content-heavy layouts.
-- Keep card content simple and information-dense rather than decorative.
+### Buttons
+- **Primary**: Transparent fill, #00FF41 text, 1px #00FF41 border. Hover: #00FF41 bg, #0D0D0D text.
+- **Secondary**: Transparent fill, #00BFFF text, 1px #00BFFF border. Hover: #00BFFF bg, #0D0D0D text.
+- **Ghost**: Transparent fill, #8B8B8B text, 1px transparent border. Hover: 1px #444444.
+- **Destructive**: Transparent fill, #FF0040 text, 1px #FF0040 border. Hover: #FF0040 bg, #0D0D0D text.
+- **Sizes**: Small `28px h / 6px 12px pad`, Medium `36px h / 8px 16px pad`, Large `44px h / 10px 24px pad`
+- **Disabled**: 30% opacity, disabled cursor, border becomes #333333
+- **Text prefix**: Optional `>` or `$` character before label for CLI feel
 
-**Inputs**
-- Inputs should be quiet and functional, matching the button and card radius language.
-- Favor white surfaces, thin borders, and concise padding so fields blend into the broader corporate page rather than calling attention to themselves.
+### Cards
+- **Default**: #141414 fill, 1px #222222 border, no shadow. Hover: border-color: #444444.
+- **Elevated**: #1A1A1A fill, 1px #444444 border, no shadow. Hover: border-color: #00FF41.
+Padding: 16px. Border radius: 0px. Header line uses #00FF41 text with `---` ASCII divider.
 
-**Navigation**
-- Top navigation should be text-forward, horizontally aligned, and low ornament.
-- Active items use the primary orange, while inactive links stay black or dark gray.
-- Keep the search icon minimal and aligned with the same restrained spacing logic.
+### Inputs
+- **Default**: 1px #444444 border, #0D0D0D fill, #8B8B8B label color.
+- **Hover**: 1px #666666 border, #0D0D0D fill, #8B8B8B label color.
+- **Focus**: 1px #00FF41 border, #0D0D0D fill, #00FF41 label color.
+- **Error**: 1px #FF0040 border, #0D0D0D fill, #FF0040 label color.
+- **Disabled**: 1px #222222 border, #141414 fill, #555555 label color.
+** JetBrains Mono 12px/500, positioned above with 4px gap, rendered as `// label` **label, ** JetBrains Mono 11px/400 in #555555, error helper in #FF0040 **helper text, ** `>` prefix inside input, #00FF41 color **prompt symbol, ** `block` style, blinking #00FF41 **cursor.
 
-**Metrics / Stat Blocks**
-- Metric blocks should emphasize the number first, using the primary orange at a large size, followed by smaller black supporting text.
-- Column separators can use the `border` tone or a very light orange tint to suggest division without creating heaviness.
-- These blocks should feel editorial and data-centric, not card-heavy.
+### Chips
+- **Filter**: Transparent fill, #8B8B8B text, 1px #444444 border, square.
+- **Status**: Transparent fill, varies text, 1px (matches semantic) border, square.
+Active filter chips invert: #00FF41 bg, #0D0D0D text.
 
-**Links**
-- Underlined text links are acceptable for tertiary actions and should remain orange.
-- Avoid button-like treatment for simple navigational references.
+### Lists
+JetBrains Mono 14px/400, metadata in #555555 text. 32px (compact terminal rows) row height, 1px dashed #222222 or ASCII --- divider, #1A1A1A hover background, #00FF41 text with `>` prefix indicator active/selected, #555555 text, right-aligned, `4ch` wide line numbers.
+
+### Checkboxes
+16px square, 0px radius, 1px #444444 border. `[ ]` unchecked, `[x]` checked rendered as ascii, 8px label gap. Checked: #00FF41 `x` character. Disabled: #333333 border, #555555 text.
+
+### Radio Buttons
+16px circle equivalent, 1px #444444 border. `( )` unselected, `(*)` selected rendered as ascii, 8px label gap. Selected: #00FF41 `*` character. Disabled: #333333 border, #555555 text.
+
+### Tooltips
+#1A1A1A fill, #00FF41, JetBrains Mono 12px/400 text, 1px #444444 border, 0px border radius. `4px/8px` padding, None (box-style, no arrow) arrow, 320px (wider for code content) max width.
+---
 
 ## Do's and Don'ts
-- Do keep the page bright, open, and centered with generous whitespace.
-- Do use the orange accent sparingly to signal brand and important data.
-- Do favor bold black headlines and large, readable body copy.
-- Do keep borders, dividers, and shadows subtle; let typography do the work.
-- Don't introduce dark backgrounds or heavy decorative gradients outside the brand hero treatment.
-- Don't over-round controls; maintain the small, precise radius language.
-- Don't use playful colors, dense UI chrome, or loud motion that would weaken the investor-relations tone.
-- Don't make secondary elements compete with the headline or key metrics.
+
+1. **Do** use JetBrains Mono for ALL text — mixing in sans-serif fonts breaks the terminal illusion.
+2. **Do** use inverted colors (green bg, black text) for hover and active states.
+3. **Do** maintain 0px border radius on every element; sharp corners are non-negotiable.
+4. **Don't** introduce box shadows; borders are the only permitted elevation mechanism.
+5. **Don't** use background fills on buttons at rest; they should all be transparent with borders.
+6. **Don't** add images, icons, or emoji; use ASCII art and text characters exclusively.
+7. **Do** include optional scanline and CRT effects for immersive terminal experiences.
+8. **Don't** use line heights below 1.5 for body text; readability on dark backgrounds requires air.
+9. **Do** prefix interactive elements with CLI symbols like `>`, `$`, or `#` where appropriate.
+10. **Don't** animate transitions with easing curves; use instant or stepped transitions only.

@@ -1,10 +1,8 @@
 {{define "partials/stats.html"}}
 {{range .Cards}}
-<div class="card">
-  <div class="card-header">
-    <span class="card-title">{{.Label}}</span>
-  </div>
-  <div class="card-value tone-{{.Tone}}">{{.Value}}</div>
+<div class="metric-block">
+  <div class="metric-value tone-{{.Tone}}">{{.Value}}</div>
+  <div class="metric-label">{{.Label}}</div>
 </div>
 {{end}}
 {{end}}

@@ -4,11 +4,11 @@
 <tr>
   <td>{{.ID}}</td>
   <td>
-    <span class="pill bg-{{.ProviderTone}} tone-{{.ProviderTone}}">{{.Provider}}</span>
+    <span class="pill tone-{{.ProviderTone}}">{{.Provider}}</span>
   </td>
   <td>
-    {{if .IsFree}}<span class="pill bg-green tone-green">free</span>
-    {{else}}<span class="pill bg-gray tone-gray">—</span>
+    {{if .IsFree}}<span class="pill tone-green">free</span>
+    {{else}}<span class="pill tone-gray">—</span>
     {{end}}
   </td>
 </tr>
