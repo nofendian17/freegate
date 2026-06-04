@@ -12,6 +12,7 @@ import (
 	anyllm "github.com/mozilla-ai/any-llm-go"
 
 	"freegate/internal/model"
+	"freegate/internal/reasonctx"
 	"freegate/internal/respond"
 )
 
@@ -86,6 +87,38 @@ func syncRequestReasoningContent(params anyllm.CompletionParams, rawBody []byte)
 	}
 }
 
+// extractReasoningContent parses the raw request body JSON and returns a map
+// of message index → reasoning_content for each assistant message that has it.
+// This is stored in request context so the HTTP transport layer can re-inject
+// reasoning_content into outgoing bodies after any-llm-go drops it.
+func extractReasoningContent(body []byte) reasonctx.ReasoningData {
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil
+	}
+	msgs, _ := root["messages"].([]any)
+	result := make(reasonctx.ReasoningData)
+	for i, m := range msgs {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		rc, ok := msg["reasoning_content"].(string)
+		if !ok || rc == "" {
+			continue
+		}
+		result[i] = rc
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, h.upstream.Metrics())
 }
@@ -121,6 +154,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// We check both the parsed messages (via this injection) and the raw body
 	// so that reasoning_content from client requests is forwarded upstream.
 	syncRequestReasoningContent(params, body)
+
+	// Save reasoning_content from assistant messages into request context so
+	// the HTTP transport layer can re-inject them into outgoing request bodies
+	// (any-llm-go v0.9.0 drops them during convertAssistantMessage).
+	r = r.WithContext(reasonctx.ContextWithReasoning(r.Context(), extractReasoningContent(body)))
 
 	h.upstream.ProxyChat(w, r, params)
 }

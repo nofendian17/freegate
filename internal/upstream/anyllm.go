@@ -1,9 +1,12 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"golang.org/x/net/proxy"
 
 	"freegate/internal/model"
+	"freegate/internal/reasonctx"
 )
 
 const providerRequestTimeout = 0
@@ -142,6 +146,10 @@ func newTorClient(socksAddr string, headers map[string]string) *http.Client {
 	if len(headers) > 0 {
 		hc.Transport = &headerTransport{base: hc.Transport, headers: headers}
 	}
+	// reasoningTransport wraps the final transport to inject reasoning_content
+	// into outgoing request bodies — any-llm-go v0.9.0 drops Message.Reasoning
+	// during convertAssistantMessage and DeepSeek requires it.
+	hc.Transport = &reasoningTransport{base: hc.Transport}
 	return hc
 }
 
@@ -159,4 +167,81 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return http.DefaultTransport.RoundTrip(req)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// reasoningTransport intercepts outgoing POST requests to /chat/completions
+// and re-injects reasoning_content into assistant messages. This is necessary
+// because any-llm-go v0.9.0 drops Message.Reasoning during convertAssistantMessage,
+// but DeepSeek (via OpenCode) requires reasoning_content to be passed back.
+type reasoningTransport struct {
+	base http.RoundTripper
+}
+
+func (t *reasoningTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	baseRT := t.base
+	if baseRT == nil {
+		baseRT = http.DefaultTransport
+	}
+
+	// Only intercept POST to chat completions endpoints.
+	if req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/chat/completions") {
+		return baseRT.RoundTrip(req)
+	}
+
+	rd := reasonctx.ReasoningFromContext(req.Context())
+	if len(rd) == 0 {
+		return baseRT.RoundTrip(req)
+	}
+
+	// Read and parse the outgoing JSON body.
+	body, err := io.ReadAll(req.Body)
+	req.Body.Close()
+	if err != nil || len(body) == 0 {
+		return baseRT.RoundTrip(req)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		return baseRT.RoundTrip(req)
+	}
+
+	msgs, _ := root["messages"].([]any)
+	if msgs == nil {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		return baseRT.RoundTrip(req)
+	}
+
+	modified := false
+	for idx, rc := range rd {
+		if idx < 0 || idx >= len(msgs) {
+			continue
+		}
+		msg, ok := msgs[idx].(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		if _, exists := msg["reasoning_content"]; !exists {
+			msg["reasoning_content"] = rc
+			modified = true
+		}
+	}
+
+	if !modified {
+		return baseRT.RoundTrip(req)
+	}
+
+	newBody, err := json.Marshal(root)
+	if err != nil {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		return baseRT.RoundTrip(req)
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(newBody))
+	req.ContentLength = int64(len(newBody))
+	return baseRT.RoundTrip(req)
 }
