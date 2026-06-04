@@ -17,8 +17,9 @@ type Config struct {
 	APIKey    string
 	RateLimit int
 
-	UpstreamURLOpenCode string
-	UpstreamKeyOpenCode string
+	UpstreamURLOpenCode           string
+	UpstreamKeyOpenCode           string
+	UpstreamOpenCodeFreeAllowlist []string
 
 	UpstreamURLKilo string
 	UpstreamKeyKilo string
@@ -42,8 +43,9 @@ func Load() *Config {
 		APIKey:    envStr("API_KEY", ""),
 		RateLimit: envInt("RATE_LIMIT", 60),
 
-		UpstreamURLOpenCode: envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
-		UpstreamKeyOpenCode: envStr("UPSTREAM_KEY_OPENCODE", "public"),
+		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
+		UpstreamKeyOpenCode:           envStr("UPSTREAM_KEY_OPENCODE", "public"),
+		UpstreamOpenCodeFreeAllowlist: envSlice("UPSTREAM_OPENCODE_FREE_ALLOWLIST", "big-pickle"),
 
 		UpstreamURLKilo: envStr("UPSTREAM_URL_KILO", "https://api.kilo.ai/api/openrouter"),
 		UpstreamKeyKilo: envStr("UPSTREAM_KEY_KILO", "anonymous"),
@@ -100,4 +102,19 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func envSlice(key, def string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		v = def
+	}
+	var result []string
+	for _, s := range strings.Split(v, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			result = append(result, s)
+		}
+	}
+	return result
 }

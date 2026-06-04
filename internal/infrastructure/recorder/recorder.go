@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"freegate/internal/httputil"
-	"freegate/internal/model"
 	"freegate/internal/infrastructure/ringbuffer"
+	"freegate/internal/model"
 )
 
 const (

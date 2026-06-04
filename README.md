@@ -7,7 +7,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 ## Features
 
 - **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
-- **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `cost == "0"` for OpenCode); merged & deduped on `/v1/models`
+- **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
 - **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
@@ -74,6 +74,7 @@ All settings are environment variables:
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode upstream URL |
 | `UPSTREAM_KEY_OPENCODE` | `public` | OpenCode API key |
+| `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated model IDs that are free on the OpenCode upstream but don't carry the `-free` suffix |
 | `UPSTREAM_URL_KILO` | `https://api.kilo.ai/api/openrouter` | Kilo upstream URL |
 | `UPSTREAM_KEY_KILO` | `anonymous` | Kilo API key |
 | `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models |
@@ -251,7 +252,7 @@ docker compose build
 
 ## Tech Stack
 
-- **Go 1.23+** — core proxy server
+- **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
 - **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
 - **Docker Compose** — orchestration

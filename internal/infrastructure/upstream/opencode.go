@@ -8,20 +8,29 @@ import (
 	"strings"
 	"time"
 
-	"freegate/internal/model"
 	"freegate/internal/infrastructure/upstream/types"
+	"freegate/internal/model"
 )
 
 type OpenCodeUpstream struct {
-	client *HTTPClient
-	cache  *ModelCache
+	client    *HTTPClient
+	cache     *ModelCache
+	allowlist map[string]bool
 }
 
-func NewOpenCodeUpstream(baseURL, apiKey, socksAddr string) *OpenCodeUpstream {
+func NewOpenCodeUpstream(baseURL, apiKey, socksAddr string, freeAllowlist []string) *OpenCodeUpstream {
 	headers := map[string]string{"x-opencode-client": "desktop"}
+	al := make(map[string]bool, len(freeAllowlist))
+	for _, id := range freeAllowlist {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			al[id] = true
+		}
+	}
 	return &OpenCodeUpstream{
-		client: NewHTTPClient(baseURL, apiKey, socksAddr, headers),
-		cache:  NewModelCache(),
+		client:    NewHTTPClient(baseURL, apiKey, socksAddr, headers),
+		cache:     NewModelCache(),
+		allowlist: al,
 	}
 }
 
@@ -56,6 +65,13 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 		return nil, fmt.Errorf("opencode: parse models: %w", err)
 	}
 
+	// The upstream /v1/models endpoint is OpenAI-compatible and does not
+	// include cost data. Free models are identified by the "-free" suffix,
+	// which is the same naming convention opencode uses in its own catalog
+	// (e.g. glm-4.7-free, kimi-k2.5-free, deepseek-v4-flash-free), with a
+	// small allowlist for known exceptions that don't follow that
+	// convention (e.g. big-pickle, which is served as deepseek-v4-flash
+	// with cost 0 by the upstream).
 	var free []model.Model
 	seen := make(map[string]bool)
 	for _, m := range list.Data {
@@ -63,7 +79,7 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 			continue
 		}
 		seen[m.ID] = true
-		if m.Cost == "0" || strings.HasSuffix(m.ID, "-free") {
+		if strings.HasSuffix(m.ID, "-free") || o.allowlist[m.ID] {
 			free = append(free, model.Model{
 				ID:       m.ID,
 				Object:   m.Object,

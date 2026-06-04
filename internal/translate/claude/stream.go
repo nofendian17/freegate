@@ -46,10 +46,10 @@ type usageInfo struct {
 // NewStreamState creates a new Claude stream state.
 func NewStreamState() *StreamState {
 	return &StreamState{
-		messageID:   "msg_" + randID(8),
+		messageID:    "msg_" + randID(8),
 		nextBlockIdx: 0,
-		toolCalls:   make(map[int]*toolCallInfo),
-		toolArgBufs: make(map[int]*bytes.Buffer),
+		toolCalls:    make(map[int]*toolCallInfo),
+		toolArgBufs:  make(map[int]*bytes.Buffer),
 	}
 }
 

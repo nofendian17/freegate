@@ -31,6 +31,7 @@ services:
       - RATE_LIMIT=${RATE_LIMIT:-60}
       - UPSTREAM_URL_OPENCODE=${UPSTREAM_URL_OPENCODE:-https://opencode.ai/zen/v1}
       - UPSTREAM_KEY_OPENCODE=${UPSTREAM_KEY_OPENCODE:-public}
+      - UPSTREAM_OPENCODE_FREE_ALLOWLIST=${UPSTREAM_OPENCODE_FREE_ALLOWLIST:-big-pickle}
       - UPSTREAM_URL_KILO=${UPSTREAM_URL_KILO:-https://api.kilo.ai/api/openrouter}
       - UPSTREAM_KEY_KILO=${UPSTREAM_KEY_KILO:-anonymous}
       - UPSTREAM_DEFAULT=${UPSTREAM_DEFAULT:-opencode}

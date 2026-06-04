@@ -71,6 +71,33 @@ func TestEnvInt_Invalid(t *testing.T) {
 	}
 }
 
+func TestEnvSlice_Default(t *testing.T) {
+	val := envSlice("NONEXISTENT_SLICE", "a,b,c")
+	if len(val) != 3 || val[0] != "a" || val[1] != "b" || val[2] != "c" {
+		t.Fatalf("expected [a b c], got %v", val)
+	}
+}
+
+func TestEnvSlice_Custom(t *testing.T) {
+	os.Setenv("TEST_ENV_SLICE", "x,y")
+	defer os.Unsetenv("TEST_ENV_SLICE")
+
+	val := envSlice("TEST_ENV_SLICE", "a,b,c")
+	if len(val) != 2 || val[0] != "x" || val[1] != "y" {
+		t.Fatalf("expected [x y], got %v", val)
+	}
+}
+
+func TestEnvSlice_EmptyItem(t *testing.T) {
+	os.Setenv("TEST_ENV_SLICE2", "a,,c")
+	defer os.Unsetenv("TEST_ENV_SLICE2")
+
+	val := envSlice("TEST_ENV_SLICE2", "")
+	if len(val) != 2 || val[0] != "a" || val[1] != "c" {
+		t.Fatalf("expected [a c], got %v", val)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:      1234,
@@ -80,8 +107,9 @@ func defaultConfig() *Config {
 		LogLevel:  "info",
 		RateLimit: 60,
 
-		UpstreamURLOpenCode: "https://opencode.ai/zen/v1",
-		UpstreamKeyOpenCode: "public",
+		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
+		UpstreamKeyOpenCode:           "public",
+		UpstreamOpenCodeFreeAllowlist: []string{"big-pickle"},
 
 		UpstreamURLKilo: "https://api.kilo.ai/api/openrouter",
 		UpstreamKeyKilo: "anonymous",

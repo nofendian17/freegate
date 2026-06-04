@@ -1,7 +1,7 @@
 package types
 
 type KiloModelList struct {
-	Object string     `json:"object"`
+	Object string      `json:"object"`
 	Data   []KiloModel `json:"data"`
 }
 

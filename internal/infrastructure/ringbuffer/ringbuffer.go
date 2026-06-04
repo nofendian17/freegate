@@ -6,11 +6,11 @@ import "sync"
 // RingBuffer is a fixed-capacity, thread-safe ring buffer.
 // When full, the oldest entry is overwritten.
 type RingBuffer[T any] struct {
-	mu    sync.RWMutex
-	data  []T
-	head  int
-	size  int
-	cap   int
+	mu   sync.RWMutex
+	data []T
+	head int
+	size int
+	cap  int
 }
 
 // New creates a new RingBuffer with the given capacity.

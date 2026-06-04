@@ -166,8 +166,8 @@ func TestProcessGeminiChunk(t *testing.T) {
 	chunk3 := map[string]any{
 		"choices": []any{
 			map[string]any{
-				"index": 0.0,
-				"delta": map[string]any{},
+				"index":         0.0,
+				"delta":         map[string]any{},
 				"finish_reason": "stop",
 			},
 		},

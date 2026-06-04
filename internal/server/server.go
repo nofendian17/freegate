@@ -89,6 +89,7 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg.UpstreamURLOpenCode,
 		cfg.UpstreamKeyOpenCode,
 		cfg.SOCKSAddr,
+		cfg.UpstreamOpenCodeFreeAllowlist,
 	)
 	kilo := upstream.NewKiloUpstream(
 		cfg.UpstreamURLKilo,
