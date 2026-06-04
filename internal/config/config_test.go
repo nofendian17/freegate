@@ -44,14 +44,6 @@ func TestValidate_NegativePort(t *testing.T) {
 	}
 }
 
-func TestValidate_EmptyPrefixes(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.UpstreamKiloPrefixes = nil
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for empty prefixes")
-	}
-}
-
 func TestEnvInt_Default(t *testing.T) {
 	val := envInt("NONEXISTENT_KEY", 42)
 	if val != 42 {
@@ -79,33 +71,6 @@ func TestEnvInt_Invalid(t *testing.T) {
 	}
 }
 
-func TestEnvSlice_Default(t *testing.T) {
-	val := envSlice("NONEXISTENT_SLICE", "a,b,c")
-	if len(val) != 3 || val[0] != "a" || val[1] != "b" || val[2] != "c" {
-		t.Fatalf("expected [a b c], got %v", val)
-	}
-}
-
-func TestEnvSlice_Custom(t *testing.T) {
-	os.Setenv("TEST_ENV_SLICE", "x,y")
-	defer os.Unsetenv("TEST_ENV_SLICE")
-
-	val := envSlice("TEST_ENV_SLICE", "a,b,c")
-	if len(val) != 2 || val[0] != "x" || val[1] != "y" {
-		t.Fatalf("expected [x y], got %v", val)
-	}
-}
-
-func TestEnvSlice_EmptyItem(t *testing.T) {
-	os.Setenv("TEST_ENV_SLICE2", "a,,c")
-	defer os.Unsetenv("TEST_ENV_SLICE2")
-
-	val := envSlice("TEST_ENV_SLICE2", "")
-	if len(val) != 2 || val[0] != "a" || val[1] != "c" {
-		t.Fatalf("expected [a c], got %v", val)
-	}
-}
-
 func defaultConfig() *Config {
 	return &Config{
 		Port:      1234,
@@ -121,7 +86,6 @@ func defaultConfig() *Config {
 		UpstreamURLKilo: "https://api.kilo.ai/api/openrouter",
 		UpstreamKeyKilo: "anonymous",
 
-		UpstreamDefault:      "opencode",
-		UpstreamKiloPrefixes: []string{"kilo/", "kilo-", "openrouter/"},
+		UpstreamDefault: "opencode",
 	}
 }

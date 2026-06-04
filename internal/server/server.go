@@ -94,7 +94,6 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg.UpstreamURLKilo,
 		cfg.UpstreamKeyKilo,
 		cfg.SOCKSAddr,
-		cfg.UpstreamKiloPrefixes,
 	)
 
 	infraRouter := upstream.NewRouter(opencode, kilo)

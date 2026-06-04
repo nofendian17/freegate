@@ -17,8 +17,8 @@ func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
 			"POST /v1/messages":         "Claude-native endpoint (auto-translated to OpenAI upstream)",
 		},
 		"upstreams": map[string]string{
-			"opencode": "default, model without prefix",
-			"kilo":     "prefix: kilo/, kilo-, openrouter/, suffix: :free",
+			"opencode": "default, model not in Kilo's free catalog",
+			"kilo":     "model present in Kilo's free catalog (upstream isFree == true)",
 		},
 	})
 }

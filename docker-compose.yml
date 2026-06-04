@@ -34,7 +34,6 @@ services:
       - UPSTREAM_URL_KILO=${UPSTREAM_URL_KILO:-https://api.kilo.ai/api/openrouter}
       - UPSTREAM_KEY_KILO=${UPSTREAM_KEY_KILO:-anonymous}
       - UPSTREAM_DEFAULT=${UPSTREAM_DEFAULT:-opencode}
-      - UPSTREAM_KILO_PREFIXES=${UPSTREAM_KILO_PREFIXES:-kilo/,kilo-,openrouter/}
     depends_on:
       tor:
         condition: service_healthy
