@@ -16,7 +16,7 @@ import (
 	"freegate/internal/handler"
 	"freegate/internal/middleware"
 	"freegate/internal/proxy"
-	"freegate/internal/tor"
+	"freegate/internal/infrastructure/tor"
 	"freegate/internal/collector"
 	"freegate/internal/ui"
 	"freegate/internal/infrastructure/upstream"
