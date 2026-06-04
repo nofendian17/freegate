@@ -2,9 +2,12 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"freegate/internal/domain"
@@ -90,12 +93,12 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	}
 
 	var (
-		finalStatus        int
-		finalUpstream      string
-		finalErr           error
-		finalTotalTokens   int
-		finalPromptTokens  int
-		finalComplTokens   int
+		finalStatus       int
+		finalUpstream     string
+		finalErr          error
+		finalTotalTokens  int
+		finalPromptTokens int
+		finalComplTokens  int
 	)
 	defer func() {
 		if s.logger == nil {
@@ -178,6 +181,21 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		}
 
 		if resp.StatusCode != http.StatusTooManyRequests {
+			if resp.StatusCode >= 400 {
+				if s.metrics != nil {
+					s.metrics.UpstreamErrors.Add(1)
+				}
+				finalStatus = resp.StatusCode
+
+				// Read provider error body for a more descriptive message
+				errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+				resp.Body.Close()
+				if readErr == nil && len(errBody) > 0 {
+					finalErr = fmt.Errorf("provider %d: %s", resp.StatusCode, extractProviderErr(errBody))
+				} else {
+					finalErr = fmt.Errorf("provider returned HTTP %d", resp.StatusCode)
+				}
+			}
 			break
 		}
 
@@ -215,4 +233,31 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		}
 	}
 	return nil
+}
+
+// extractProviderErr attempts to extract a human-readable error message from a
+// provider's JSON error response body. Falls back to the raw body on failure.
+func extractProviderErr(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	// Try to parse {"error": {"message": "..."}} (OpenAI-style)
+	var errResp struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+		return errResp.Error.Message
+	}
+	// Try {"message": "..."} (some providers)
+	var msgResp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &msgResp); err == nil && msgResp.Message != "" {
+		return msgResp.Message
+	}
+	// Truncate raw body
+	if len(trimmed) > 120 {
+		trimmed = trimmed[:120] + "…"
+	}
+	return trimmed
 }
