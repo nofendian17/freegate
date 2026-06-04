@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"freegate/internal/model"
+	"freegate/internal/upstream/types"
 )
 
 type KiloUpstream struct {
@@ -59,7 +60,7 @@ func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
 		return nil, fmt.Errorf("kilo: fetch models: %w", err)
 	}
 
-	var list model.KiloModelList
+	var list types.KiloModelList
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("kilo: parse models: %w", err)
 	}

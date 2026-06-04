@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"freegate/internal/model"
+	"freegate/internal/upstream/types"
 )
 
 type OpenCodeUpstream struct {
@@ -50,7 +51,7 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 		return nil, fmt.Errorf("opencode: fetch models: %w", err)
 	}
 
-	var list model.OpenCodeModelList
+	var list types.OpenCodeModelList
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("opencode: parse models: %w", err)
 	}

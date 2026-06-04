@@ -35,36 +35,3 @@ func NewError(tp, msg string) ErrorResp {
 	e.Error.Message = msg
 	return e
 }
-
-type KiloModelList struct {
-	Object string      `json:"object"`
-	Data   []KiloModel `json:"data"`
-}
-
-type KiloModel struct {
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
-	Created       int64       `json:"created"`
-	Description   string      `json:"description"`
-	ContextLength int         `json:"context_length"`
-	Pricing       KiloPricing `json:"pricing"`
-	IsFree        bool        `json:"isFree"`
-}
-
-type KiloPricing struct {
-	Prompt     string `json:"prompt"`
-	Completion string `json:"completion"`
-}
-
-type OpenCodeModelList struct {
-	Object string          `json:"object"`
-	Data   []OpenCodeModel `json:"data"`
-}
-
-type OpenCodeModel struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-	Cost    string `json:"cost"`
-}
