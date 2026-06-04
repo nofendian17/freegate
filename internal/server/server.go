@@ -32,21 +32,21 @@ const (
 	serverIdleTimeout       = 120 * time.Second
 	shutdownTimeout         = 10 * time.Second
 	torMonitorInterval      = 5 * time.Minute
-	defaultMaxRetries       = 2
+	defaultMaxRetries       = 5
 	defaultRetryDelay       = 3 * time.Second
 )
 
 // Server owns the freegate HTTP server: configuration, dependencies,
 // and lifecycle. Build it with New, then call Run.
 type Server struct {
-	cfg        *config.Config
-	httpSrv    *http.Server
-	logger     *slog.Logger
-	tc         *tor.Controller
-	opencode   *upstream.OpenCodeUpstream
-	kilo       *upstream.KiloUpstream
-	rec        *recorder.Recorder
-	rateLimit  *middleware.RateLimiter
+	cfg       *config.Config
+	httpSrv   *http.Server
+	logger    *slog.Logger
+	tc        *tor.Controller
+	opencode  *upstream.OpenCodeUpstream
+	kilo      *upstream.KiloUpstream
+	rec       *recorder.Recorder
+	rateLimit *middleware.RateLimiter
 }
 
 // routerAdapter wraps *upstream.Router to satisfy application.Router,
