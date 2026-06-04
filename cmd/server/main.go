@@ -18,7 +18,7 @@ import (
 	"freegate/internal/proxy"
 	"freegate/internal/infrastructure/tor"
 	"freegate/internal/infrastructure/recorder"
-	"freegate/internal/ui"
+	"freegate/internal/delivery/ui"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/web"
 )
