@@ -10,6 +10,7 @@ import (
 
 	"freegate/internal/model"
 	"freegate/internal/respond"
+	"freegate/internal/translate"
 )
 
 const MaxRequestBodySize = 10 << 20
@@ -22,6 +23,9 @@ type Upstream interface {
 	Metrics() map[string]any
 }
 
+// Handler handles HTTP requests for the freegate proxy.
+// It supports OpenAI, Claude, and Gemini API formats through automatic
+// format detection and translation.
 type Handler struct {
 	upstream Upstream
 }
@@ -37,6 +41,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/v1/metrics", h.Metrics)
 	r.Get("/ready", h.Ready)
 	r.Post("/v1/chat/completions", h.Chat)
+	// Claude-native endpoint (optional, clients can also POST Claude bodies to /v1/chat/completions)
+	r.Post("/v1/messages", h.Chat)
 	return r
 }
 
@@ -47,10 +53,11 @@ func (h *Handler) Root(w http.ResponseWriter, r *http.Request) {
 			"GET  /":                    "this help",
 			"GET  /ready":               "health check",
 			"GET  /v1/models":           "list available free models",
-			"POST /v1/chat/completions": "OpenAI-compatible chat completion",
+			"POST /v1/chat/completions": "OpenAI-compatible chat completion (also accepts Claude and Gemini formats)",
+			"POST /v1/messages":         "Claude-native endpoint (auto-translated to OpenAI upstream)",
 		},
 		"upstreams": map[string]string{
-			"opencode": "default, model tanpa prefix",
+			"opencode": "default, model without prefix",
 			"kilo":     "prefix: kilo/, kilo-, openrouter/, suffix: :free",
 		},
 	})
@@ -88,9 +95,36 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	modelID, err := extractModelID(body)
-	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	// Detect format from body (OpenAI, Claude, or Gemini)
+	format := translate.Detect(body)
+
+	// Extract model ID (works for OpenAI, Claude; Gemini may need fallback)
+	modelID := translate.ExtractModelID(body)
+	if modelID == "" {
+		id, err := extractModelID(body)
+		if err != nil {
+			respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		modelID = id
+	}
+
+	// Translate request body to OpenAI intermediate format if needed
+	if format != translate.FormatOpenAI {
+		translated, err := translate.Request(body, format, translate.FormatOpenAI)
+		if err != nil {
+			respond.JSONError(w, http.StatusBadRequest, "translation_error", err.Error())
+			return
+		}
+		body = translated
+	}
+
+	// For non-OpenAI clients, wrap the response writer to translate
+	// the upstream's OpenAI response back to the source format
+	if format != translate.FormatOpenAI {
+		wr := translate.NewResponseWriter(w, format)
+		defer wr.Close()
+		h.upstream.ProxyChat(wr, r, modelID, body)
 		return
 	}
 
