@@ -1,0 +1,25 @@
+{{define "partials/requests.html"}}
+{{if .}}
+{{range .}}
+<tr>
+  <td class="dim">{{.Time}}</td>
+  <td>{{.Model}}</td>
+  <td>
+    {{if eq .Upstream "opencode"}}<span class="pill bg-blue tone-blue">opencode</span>
+    {{else if eq .Upstream "kilo"}}<span class="pill bg-purple tone-purple">kilo</span>
+    {{else}}<span class="pill bg-gray tone-gray">{{.Upstream}}</span>
+    {{end}}
+  </td>
+  <td>
+    <span class="pill bg-{{.StatusTone}} tone-{{.StatusTone}}">{{.Status}}</span>
+  </td>
+  <td class="dim">{{.Duration}}</td>
+  <td class="dim">{{.Tokens}}</td>
+  <td class="mono-faint">{{.IP}}</td>
+  <td>{{if .Error}}<span class="error-text" title="{{.Error}}">{{.Error}}</span>{{end}}</td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="8" class="dim">no requests yet</td></tr>
+{{end}}
+{{end}}

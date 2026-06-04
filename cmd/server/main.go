@@ -17,7 +17,10 @@ import (
 	"freegate/internal/middleware"
 	"freegate/internal/proxy"
 	"freegate/internal/tor"
+	"freegate/internal/collector"
+	"freegate/internal/ui"
 	"freegate/internal/upstream"
+	"freegate/web"
 )
 
 const (
@@ -64,6 +67,21 @@ func main() {
 
 	pc := proxy.NewClient(router).WithTorController(tc)
 
+	// Wire the collector: receives one log entry per completed proxied request.
+	recorder := collector.NewRecorder(pc.Metrics)
+	recorder.SetModelsFunc(pc.AllModels)
+	recorder.SetTorIPFunc(tc.CurrentIP)
+	pc.WithRequestLogger(recorder.RecordRequestLog)
+	recorder.Start(ctx)
+
+	tpl, err := ui.LoadTemplates(web.Templates())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load UI templates: %v\n", err)
+		os.Exit(1)
+	}
+
+	uiHandler := ui.NewHandler(recorder, tpl, web.Static())
+
 	h := handler.New(pc)
 
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
@@ -73,9 +91,16 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CORS)
-	r.Use(rl.Middleware)
-	r.Use(middleware.Auth(cfg.APIKey))
-	r.Mount("/", h.Routes())
+
+	// UI dashboard at / — no rate limit, no auth
+	r.Mount("/", uiHandler.Routes())
+
+	// API (OpenAI-compatible) — rate limit + auth apply to these only
+	r.Group(func(r chi.Router) {
+		r.Use(rl.Middleware)
+		r.Use(middleware.Auth(cfg.APIKey))
+		r.Mount("/", h.Routes())
+	})
 
 	stopIP := make(chan struct{})
 	go tc.StartMonitor(torMonitorInterval, stopIP)

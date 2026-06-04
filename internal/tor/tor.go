@@ -24,12 +24,14 @@ const (
 )
 
 type Controller struct {
-	host   string
-	port   int
-	pass   string
-	socks  string
-	mu     sync.Mutex
-	lastIP time.Time
+	host       string
+	port       int
+	pass       string
+	socks      string
+	mu         sync.Mutex
+	lastIP     time.Time
+	currentIP  string
+	currentMu  sync.RWMutex
 }
 
 func NewController(host string, port int, pass string, socksAddr string) *Controller {
@@ -100,11 +102,12 @@ func (c *Controller) Close() {
 }
 
 // getIP fetches the current exit IP by making an HTTP request through the SOCKS5 proxy.
+// Updates the cached currentIP so the dashboard can read it without a fetch.
 func (c *Controller) getIP() string {
 	dialer, err := proxy.SOCKS5("tcp", c.socks, nil, proxy.Direct)
 	if err != nil {
 		slog.Debug("tor: failed to create SOCKS5 dialer for IP check", "error", err)
-		return "unknown"
+		return c.cacheIP("unknown")
 	}
 
 	tr := &http.Transport{
@@ -115,22 +118,36 @@ func (c *Controller) getIP() string {
 	resp, err := client.Get("https://api.ipify.org?format=json")
 	if err != nil {
 		slog.Debug("tor: failed to fetch exit IP", "error", err)
-		return "unknown"
+		return c.cacheIP("unknown")
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "unknown"
+		return c.cacheIP("unknown")
 	}
 
 	var result struct {
 		IP string `json:"ip"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil || result.IP == "" {
-		return "unknown"
+		return c.cacheIP("unknown")
 	}
-	return result.IP
+	return c.cacheIP(result.IP)
+}
+
+// CurrentIP returns the last known Tor exit IP (thread-safe, no network).
+func (c *Controller) CurrentIP() string {
+	c.currentMu.RLock()
+	defer c.currentMu.RUnlock()
+	return c.currentIP
+}
+
+func (c *Controller) cacheIP(ip string) string {
+	c.currentMu.Lock()
+	c.currentIP = ip
+	c.currentMu.Unlock()
+	return ip
 }
 
 // StartMonitor periodically fetches and logs the current Tor exit IP.

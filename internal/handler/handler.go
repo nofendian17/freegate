@@ -36,7 +36,6 @@ func New(upstream Upstream) *Handler {
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.Root)
 	r.Get("/v1/models", h.ListModels)
 	r.Get("/v1/metrics", h.Metrics)
 	r.Get("/ready", h.Ready)
