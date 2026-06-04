@@ -95,12 +95,16 @@ func main() {
 	// UI dashboard at / — no rate limit, no auth
 	r.Mount("/", uiHandler.Routes())
 
-	// API (OpenAI-compatible) — rate limit + auth apply to these only
-	r.Group(func(r chi.Router) {
-		r.Use(rl.Middleware)
-		r.Use(middleware.Auth(cfg.APIKey))
-		r.Mount("/", h.Routes())
+	// API (OpenAI-compatible) — rate limit + auth apply to these only.
+	// These specific routes are registered on the root mux and are checked
+	// BEFORE the default handler set by Mount("/").
+	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Route("/v1", func(r chi.Router) {
+		r.Get("/models", h.ListModels)
+		r.Get("/metrics", h.Metrics)
+		r.Post("/chat/completions", h.Chat)
 	})
+	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Post("/v1/messages", h.Chat)
+	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Get("/ready", h.Ready)
 
 	stopIP := make(chan struct{})
 	go tc.StartMonitor(torMonitorInterval, stopIP)
