@@ -61,3 +61,23 @@ func TestCopyHeadersPreservesMultiValue(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyHeadersCaseInsensitiveHopByHop(t *testing.T) {
+	src := http.Header{}
+	src["connection"] = []string{"close"}
+	src["keep-alive"] = []string{"timeout=5"}
+	src.Set("X-Other", "value")
+
+	dst := http.Header{}
+	CopyHeaders(dst, src)
+
+	if dst.Get("Connection") != "" {
+		t.Errorf("lowercase 'connection' should be skipped, got %q", dst.Get("Connection"))
+	}
+	if dst.Get("Keep-Alive") != "" {
+		t.Errorf("lowercase 'keep-alive' should be skipped, got %q", dst.Get("Keep-Alive"))
+	}
+	if dst.Get("X-Other") != "value" {
+		t.Errorf("X-Other should be copied, got %q", dst.Get("X-Other"))
+	}
+}
