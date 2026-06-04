@@ -3,11 +3,10 @@ package proxy
 import (
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
+	"freegate/internal/httputil"
 	"freegate/internal/metrics"
 	"freegate/internal/model"
 	"freegate/internal/respond"
@@ -104,7 +103,7 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 			Upstream:         finalUpstream,
 			Status:           finalStatus,
 			DurationMs:       time.Since(start).Milliseconds(),
-			IP:               clientIPFromRequest(r),
+			IP:               httputil.ClientIP(r),
 			Error:            errStr,
 			TotalTokens:      finalTotalTokens,
 			PromptTokens:     finalPrompt,
@@ -173,7 +172,7 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 	slog.Info("upstream response", "request_id", requestID, "upstream", u.Name(), "status", resp.StatusCode)
 	finalStatus = resp.StatusCode
 
-	copyHeaders(w, resp)
+	httputil.CopyHeaders(w.Header(), resp.Header)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
 
@@ -186,42 +185,4 @@ func (c *Client) ProxyChat(w http.ResponseWriter, r *http.Request, modelID strin
 	}
 }
 
-func copyHeaders(dst http.ResponseWriter, src *http.Response) {
-	hopByHop := map[string]bool{
-		"Connection":          true,
-		"Proxy-Connection":    true,
-		"Keep-Alive":          true,
-		"Proxy-Authenticate":  true,
-		"Proxy-Authorization": true,
-		"TE":                  true,
-		"Trailers":            true,
-		"Transfer-Encoding":   true,
-		"Upgrade":             true,
-	}
-	for k, vs := range src.Header {
-		if hopByHop[k] {
-			continue
-		}
-		for _, v := range vs {
-			dst.Header().Add(k, v)
-		}
-	}
-}
 
-// clientIPFromRequest extracts the client IP from request headers or RemoteAddr.
-// Priority: X-Forwarded-For > X-Real-IP > RemoteAddr.
-func clientIPFromRequest(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i != -1 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
