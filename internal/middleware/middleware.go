@@ -5,11 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
+
+	"freegate/internal/httputil"
 )
 
 func Logger(next http.Handler) http.Handler {
@@ -22,7 +22,7 @@ func Logger(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", ww.code,
 			"duration", time.Since(start).String(),
-			"remote", clientIP(r),
+			"remote", httputil.ClientIP(r),
 			"request_id", r.Header.Get("X-Request-ID"),
 		)
 	})
@@ -191,27 +191,9 @@ func (rl *RateLimiter) allow(ip string) bool {
 	return true
 }
 
-// clientIP extracts the real client IP.
-// Prefers X-Forwarded-For when behind a reverse proxy (e.g. Docker port mapping),
-// falls back to X-Real-IP, then RemoteAddr.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if ips := strings.Split(fwd, ","); len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
-		}
-	}
-	if real := r.Header.Get("X-Real-IP"); real != "" {
-		return real
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip := httputil.ClientIP(r)
 		if !rl.allow(ip) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "60")
