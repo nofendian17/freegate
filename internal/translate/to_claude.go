@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+
+	"freegate/internal/httputil"
 )
 
 // --- Public types ---
@@ -45,7 +47,7 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	// Only pass through non-200 headers immediately; for 200 we may
 	// modify Content-Type and delay headers until first write.
 	if statusCode != http.StatusOK {
-		copyHeaders(rw.inner, rw.inner.Header())
+		httputil.CopyHeaders(rw.inner.Header(), rw.inner.Header())
 		rw.inner.WriteHeader(statusCode)
 	}
 }
@@ -816,27 +818,4 @@ func randID(n int) string {
 		b[i] = chars[idx.Int64()]
 	}
 	return string(b)
-}
-
-// copyHeaders copies all headers from src to dst, filtering hop-by-hop headers.
-func copyHeaders(dst http.ResponseWriter, src http.Header) {
-	hopByHop := map[string]bool{
-		"Connection":          true,
-		"Proxy-Connection":    true,
-		"Keep-Alive":          true,
-		"Proxy-Authenticate":  true,
-		"Proxy-Authorization": true,
-		"TE":                  true,
-		"Trailers":            true,
-		"Transfer-Encoding":   true,
-		"Upgrade":             true,
-	}
-	for k, vs := range src {
-		if hopByHop[k] {
-			continue
-		}
-		for _, v := range vs {
-			dst.Header().Add(k, v)
-		}
-	}
 }
