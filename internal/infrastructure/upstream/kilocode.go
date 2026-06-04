@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"freegate/internal/model"
-	"freegate/internal/upstream/types"
+	"freegate/internal/infrastructure/upstream/types"
 )
 
 type KiloUpstream struct {

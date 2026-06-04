@@ -10,7 +10,7 @@ import (
 	"freegate/internal/metrics"
 	"freegate/internal/model"
 	"freegate/internal/respond"
-	"freegate/internal/upstream"
+	"freegate/internal/infrastructure/upstream"
 )
 
 // RequestLogger is a callback type for request logging.

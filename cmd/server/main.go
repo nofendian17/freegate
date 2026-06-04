@@ -19,7 +19,7 @@ import (
 	"freegate/internal/tor"
 	"freegate/internal/collector"
 	"freegate/internal/ui"
-	"freegate/internal/upstream"
+	"freegate/internal/infrastructure/upstream"
 	"freegate/web"
 )
 
