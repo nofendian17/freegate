@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="/ui/static/css/app.css">
-  <script src="/ui/static/js/htmx.min.js" defer></script>
-  <script src="/ui/static/js/chart.umd.js" defer></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/htmx.min.js" defer></script>
+  <script src="/static/js/chart.umd.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -22,7 +22,7 @@
 
     <!-- stats cards (server-rendered initially, HTMX refreshes) -->
     <section class="grid-cards"
-             hx-get="/ui/partials/stats"
+             hx-get="/partials/stats"
              hx-trigger="every 5s"
              hx-swap="innerHTML">
       {{.Stats}}
@@ -96,7 +96,7 @@
         <span class="card-title">Free Models</span>
         <div class="filter-bar" style="margin:0">
           <select id="model-filter"
-                  hx-get="/ui/partials/models"
+                  hx-get="/partials/models"
                   hx-trigger="change, every 10s"
                   hx-target="#models-body"
                   hx-swap="innerHTML"
@@ -117,7 +117,7 @@
             </tr>
           </thead>
           <tbody id="models-body"
-                 hx-get="/ui/partials/models"
+                 hx-get="/partials/models"
                  hx-trigger="every 10s"
                  hx-swap="innerHTML">
             {{.Models}}
@@ -147,7 +147,7 @@
             </tr>
           </thead>
           <tbody id="requests-body"
-                 hx-get="/ui/partials/requests"
+                 hx-get="/partials/requests"
                  hx-trigger="every 5s"
                  hx-swap="innerHTML">
             {{.Requests}}
@@ -166,7 +166,7 @@
     let tsChart = null;
     async function refreshChart() {
       try {
-        const resp = await fetch('/ui/api/timeseries');
+        const resp = await fetch('/api/timeseries');
         if (!resp.ok) return;
         const data = await resp.json();
         if (!data || data.length < 2) return;
@@ -236,7 +236,7 @@
     // health badge + uptime
     async function refreshHealth() {
       try {
-        const resp = await fetch('/ui/api/health');
+        const resp = await fetch('/api/health');
         if (!resp.ok) return;
         const h = await resp.json();
         const dot = document.getElementById('status-dot');
