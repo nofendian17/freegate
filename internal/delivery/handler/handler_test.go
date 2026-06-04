@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,37 +11,45 @@ import (
 	"freegate/internal/model"
 )
 
-// mockUpstream implements handler.Upstream for testing.
-type mockUpstream struct {
+// mockChat implements handler.ChatProxy for testing.
+type mockChat struct {
 	chatCalled  bool
-	models      []model.Model
-	ready       bool
-	metrics     map[string]any
 	lastModelID string
 	lastBody    []byte
 }
 
-func newMockUpstream() *mockUpstream {
-	return &mockUpstream{
-		metrics: map[string]any{"total_requests": int64(0)},
-	}
-}
-
-func (m *mockUpstream) ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte) {
+func (m *mockChat) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error {
 	m.chatCalled = true
 	m.lastModelID = modelID
 	m.lastBody = body
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"choices":[]}`))
+	return nil
 }
 
-func (m *mockUpstream) AllModels() []model.Model { return m.models }
-func (m *mockUpstream) IsReady() bool            { return m.ready }
-func (m *mockUpstream) Metrics() map[string]any  { return m.metrics }
+type mockModels struct {
+	models []model.Model
+	ready  bool
+}
+
+func (m *mockModels) AllModels() []model.Model { return m.models }
+func (m *mockModels) IsReady() bool            { return m.ready }
+
+type mockMetrics struct {
+	data map[string]any
+}
+
+func (m *mockMetrics) Metrics() map[string]any { return m.data }
+
+func newMockHandler() (*Handler, *mockChat, *mockModels, *mockMetrics) {
+	chat := &mockChat{}
+	models := &mockModels{}
+	mtr := &mockMetrics{data: map[string]any{"total_requests": int64(0)}}
+	return New(chat, models, mtr), chat, models, mtr
+}
 
 func TestHandler_Root(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 
@@ -59,9 +68,8 @@ func TestHandler_Root(t *testing.T) {
 }
 
 func TestHandler_Ready_Ready(t *testing.T) {
-	u := newMockUpstream()
-	u.ready = true
-	h := New(u)
+	h, _, models, _ := newMockHandler()
+	models.ready = true
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
 
@@ -78,9 +86,7 @@ func TestHandler_Ready_Ready(t *testing.T) {
 }
 
 func TestHandler_Ready_NotReady(t *testing.T) {
-	u := newMockUpstream()
-	u.ready = false
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
 
@@ -92,9 +98,7 @@ func TestHandler_Ready_NotReady(t *testing.T) {
 }
 
 func TestHandler_ListModels_Empty(t *testing.T) {
-	u := newMockUpstream()
-	u.models = nil
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	w := httptest.NewRecorder()
 
@@ -106,12 +110,11 @@ func TestHandler_ListModels_Empty(t *testing.T) {
 }
 
 func TestHandler_ListModels_WithData(t *testing.T) {
-	u := newMockUpstream()
-	u.models = []model.Model{
+	h, _, models, _ := newMockHandler()
+	models.models = []model.Model{
 		{ID: "model-a", Object: "model", OwnedBy: "opencode", IsFree: true},
 		{ID: "model-b", Object: "model", OwnedBy: "kilo", IsFree: true},
 	}
-	h := New(u)
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	w := httptest.NewRecorder()
 
@@ -130,9 +133,8 @@ func TestHandler_ListModels_WithData(t *testing.T) {
 }
 
 func TestHandler_Metrics(t *testing.T) {
-	u := newMockUpstream()
-	u.metrics = map[string]any{"total_requests": int64(42)}
-	h := New(u)
+	h, _, _, mtr := newMockHandler()
+	mtr.data = map[string]any{"total_requests": int64(42)}
 	req := httptest.NewRequest("GET", "/v1/metrics", nil)
 	w := httptest.NewRecorder()
 
@@ -151,8 +153,7 @@ func TestHandler_Metrics(t *testing.T) {
 }
 
 func TestHandler_Chat_Success(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
+	h, chat, _, _ := newMockHandler()
 	body := `{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -163,17 +164,16 @@ func TestHandler_Chat_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
-	if !u.chatCalled {
+	if !chat.chatCalled {
 		t.Error("expected ProxyChat to be called")
 	}
-	if u.lastModelID != "deepseek-v4-flash-free" {
-		t.Errorf("expected model ID 'deepseek-v4-flash-free', got %q", u.lastModelID)
+	if chat.lastModelID != "deepseek-v4-flash-free" {
+		t.Errorf("expected model ID 'deepseek-v4-flash-free', got %q", chat.lastModelID)
 	}
 }
 
 func TestHandler_Chat_EmptyBody(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(""))
 	w := httptest.NewRecorder()
 
@@ -185,8 +185,7 @@ func TestHandler_Chat_EmptyBody(t *testing.T) {
 }
 
 func TestHandler_Chat_MissingModel(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	body := `{"messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -205,10 +204,8 @@ func TestHandler_Chat_MissingModel(t *testing.T) {
 }
 
 func TestHandler_Chat_InvalidJSON(t *testing.T) {
-	u := newMockUpstream()
-	h := New(u)
+	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString("not json"))
-	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	h.Routes().ServeHTTP(w, req)

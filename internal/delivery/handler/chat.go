@@ -52,11 +52,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if format != translate.FormatOpenAI {
 		wr := translate.NewResponseWriter(w, format)
 		defer wr.Close()
-		h.upstream.ProxyChat(wr, r, modelID, body)
+		_ = h.chat.ProxyChat(r.Context(), wr, r, modelID, body)
 		return
 	}
 
-	h.upstream.ProxyChat(w, r, modelID, body)
+	_ = h.chat.ProxyChat(r.Context(), w, r, modelID, body)
 }
 
 func extractModelID(body []byte) (string, error) {

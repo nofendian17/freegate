@@ -7,5 +7,5 @@ import (
 )
 
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	respond.Ready(w, h.upstream.IsReady())
+	respond.Ready(w, h.models.IsReady())
 }

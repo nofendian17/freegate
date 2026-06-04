@@ -7,5 +7,5 @@ import (
 )
 
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
-	respond.JSON(w, http.StatusOK, h.upstream.Metrics())
+	respond.JSON(w, http.StatusOK, h.mtr.Metrics())
 }

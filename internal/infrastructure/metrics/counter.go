@@ -44,6 +44,15 @@ func (m *Metrics) IncrUpstream(name string) {
 
 // Snapshot returns a copy of all metrics as a map.
 func (m *Metrics) Snapshot() map[string]any {
+	return m.snapshot()
+}
+
+// Metrics is an alias for Snapshot, used to satisfy handler.MetricsProvider.
+func (m *Metrics) Metrics() map[string]any {
+	return m.snapshot()
+}
+
+func (m *Metrics) snapshot() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

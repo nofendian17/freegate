@@ -12,14 +12,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"freegate/internal/application"
 	"freegate/internal/config"
 	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
-	"freegate/internal/proxy"
-	"freegate/internal/infrastructure/tor"
+	"freegate/internal/domain"
+	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
-	"freegate/internal/delivery/ui"
+	"freegate/internal/infrastructure/tor"
 	"freegate/internal/infrastructure/upstream"
+	"freegate/internal/delivery/ui"
 	"freegate/web"
 )
 
@@ -30,6 +32,30 @@ const (
 	shutdownTimeout         = 10 * time.Second
 	torMonitorInterval      = 5 * time.Minute
 )
+
+// routerAdapter wraps *upstream.Router to satisfy application.Router,
+// whose Select returns (domain.Upstream, error).
+type routerAdapter struct {
+	*upstream.Router
+}
+
+func (a *routerAdapter) Select(modelID string) (domain.Upstream, error) {
+	return &upstreamAdapter{Upstream: a.Router.Select(modelID)}, nil
+}
+
+// upstreamAdapter wraps upstream.Upstream to satisfy domain.Upstream
+// (different ChatRequest signature, different Start signature).
+type upstreamAdapter struct {
+	upstream.Upstream
+}
+
+func (u *upstreamAdapter) ChatCompletion(ctx context.Context, req domain.ChatRequest) (*http.Response, error) {
+	return u.Upstream.ChatCompletion(ctx, req.Body)
+}
+
+func (u *upstreamAdapter) Start(ctx context.Context) {
+	u.Upstream.Start(ctx, 0)
+}
 
 func main() {
 	cfg := config.Load()
@@ -57,7 +83,8 @@ func main() {
 		cfg.UpstreamKiloPrefixes,
 	)
 
-	router := upstream.NewRouter(opencode, kilo)
+	infraRouter := upstream.NewRouter(opencode, kilo)
+	appRouter := &routerAdapter{Router: infraRouter}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -65,14 +92,17 @@ func main() {
 	opencode.Start(ctx, time.Duration(cfg.UpstreamRefreshOpenCode)*time.Second)
 	kilo.Start(ctx, time.Duration(cfg.UpstreamRefreshKilo)*time.Second)
 
-	pc := proxy.NewClient(router).WithTorController(tc)
+	m := metrics.New()
 
-	// Wire the collector: receives one log entry per completed proxied request.
-	recorder := recorder.NewRecorder(pc.Metrics)
-	recorder.SetModelsFunc(pc.AllModels)
-	recorder.SetTorIPFunc(tc.CurrentIP)
-	pc.WithRequestLogger(recorder.RecordRequestLog)
-	recorder.Start(ctx)
+	cs := application.NewChatService(appRouter, tc, m, 2, 3*time.Second)
+	ms := application.NewModelService(infraRouter)
+
+	// Wire the recorder: receives one log entry per completed proxied request.
+	rec := recorder.NewRecorder(m.Snapshot)
+	rec.SetModelsFunc(ms.AllModels)
+	rec.SetTorIPFunc(tc.CurrentIP)
+	cs.WithRequestLogger(rec.RecordRequestLog)
+	rec.Start(ctx)
 
 	tpl, err := ui.LoadTemplates(web.Templates())
 	if err != nil {
@@ -80,9 +110,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	uiHandler := ui.NewHandler(recorder, tpl, web.Static())
+	uiHandler := ui.NewHandler(rec, tpl, web.Static())
 
-	h := handler.New(pc)
+	h := handler.New(cs, ms, m)
 
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -10,11 +11,19 @@ import (
 
 const MaxRequestBodySize = 10 << 20
 
-// Upstream is the single interface the handler needs from the proxy client.
-type Upstream interface {
-	ProxyChat(w http.ResponseWriter, r *http.Request, modelID string, body []byte)
+// ChatProxy is the interface the handler needs from the chat service.
+type ChatProxy interface {
+	ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error
+}
+
+// ModelLister is the interface the handler needs from the model service.
+type ModelLister interface {
 	AllModels() []model.Model
 	IsReady() bool
+}
+
+// MetricsProvider exposes the metrics snapshot for the /v1/metrics endpoint.
+type MetricsProvider interface {
 	Metrics() map[string]any
 }
 
@@ -22,11 +31,13 @@ type Upstream interface {
 // It supports OpenAI, Claude, and Gemini API formats through automatic
 // format detection and translation.
 type Handler struct {
-	upstream Upstream
+	chat   ChatProxy
+	models ModelLister
+	mtr    MetricsProvider
 }
 
-func New(upstream Upstream) *Handler {
-	return &Handler{upstream: upstream}
+func New(chat ChatProxy, models ModelLister, mtr MetricsProvider) *Handler {
+	return &Handler{chat: chat, models: models, mtr: mtr}
 }
 
 func (h *Handler) Routes() chi.Router {
