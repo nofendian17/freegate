@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"freegate/internal/httputil"
 )
 
 // TokenUsage holds token counts extracted from an upstream response.
@@ -16,17 +18,17 @@ type TokenUsage struct {
 	Total      int
 }
 
-func copyNormalized(dst http.ResponseWriter, src *http.Response, requestID string) TokenUsage {
-	ct := src.Header.Get("Content-Type")
+func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
+	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
 
 	if isStreaming {
-		return normalizeStream(dst, src.Body, requestID)
+		return normalizeStream(w, resp.Body), nil
 	}
-	return normalizeJSON(dst, src.Body, requestID)
+	return normalizeJSON(w, resp.Body), nil
 }
 
-func normalizeStream(dst io.Writer, src io.Reader, requestID string) TokenUsage {
+func normalizeStream(dst io.Writer, src io.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	rd := bufio.NewReader(src)
 	var usage TokenUsage
@@ -34,16 +36,15 @@ func normalizeStream(dst io.Writer, src io.Reader, requestID string) TokenUsage 
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil && err != io.EOF {
-			slog.Warn("stream read error", "request_id", requestID, "error", err)
+			slog.Warn("stream read error", "error", err)
 			break
 		}
 
 		if len(line) > 0 {
-			// Check for usage in this SSE line before normalizing
 			usage = extractUsageFromSSE(line, usage)
 			normalized := normalizeSSELine(line)
 			if _, werr := io.WriteString(dst, normalized); werr != nil {
-				slog.Warn("stream write error", "request_id", requestID, "error", werr)
+				slog.Warn("stream write error", "error", werr)
 				break
 			}
 			if fl != nil {
@@ -132,10 +133,10 @@ func syncDeltaReasoning(chunk map[string]interface{}) {
 	}
 }
 
-func normalizeJSON(dst io.Writer, src io.Reader, requestID string) TokenUsage {
+func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 	body, err := io.ReadAll(src)
 	if err != nil {
-		slog.Warn("failed to read response body", "request_id", requestID, "error", err)
+		slog.Warn("failed to read response body", "error", err)
 		dst.Write(body)
 		return TokenUsage{}
 	}
@@ -199,4 +200,14 @@ func syncReasoning(m map[string]interface{}) {
 		m["reasoning"] = nil
 		m["reasoning_content"] = nil
 	}
+}
+
+// NormalizeResponse copies headers from the upstream response, calls
+// WriteHeader, and streams the response body through reasoning-field
+// normalization. It owns the response body and closes it before
+// returning. TokenUsage is reported so callers can update metrics.
+func NormalizeResponse(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
+	httputil.CopyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	return copyNormalized(w, resp)
 }

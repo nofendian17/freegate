@@ -107,7 +107,7 @@ func TestNormalizeSSELine_EmptyData(t *testing.T) {
 func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeStream(&buf, strings.NewReader(input), "test-req")
+	normalizeStream(&buf, strings.NewReader(input))
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning":"thinking"`) {
@@ -121,7 +121,7 @@ func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	input := `{"choices":[{"message":{"reasoning_content":"analysis"}}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input), "test-req")
+	normalizeJSON(&buf, strings.NewReader(input))
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning":"analysis"`) {
@@ -135,7 +135,7 @@ func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 func TestNormalizeJSON_InvalidJSON(t *testing.T) {
 	input := "not json at all"
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input), "test-req")
+	normalizeJSON(&buf, strings.NewReader(input))
 	output := buf.String()
 
 	if output != input {
@@ -165,7 +165,7 @@ func TestCopyNormalized_Streaming(t *testing.T) {
 		Body:   io.NopCloser(strings.NewReader(input)),
 	}
 	w := newMockResponseWriter()
-	copyNormalized(w, src, "test-req")
+	_, _ = copyNormalized(w, src)
 	output := w.buf.String()
 
 	if !strings.Contains(output, `"reasoning_content":"thought"`) {
@@ -180,7 +180,7 @@ func TestCopyNormalized_JSON(t *testing.T) {
 		Body:   io.NopCloser(strings.NewReader(input)),
 	}
 	w := newMockResponseWriter()
-	copyNormalized(w, src, "test-req")
+	_, _ = copyNormalized(w, src)
 	output := w.buf.String()
 
 	if !strings.Contains(output, `"reasoning_content":"thought"`) {
