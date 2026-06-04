@@ -17,7 +17,7 @@ import (
 	"freegate/internal/middleware"
 	"freegate/internal/proxy"
 	"freegate/internal/infrastructure/tor"
-	"freegate/internal/collector"
+	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/ui"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/web"
@@ -68,7 +68,7 @@ func main() {
 	pc := proxy.NewClient(router).WithTorController(tc)
 
 	// Wire the collector: receives one log entry per completed proxied request.
-	recorder := collector.NewRecorder(pc.Metrics)
+	recorder := recorder.NewRecorder(pc.Metrics)
 	recorder.SetModelsFunc(pc.AllModels)
 	recorder.SetTorIPFunc(tc.CurrentIP)
 	pc.WithRequestLogger(recorder.RecordRequestLog)
