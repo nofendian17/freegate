@@ -76,7 +76,7 @@ type recordingRW struct {
 	flush  int
 }
 
-func newRec() *recordingRW { return &recordingRW{header: http.Header{}} }
+func newRec() *recordingRW                         { return &recordingRW{header: http.Header{}} }
 func (r *recordingRW) Header() http.Header         { return r.header }
 func (r *recordingRW) Write(b []byte) (int, error) { return r.buf.Write(b) }
 func (r *recordingRW) WriteHeader(c int)           { r.code = c }

@@ -16,12 +16,12 @@ type mockUpstream struct {
 	models []model.Model
 }
 
-func (m *mockUpstream) Name() string                                          { return m.name }
-func (m *mockUpstream) Match(modelID string) bool                             { return m.match(modelID) }
-func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
-func (m *mockUpstream) Models() []model.Model                                 { return m.models }
+func (m *mockUpstream) Name() string                                             { return m.name }
+func (m *mockUpstream) Match(modelID string) bool                                { return m.match(modelID) }
+func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error)    { return nil, nil }
+func (m *mockUpstream) Models() []model.Model                                    { return m.models }
 func (m *mockUpstream) Start(ctx context.Context, refreshInterval time.Duration) {}
-func (m *mockUpstream) Provider() anyllm.Provider                             { return nil }
+func (m *mockUpstream) Provider() anyllm.Provider                                { return nil }
 
 func TestRouter_Select_Match(t *testing.T) {
 	kilo := &mockUpstream{

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mozilla-ai/any-llm-go/providers"
 
 	anyllm "github.com/mozilla-ai/any-llm-go"
 
@@ -56,6 +57,35 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 	respond.Ready(w, h.upstream.IsReady())
 }
 
+// syncRequestReasoningContent populates the Reasoning field on assistant
+// messages from the wire-level "reasoning_content" key (used by DeepSeek,
+// Qwen, Moonshot, etc.). The any-llm-go Message struct expects "reasoning" as
+// the JSON tag, so "reasoning_content" is silently dropped during unmarshal.
+func syncRequestReasoningContent(params anyllm.CompletionParams, rawBody []byte) {
+	var root map[string]any
+	if err := json.Unmarshal(rawBody, &root); err != nil {
+		return
+	}
+	msgs, _ := root["messages"].([]any)
+	for i, m := range msgs {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		if role != "assistant" {
+			continue
+		}
+		rc, ok := msg["reasoning_content"].(string)
+		if !ok || rc == "" {
+			continue
+		}
+		if i < len(params.Messages) {
+			params.Messages[i].Reasoning = &providers.Reasoning{Content: rc}
+		}
+	}
+}
+
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, h.upstream.Metrics())
 }
@@ -84,5 +114,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", "messages is required and must be non-empty")
 		return
 	}
+
+	// Normalize reasoning_content on incoming assistant messages.
+	// The any-llm-go Message struct uses "reasoning" as the JSON tag, but
+	// OpenAI-compatible providers send "reasoning_content" on the wire.
+	// We check both the parsed messages (via this injection) and the raw body
+	// so that reasoning_content from client requests is forwarded upstream.
+	syncRequestReasoningContent(params, body)
+
 	h.upstream.ProxyChat(w, r, params)
 }

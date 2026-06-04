@@ -14,11 +14,11 @@ import (
 
 // mockUpstream implements handler.Upstream for testing.
 type mockUpstream struct {
-	chatCalled  bool
-	models      []model.Model
-	ready       bool
-	metrics     map[string]any
-	lastParams  anyllm.CompletionParams
+	chatCalled bool
+	models     []model.Model
+	ready      bool
+	metrics    map[string]any
+	lastParams anyllm.CompletionParams
 }
 
 func newMockUpstream() *mockUpstream {
@@ -228,5 +228,96 @@ func TestHandler_Chat_InvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestSyncRequestReasoningContent_FromReasoningContent(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello","reasoning_content":"deep thought"}]}`
+	var params anyllm.CompletionParams
+	if err := json.Unmarshal([]byte(body), &params); err != nil {
+		t.Fatal(err)
+	}
+	// Without sync, Reasoning should be nil because JSON tag is "reasoning"
+	if params.Messages[1].Reasoning != nil {
+		t.Error("expected Reasoning to be nil before sync")
+	}
+
+	syncRequestReasoningContent(params, []byte(body))
+
+	if params.Messages[1].Reasoning == nil {
+		t.Fatal("expected Reasoning to be set after sync")
+	}
+	if params.Messages[1].Reasoning.Content != "deep thought" {
+		t.Errorf("expected Reasoning.Content='deep thought', got %q", params.Messages[1].Reasoning.Content)
+	}
+}
+
+func TestSyncRequestReasoningContent_UserMessage(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"user","content":"hi","reasoning_content":"should be ignored"}]}`
+	var params anyllm.CompletionParams
+	if err := json.Unmarshal([]byte(body), &params); err != nil {
+		t.Fatal(err)
+	}
+
+	syncRequestReasoningContent(params, []byte(body))
+
+	if params.Messages[0].Reasoning != nil {
+		t.Error("expected Reasoning to be nil for user message")
+	}
+}
+
+func TestSyncRequestReasoningContent_NoReasoningContent(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"assistant","content":"hello"}]}`
+	var params anyllm.CompletionParams
+	if err := json.Unmarshal([]byte(body), &params); err != nil {
+		t.Fatal(err)
+	}
+
+	syncRequestReasoningContent(params, []byte(body))
+
+	if params.Messages[0].Reasoning != nil {
+		t.Error("expected Reasoning to remain nil")
+	}
+}
+
+func TestSyncRequestReasoningContent_NonStringReasoningContent(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"assistant","content":"hello","reasoning_content":123}]}`
+	var params anyllm.CompletionParams
+	if err := json.Unmarshal([]byte(body), &params); err != nil {
+		t.Fatal(err)
+	}
+
+	syncRequestReasoningContent(params, []byte(body))
+
+	if params.Messages[0].Reasoning != nil {
+		t.Error("expected Reasoning to remain nil for non-string reasoning_content")
+	}
+}
+
+func TestSyncRequestReasoningContent_InvalidBody(t *testing.T) {
+	body := `not json`
+	var params anyllm.CompletionParams
+	syncRequestReasoningContent(params, []byte(body))
+	// Should not panic
+}
+
+func TestHandler_Chat_WithReasoningContent(t *testing.T) {
+	u := newMockUpstream()
+	h := New(u)
+	body := `{"model":"deepseek-r1","messages":[{"role":"user","content":"think"},{"role":"assistant","content":"answer","reasoning_content":"step by step"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if u.lastParams.Messages[1].Reasoning == nil {
+		t.Fatal("expected Reasoning to be set from reasoning_content")
+	}
+	if u.lastParams.Messages[1].Reasoning.Content != "step by step" {
+		t.Errorf("expected Reasoning.Content='step by step', got %q", u.lastParams.Messages[1].Reasoning.Content)
 	}
 }

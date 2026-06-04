@@ -24,7 +24,7 @@ func writeNonStreaming(w http.ResponseWriter, resp *anyllm.ChatCompletion, usage
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
-	body, err := json.Marshal(resp)
+	body, err := marshalChatCompletion(resp)
 	if err != nil {
 		_, _ = w.Write([]byte(`{"error":{"type":"internal_error","message":"failed to serialize response"}}`))
 		return
@@ -55,7 +55,7 @@ func writeStreaming(w http.ResponseWriter, chunks <-chan anyllm.ChatCompletionCh
 			usage.Completion = chunk.Usage.CompletionTokens
 			usage.Total = chunk.Usage.TotalTokens
 		}
-		b, err := json.Marshal(chunk)
+		b, err := marshalChunk(&chunk)
 		if err != nil {
 			return fmt.Errorf("serialize chunk: %w", err)
 		}
@@ -84,4 +84,80 @@ func writeStreaming(w http.ResponseWriter, chunks <-chan anyllm.ChatCompletionCh
 		fl.Flush()
 	}
 	return nil
+}
+
+// marshalChatCompletion serializes a ChatCompletion and normalizes the
+// reasoning field to the OpenAI-compatible wire format (reasoning_content).
+func marshalChatCompletion(resp *anyllm.ChatCompletion) ([]byte, error) {
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, nil
+	}
+	fixChoicesReasoning(root)
+	return json.Marshal(root)
+}
+
+// marshalChunk serializes a ChatCompletionChunk and normalizes the
+// reasoning field in each choice's delta.
+func marshalChunk(chunk *anyllm.ChatCompletionChunk) ([]byte, error) {
+	body, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, err
+	}
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body, nil
+	}
+	fixChoicesReasoning(root)
+	return json.Marshal(root)
+}
+
+// fixChoicesReasoning walks the "choices" array in a JSON response map and
+// converts the any-llm-go "reasoning" struct (serialized as
+// "reasoning":{"content":"..."}) to the OpenAI-compatible wire format
+// "reasoning_content":"...". The non-standard "reasoning" key is dropped.
+func fixChoicesReasoning(root map[string]any) {
+	choices, _ := root["choices"].([]any)
+	for _, c := range choices {
+		choice, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if msg, ok := choice["message"].(map[string]any); ok {
+			normalizeReasoningInMessage(msg)
+		}
+		if delta, ok := choice["delta"].(map[string]any); ok {
+			normalizeReasoningInMessage(delta)
+		}
+	}
+}
+
+// normalizeReasoningInMessage converts any "reasoning":{"content":"..."} in a
+// message/delta map to the flat "reasoning_content":"..." that OpenAI-compatible
+// providers and clients expect.
+func normalizeReasoningInMessage(m map[string]any) {
+	if m == nil {
+		return
+	}
+	r, ok := m["reasoning"]
+	if !ok {
+		return
+	}
+	rMap, ok := r.(map[string]any)
+	if !ok {
+		delete(m, "reasoning")
+		return
+	}
+	if content, ok := rMap["content"]; ok {
+		if s, ok := content.(string); ok && s != "" {
+			if _, exists := m["reasoning_content"]; !exists {
+				m["reasoning_content"] = s
+			}
+		}
+	}
+	delete(m, "reasoning")
 }

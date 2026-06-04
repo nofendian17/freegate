@@ -10,6 +10,184 @@ import (
 	anyllm "github.com/mozilla-ai/any-llm-go"
 )
 
+func TestNormalizeReasoningInMessage_ConvertsReasoningObject(t *testing.T) {
+	m := map[string]any{
+		"content":   "hello",
+		"reasoning": map[string]any{"content": "step by step"},
+	}
+	normalizeReasoningInMessage(m)
+	if _, ok := m["reasoning"]; ok {
+		t.Error("expected reasoning key to be removed")
+	}
+	if got, ok := m["reasoning_content"]; !ok || got != "step by step" {
+		t.Errorf("expected reasoning_content='step by step', got %v", got)
+	}
+}
+
+func TestNormalizeReasoningInMessage_PreservesReasoningContent(t *testing.T) {
+	m := map[string]any{
+		"content":           "hello",
+		"reasoning_content": "already valid",
+		"reasoning":         map[string]any{"content": "also present"},
+	}
+	normalizeReasoningInMessage(m)
+	if _, ok := m["reasoning"]; ok {
+		t.Error("expected reasoning key to be removed")
+	}
+	if got, ok := m["reasoning_content"]; !ok || got != "already valid" {
+		t.Errorf("expected reasoning_content='already valid' (preserved), got %v", got)
+	}
+}
+
+func TestNormalizeReasoningInMessage_NoReasoning(t *testing.T) {
+	m := map[string]any{"content": "hello"}
+	normalizeReasoningInMessage(m)
+	if _, ok := m["reasoning"]; ok {
+		t.Error("expected no reasoning key")
+	}
+	if _, ok := m["reasoning_content"]; ok {
+		t.Error("expected no reasoning_content key")
+	}
+}
+
+func TestNormalizeReasoningInMessage_NonObjectReasoning(t *testing.T) {
+	m := map[string]any{
+		"content":   "hello",
+		"reasoning": "not-an-object",
+	}
+	normalizeReasoningInMessage(m)
+	if _, ok := m["reasoning"]; ok {
+		t.Error("expected reasoning key to be removed")
+	}
+	if _, ok := m["reasoning_content"]; ok {
+		t.Error("expected no reasoning_content key")
+	}
+}
+
+func TestNormalizeReasoningInMessage_EmptyContent(t *testing.T) {
+	m := map[string]any{
+		"content":   "hello",
+		"reasoning": map[string]any{"content": ""},
+	}
+	normalizeReasoningInMessage(m)
+	if _, ok := m["reasoning"]; ok {
+		t.Error("expected reasoning key to be removed")
+	}
+	if _, ok := m["reasoning_content"]; ok {
+		t.Error("expected reasoning_content to be omitted for empty content")
+	}
+}
+
+func TestMarshalChatCompletion_NormalizesReasoning(t *testing.T) {
+	resp := &anyllm.ChatCompletion{
+		ID:      "chatcmpl-1",
+		Object:  "chat.completion",
+		Model:   "test-model",
+		Choices: []anyllm.Choice{{Index: 0, Message: anyllm.Message{Role: "assistant", Content: "hi", Reasoning: &anyllm.Reasoning{Content: "thinking"}}}},
+	}
+	body, err := marshalChatCompletion(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `"reasoning":`) {
+		t.Errorf("expected no reasoning key in output: %s", body)
+	}
+	if !strings.Contains(string(body), `"reasoning_content":"thinking"`) {
+		t.Errorf("expected reasoning_content in output: %s", body)
+	}
+	var round anyllm.ChatCompletion
+	if err := json.Unmarshal(body, &round); err != nil {
+		t.Fatalf("output is not valid ChatCompletion JSON: %v\n%s", err, body)
+	}
+	if round.ID != "chatcmpl-1" {
+		t.Errorf("ID = %q, want chatcmpl-1", round.ID)
+	}
+}
+
+func TestMarshalChatCompletion_NoReasoning(t *testing.T) {
+	resp := &anyllm.ChatCompletion{
+		ID:      "chatcmpl-1",
+		Object:  "chat.completion",
+		Model:   "test-model",
+		Choices: []anyllm.Choice{{Index: 0, Message: anyllm.Message{Role: "assistant", Content: "hi"}}},
+	}
+	body, err := marshalChatCompletion(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"content":"hi"`) {
+		t.Errorf("expected content in output: %s", body)
+	}
+}
+
+func TestMarshalChunk_NormalizesReasoning(t *testing.T) {
+	chunk := &anyllm.ChatCompletionChunk{
+		ID:     "c1",
+		Object: "chat.completion.chunk",
+		Model:  "m",
+		Choices: []anyllm.ChunkChoice{{
+			Index: 0,
+			Delta: anyllm.ChunkDelta{Content: "hello", Reasoning: &anyllm.Reasoning{Content: "thinking step"}},
+		}},
+	}
+	body, err := marshalChunk(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), `"reasoning":`) {
+		t.Errorf("expected no reasoning key in chunk output: %s", body)
+	}
+	if !strings.Contains(string(body), `"reasoning_content":"thinking step"`) {
+		t.Errorf("expected reasoning_content in chunk output: %s", body)
+	}
+}
+
+func TestWriteNonStreaming_WithReasoningContent(t *testing.T) {
+	w := newRecordingWriter()
+	usage := &TokenUsage{}
+	resp := &anyllm.ChatCompletion{
+		ID:      "chatcmpl-r1",
+		Object:  "chat.completion",
+		Model:   "reasoning-model",
+		Choices: []anyllm.Choice{{Index: 0, Message: anyllm.Message{Role: "assistant", Content: "answer", Reasoning: &anyllm.Reasoning{Content: "deep thought"}}}},
+	}
+	writeNonStreaming(w, resp, usage)
+	if w.code != 200 {
+		t.Errorf("status = %d, want 200", w.code)
+	}
+	body := w.buf.String()
+	if strings.Contains(body, `"reasoning":`) {
+		t.Errorf("expected no reasoning key in output: %s", body)
+	}
+	if !strings.Contains(body, `"reasoning_content":"deep thought"`) {
+		t.Errorf("expected reasoning_content in output: %s", body)
+	}
+}
+
+func TestWriteStreaming_ChunkWithReasoningContent(t *testing.T) {
+	w := newRecordingWriter()
+	usage := &TokenUsage{}
+	chunks := make(chan anyllm.ChatCompletionChunk, 1)
+	errs := make(chan error)
+	chunks <- anyllm.ChatCompletionChunk{
+		ID: "c1", Object: "chat.completion.chunk", Model: "m",
+		Choices: []anyllm.ChunkChoice{{Index: 0, Delta: anyllm.ChunkDelta{Content: "hi", Reasoning: &anyllm.Reasoning{Content: "thinking"}}}},
+	}
+	close(chunks)
+	close(errs)
+
+	if err := writeStreaming(w, chunks, errs, usage); err != nil {
+		t.Fatalf("writeStreaming: %v", err)
+	}
+	body := w.buf.String()
+	if strings.Contains(body, `"reasoning":`) {
+		t.Errorf("expected no reasoning key in streaming output: %s", body)
+	}
+	if !strings.Contains(body, `"reasoning_content":"thinking"`) {
+		t.Errorf("expected reasoning_content in streaming output: %s", body)
+	}
+}
+
 type recordingWriter struct {
 	header  http.Header
 	buf     bytes.Buffer
@@ -86,7 +264,7 @@ func TestWriteStreaming_ChunksAndDone(t *testing.T) {
 		t.Errorf("status = %d, want 200", w.code)
 	}
 	body := w.buf.String()
-	if !strings.Contains(body, "data: {\"id\":\"c1\"") {
+	if !strings.Contains(body, `"id":"c1"`) {
 		t.Errorf("body missing c1 chunk: %s", body)
 	}
 	if !strings.Contains(body, `"content":"hello"`) {

@@ -28,11 +28,11 @@ func TestAnyLLMProvider_Match_KiloPrefixes(t *testing.T) {
 	p := &anyllmProvider{name: "kilo", prefixes: []string{"kilo/", "kilo-", "openrouter/"}}
 	cases := map[string]bool{
 		"kilo-auto/free":         true,
-		"kilo-llama-3.3":          true,
-		"openrouter/owl-alpha":    true,
-		"nvidia/nemotron-3:free":  true, // :free suffix
-		"deepseek-v4-flash-free":  false,
-		"gpt-4o":                  false,
+		"kilo-llama-3.3":         true,
+		"openrouter/owl-alpha":   true,
+		"nvidia/nemotron-3:free": true, // :free suffix
+		"deepseek-v4-flash-free": false,
+		"gpt-4o":                 false,
 	}
 	for m, want := range cases {
 		if got := p.Match(m); got != want {
