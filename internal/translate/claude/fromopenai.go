@@ -29,6 +29,11 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	if v, ok := src["max_tokens"]; ok {
 		out["max_tokens"] = v
 	}
+	// OpenAI's newer `max_completion_tokens` (o1-era) supersedes
+	// `max_tokens`; apply after the max_tokens pass-through so it wins.
+	if v, ok := src["max_completion_tokens"]; ok {
+		out["max_tokens"] = v
+	}
 	if v, ok := src["temperature"]; ok {
 		out["temperature"] = v
 	}
@@ -43,6 +48,17 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	}
 	if v, ok := src["stop_sequences"]; ok {
 		out["stop_sequences"] = v
+	}
+	// OpenAI's `stop` (string or array) maps to Claude's
+	// `stop_sequences` (always an array). Apply after the
+	// stop_sequences pass-through so OpenAI input takes precedence.
+	if v, ok := src["stop"]; ok {
+		switch s := v.(type) {
+		case string:
+			out["stop_sequences"] = []any{s}
+		case []any:
+			out["stop_sequences"] = s
+		}
 	}
 	if v, ok := src["top_k"]; ok {
 		out["top_k"] = v

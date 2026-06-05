@@ -408,3 +408,70 @@ func TestFromOpenAI_EmptyBody(t *testing.T) {
 		t.Fatal("expected error for malformed JSON")
 	}
 }
+
+func TestFromOpenAI_StopToStopSequences(t *testing.T) {
+	// OpenAI's `stop` field (string or array) maps to Claude's
+	// `stop_sequences` (always an array). A string is wrapped into a
+	// single-element array; an array passes through.
+	tests := []struct {
+		name string
+		in   string
+		want []any
+	}{
+		{"string", `{"stop":"\n"}`, []any{"\n"}},
+		{"array", `{"stop":["END","STOP"]}`, []any{"END", "STOP"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := FromOpenAI([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			seqs, ok := got["stop_sequences"].([]any)
+			if !ok {
+				t.Fatalf("stop_sequences=%v (type %T) want []any", got["stop_sequences"], got["stop_sequences"])
+			}
+			if len(seqs) != len(tc.want) {
+				t.Fatalf("stop_sequences=%v want %v", seqs, tc.want)
+			}
+			for i, want := range tc.want {
+				if seqs[i] != want {
+					t.Errorf("stop_sequences[%d]=%v want %v", i, seqs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestFromOpenAI_MaxCompletionTokens(t *testing.T) {
+	// OpenAI's `max_completion_tokens` (the newer o1-era field) maps
+	// to Claude's `max_tokens`. When both are set, the newer field
+	// wins, matching OpenAI API behavior.
+	tests := []struct {
+		name string
+		in   string
+		want float64
+	}{
+		{"only max_completion_tokens", `{"max_completion_tokens":256}`, 256},
+		{"max_completion_tokens overrides max_tokens", `{"max_tokens":100,"max_completion_tokens":256}`, 256},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := FromOpenAI([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			if got["max_tokens"] != tc.want {
+				t.Errorf("max_tokens=%v want %v", got["max_tokens"], tc.want)
+			}
+		})
+	}
+}
