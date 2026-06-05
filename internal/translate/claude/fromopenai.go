@@ -22,33 +22,19 @@ func FromOpenAI(body []byte) ([]byte, error) {
 
 	out := map[string]any{}
 
-	// Pass-through scalars
-	if v, ok := src["model"]; ok {
-		out["model"] = v
-	}
-	if v, ok := src["max_tokens"]; ok {
-		out["max_tokens"] = v
-	}
+	// Pass-through scalars via the package's copyField helper.
+	copyField(src, out, "model")
+	copyField(src, out, "max_tokens")
 	// OpenAI's newer `max_completion_tokens` (o1-era) supersedes
 	// `max_tokens`; apply after the max_tokens pass-through so it wins.
 	if v, ok := src["max_completion_tokens"]; ok {
 		out["max_tokens"] = v
 	}
-	if v, ok := src["temperature"]; ok {
-		out["temperature"] = v
-	}
-	if v, ok := src["top_p"]; ok {
-		out["top_p"] = v
-	}
-	if v, ok := src["stream"]; ok {
-		out["stream"] = v
-	}
-	if v, ok := src["metadata"]; ok {
-		out["metadata"] = v
-	}
-	if v, ok := src["stop_sequences"]; ok {
-		out["stop_sequences"] = v
-	}
+	copyField(src, out, "temperature")
+	copyField(src, out, "top_p")
+	copyField(src, out, "stream")
+	copyField(src, out, "metadata")
+	copyField(src, out, "stop_sequences")
 	// OpenAI's `stop` (string or array) maps to Claude's
 	// `stop_sequences` (always an array). Apply after the
 	// stop_sequences pass-through so OpenAI input takes precedence.
@@ -60,9 +46,7 @@ func FromOpenAI(body []byte) ([]byte, error) {
 			out["stop_sequences"] = s
 		}
 	}
-	if v, ok := src["top_k"]; ok {
-		out["top_k"] = v
-	}
+	copyField(src, out, "top_k")
 
 	// Collect system prompt: from messages[role=system] + response_format
 	// (if any). Final result is a JSON array of {type, text} blocks.
