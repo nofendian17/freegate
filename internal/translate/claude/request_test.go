@@ -216,16 +216,21 @@ func TestClaudeToOpenAI_UserMessageWithTextAndToolResult(t *testing.T) {
 	}
 
 	if len(msgs) != 4 {
-		t.Fatalf("expected 4 messages (system+nothing+assistant+user+tool from split), got %d: %+v", len(msgs), msgs)
+		t.Fatalf("expected 4 messages (system+nothing+assistant+tool+user from split), got %d: %+v", len(msgs), msgs)
 	}
 
-	textUser, _ := msgs[2].(map[string]any)
-	if textUser["role"] != "user" || textUser["content"] != "Note: please retry." {
-		t.Errorf("expected msg[2]={role:user,content:\"Note: please retry.\"}, got %+v", textUser)
-	}
-	tool, _ := msgs[3].(map[string]any)
+	// OpenAI-idiomatic order: the tool response must come right after the
+	// assistant tool_calls, before any user text from the same Claude
+	// user message. Putting the user text first causes
+	// FixMissingToolResponses to insert a synthetic duplicate tool
+	// message (see TestRequest_ClaudeMixedTextAndToolResult_NoDuplicateToolCallID).
+	tool, _ := msgs[2].(map[string]any)
 	if tool["role"] != "tool" || tool["tool_call_id"] != "tu_1" {
-		t.Errorf("expected msg[3]={role:tool,tool_call_id:tu_1}, got %+v", tool)
+		t.Errorf("expected msg[2]={role:tool,tool_call_id:tu_1}, got %+v", tool)
+	}
+	textUser, _ := msgs[3].(map[string]any)
+	if textUser["role"] != "user" || textUser["content"] != "Note: please retry." {
+		t.Errorf("expected msg[3]={role:user,content:\"Note: please retry.\"}, got %+v", textUser)
 	}
 }
 

@@ -193,15 +193,21 @@ func convertClaudeUserMessage(msg map[string]any) []any {
 		return []any{newMsg}
 	}
 
-	// Build the result list: optional text user message, then tool messages.
+	// Build the result list: tool messages first, then the user text
+	// message (if any). This is the OpenAI-idiomatic order: tool
+	// responses sit right after the assistant tool_calls. Putting the
+	// user text first breaks FixMissingToolResponses (and upstreams
+	// like MiniMax) which expect to see the tool response directly
+	// after the assistant, leading to a duplicate tool_call_id when
+	// the prepost step synthesizes a missing response.
 	var results []any
+	results = append(results, toolMessages...)
 	if len(textParts) > 0 {
 		results = append(results, map[string]any{
 			"role":    "user",
 			"content": strings.Join(textParts, "\n"),
 		})
 	}
-	results = append(results, toolMessages...)
 	return results
 }
 

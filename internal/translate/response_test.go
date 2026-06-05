@@ -49,6 +49,96 @@ func TestRequest_GeminiToOpenAI(t *testing.T) {
 	}
 }
 
+// TestRequest_ClaudeMixedTextAndToolResult_NoDuplicateToolCallID exercises the
+// full translate.Request pipeline (Claude -> OpenAI, including the prepost
+// steps) on a Claude user message that contains BOTH a text block and a
+// tool_result block. Regression test: the previous ordering put the text
+// user message before the tool response, which caused FixMissingToolResponses
+// to insert a synthetic missing tool response and produce two tool messages
+// with the same tool_call_id. MiniMax (and other strict OpenAI-compatible
+// upstreams) reject this with "invalid params, 400 (2013)".
+func TestRequest_ClaudeMixedTextAndToolResult_NoDuplicateToolCallID(t *testing.T) {
+	body := []byte(`{
+		"model":"minimax-m3-free","max_tokens":100,
+		"messages":[
+			{"role":"user","content":"What is the weather?"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"Let me check."},
+				{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"NYC"}}
+			]},
+			{"role":"user","content":[
+				{"type":"text","text":"Note: please retry."},
+				{"type":"tool_result","tool_use_id":"tu_1","content":"sunny, 72F"}
+			]}
+		]
+	}`)
+	result, err := Request(body, FormatClaude, FormatOpenAI)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	msgs, ok := openai["messages"].([]any)
+	if !ok {
+		t.Fatalf("expected messages array, got %T", openai["messages"])
+	}
+
+	// Count occurrences of each tool_call_id. Must be exactly 1 per id.
+	seen := map[string]int{}
+	toolOrder := []string{}
+	for i, mAny := range msgs {
+		m, _ := mAny.(map[string]any)
+		if m == nil {
+			t.Errorf("message %d is %T, want map (nested array bug): %+v", i, mAny, msgs)
+			continue
+		}
+		if id, ok := m["tool_call_id"].(string); ok && id != "" {
+			seen[id]++
+			toolOrder = append(toolOrder, id)
+		}
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("tool_call_id %q appears %d times, want 1 (full pipeline): %+v", id, n, msgs)
+		}
+	}
+
+	// The tool response for tu_1 must appear BEFORE the user "Note: please
+	// retry." message — the OpenAI-idiomatic order. This is what allows
+	// FixMissingToolResponses (and the upstream) to see the response and
+	// not synthesize a duplicate.
+	toolIdx, userIdx := -1, -1
+	for i, mAny := range msgs {
+		m, _ := mAny.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if id, _ := m["tool_call_id"].(string); id == "tu_1" {
+			if toolIdx == -1 {
+				toolIdx = i
+			}
+		}
+		if role, _ := m["role"].(string); role == "user" {
+			if c, _ := m["content"].(string); c == "Note: please retry." {
+				userIdx = i
+			}
+		}
+	}
+	if toolIdx == -1 {
+		t.Fatalf("no tool message for tu_1 found in: %+v", msgs)
+	}
+	if userIdx == -1 {
+		t.Fatalf("no user 'Note: please retry.' message found in: %+v", msgs)
+	}
+	if toolIdx > userIdx {
+		t.Errorf("tool response (idx %d) must come before user text (idx %d): %+v", toolIdx, userIdx, msgs)
+	}
+}
+
 func TestRequest_UnknownSource(t *testing.T) {
 	body := []byte(`{"test":true}`)
 	result, err := Request(body, "unknown", FormatOpenAI)
