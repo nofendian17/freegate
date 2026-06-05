@@ -5,10 +5,20 @@ import (
 	"fmt"
 )
 
+// SyntheticToolContent is the content used for synthetic tool-response
+// messages inserted when the conversation history is missing a tool
+// result. The text is chosen so that models (especially Claude) treat
+// the call as completed-but-failed rather than attempting to re-execute.
+const SyntheticToolContent = "[Tool result not available — execution context was lost]"
+
 // FixMissingToolResponses scans body.messages and inserts synthetic
-// {role:"tool", tool_call_id, content:""} messages after any assistant
-// message that has tool_calls but is not followed by a tool response for
-// one or more of its tool_call ids.
+// {role:"tool", tool_call_id, content: SyntheticToolContent} messages
+// after any assistant message that has tool_calls but is not followed
+// by a tool response for one or more of its tool_call ids.
+//
+// The scan for "already responded" ids looks at ALL subsequent messages
+// (not just the immediate next one), because OpenAI-format conversations
+// can have multiple consecutive role:"tool" messages — one per tool call.
 //
 // Operates on OpenAI-shaped bodies (it also tolerates Claude-shaped
 // tool_use/tool_result blocks when scanning for "responded" ids).
@@ -59,12 +69,25 @@ func FixMissingToolResponses(body []byte) ([]byte, error) {
 			continue
 		}
 
-		// Collect ids that are responded in the *next* message.
+		// Scan ALL subsequent messages for responded tool-call ids.
+		// OpenAI conversations often have multiple consecutive
+		// role:"tool" messages after a single assistant tool_calls.
 		responded := map[string]bool{}
-		if i+1 < len(msgs) {
-			next, _ := msgs[i+1].(map[string]any)
-			if next != nil {
-				collectRespondedIDs(next, responded)
+		for j := i + 1; j < len(msgs); j++ {
+			next, _ := msgs[j].(map[string]any)
+			if next == nil {
+				continue
+			}
+			role, _ := next["role"].(string)
+			// Stop scanning at the next non-tool message (except
+			// user messages that may contain Claude tool_result blocks).
+			if role != "tool" && role != "user" {
+				break
+			}
+			collectRespondedIDs(next, responded)
+			// If role is "user" without tool_result blocks, stop.
+			if role == "user" {
+				break
 			}
 		}
 
@@ -76,7 +99,7 @@ func FixMissingToolResponses(body []byte) ([]byte, error) {
 			out = append(out, map[string]any{
 				"role":         "tool",
 				"tool_call_id": id,
-				"content":      "",
+				"content":      SyntheticToolContent,
 			})
 		}
 	}
