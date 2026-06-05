@@ -361,11 +361,11 @@ func openaiMessageToBlocks(m map[string]any) ([]any, error) {
 	case "assistant":
 		return assistantContentToBlocks(m)
 	default:
-		// Unknown role: return a text block with the stringified content.
-		return []any{map[string]any{
-			"type": "text",
-			"text": contentToString(m["content"]),
-		}}, nil
+		// Unknown role: reject explicitly rather than silently
+		// coercing to a text block. A typo or a future OpenAI role
+		// should surface as a translation error so the caller can
+		// fix the upstream request, not as an invalid Claude body.
+		return nil, fmt.Errorf("unsupported role %q", role)
 	}
 }
 

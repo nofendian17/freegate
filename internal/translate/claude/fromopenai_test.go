@@ -447,6 +447,21 @@ func TestFromOpenAI_StopToStopSequences(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_UnknownRoleRejected(t *testing.T) {
+	// Unknown roles (e.g. typos, future OpenAI roles we don't
+	// support) must surface as a translation error, not be silently
+	// coerced into a text block — silent coercion masks upstream
+	// schema errors and produces invalid Claude requests.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"asistant","content":"oops typo"}
+	]}`
+	_, err := FromOpenAI([]byte(in))
+	if err == nil {
+		t.Fatal("expected error for unknown role, got nil")
+	}
+}
+
 func TestFromOpenAI_ToolArgsInvalidJSON(t *testing.T) {
 	// A tool_call with malformed `arguments` JSON must surface an error
 	// instead of silently invoking the tool with input={}. A model that
