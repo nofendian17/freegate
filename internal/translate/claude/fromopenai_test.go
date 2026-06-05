@@ -349,9 +349,247 @@ func TestFromOpenAI_ToolUseFlushedToOwnMessage(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_MultipleToolResultsGrouped(t *testing.T) {
+	// An assistant turn with N tool_calls followed by N tool messages
+	// must collapse into a single user message with N tool_result
+	// blocks — Claude rejects the alternative shape (consecutive user
+	// turns, or tool_results orphaned from their tool_use).
+	in := `{"messages":[
+		{"role":"user","content":"what's the weather in SF and NYC?"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}},
+			{"id":"c2","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"NYC\"}"}}
+		]},
+		{"role":"tool","tool_call_id":"c1","content":"72F"},
+		{"role":"tool","tool_call_id":"c2","content":"55F"}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Expect: [user, assistant{tool_use c1, tool_use c2}, user{tool_result c1, tool_result c2}]
+	if len(got.Messages) != 3 {
+		t.Fatalf("expected 3 messages (grouped), got %d: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[2].Role != "user" {
+		t.Errorf("msg[2] role=%q want user", got.Messages[2].Role)
+	}
+	results := got.Messages[2].Content
+	if len(results) != 2 {
+		t.Fatalf("expected 2 tool_result blocks in msg[2], got %d: %+v", len(results), results)
+	}
+	gotIDs := map[string]bool{}
+	for _, b := range results {
+		if b["type"] != "tool_result" {
+			t.Errorf("msg[2] block type=%q want tool_result", b["type"])
+		}
+		id, _ := b["tool_use_id"].(string)
+		gotIDs[id] = true
+	}
+	for _, want := range []string{"c1", "c2"} {
+		if !gotIDs[want] {
+			t.Errorf("missing tool_result for %q in msg[2]; got ids=%v", want, gotIDs)
+		}
+	}
+}
+
+func TestFromOpenAI_ResponseFormatSchemaCompact(t *testing.T) {
+	// The JSON schema inside the system block is wrapped in a markdown
+	// fence for Claude to read. It does not need to be indented —
+	// indentation is wasted CPU on the encoder and wasted bytes for
+	// every request with response_format=json_schema.
+	in := `{
+		"response_format":{
+			"type":"json_schema",
+			"json_schema":{"schema":{"type":"object","properties":{"a":{"type":"string"}}}}
+		},
+		"messages":[{"role":"user","content":"hi"}]
+	}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		System []struct {
+			Text string `json:"text"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(got.System) == 0 {
+		t.Fatal("expected a system block")
+	}
+	text := got.System[0].Text
+	// Indented JSON has lines that start with newline + 2 spaces.
+	// Compact JSON (json.Marshal) has neither.
+	if strings.Contains(text, "\n  ") {
+		t.Errorf("expected compact JSON, but output contains indented lines:\n%s", text)
+	}
+}
+
+func TestFromOpenAI_ToolArgsPassThroughRaw(t *testing.T) {
+	// Valid JSON arguments must pass through verbatim, not be
+	// unmarshaled into a map and re-marshaled — the round-trip would
+	// re-sort keys alphabetically and lose the original formatting.
+	// Tool input that the model produced verbatim may carry semantic
+	// structure (key order, number formatting) that the receiver
+	// should see unchanged.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"f","arguments":"{\"z\":1,\"a\":2}"}}
+		]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"z":1,"a":2`) {
+		t.Errorf("expected key order and spacing preserved (z before a, no spaces); got: %s", s)
+	}
+	if strings.Contains(s, `"a": 2, "z": 1`) {
+		t.Errorf("expected key order NOT to be re-sorted by Go's json.Marshal; got: %s", s)
+	}
+}
+
+func TestFromOpenAI_ToolChoiceNoneOmitsTools(t *testing.T) {
+	// OpenAI's tool_choice="none" means "do not call any tool".
+	// The translator must omit the `tools` block in this case —
+	// otherwise Claude sees a tools list and may still call one
+	// (Claude's tool_choice="auto" = model decides).
+	in := `{
+		"tools":[
+			{"type":"function","function":{"name":"f","description":"a tool","parameters":{"type":"object"}}}
+		],
+		"tool_choice":"none"
+	}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := got["tools"]; ok {
+		t.Errorf("expected tools to be omitted when tool_choice=none, got: %v", got["tools"])
+	}
+}
+
 func TestFromOpenAI_EmptyBody(t *testing.T) {
 	_, err := FromOpenAI([]byte(`{`))
 	if err == nil {
 		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+func TestFromOpenAI_StopToStopSequences(t *testing.T) {
+	// OpenAI's `stop` field (string or array) maps to Claude's
+	// `stop_sequences` (always an array). A string is wrapped into a
+	// single-element array; an array passes through.
+	tests := []struct {
+		name string
+		in   string
+		want []any
+	}{
+		{"string", `{"stop":"\n"}`, []any{"\n"}},
+		{"array", `{"stop":["END","STOP"]}`, []any{"END", "STOP"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := FromOpenAI([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			seqs, ok := got["stop_sequences"].([]any)
+			if !ok {
+				t.Fatalf("stop_sequences=%v (type %T) want []any", got["stop_sequences"], got["stop_sequences"])
+			}
+			if len(seqs) != len(tc.want) {
+				t.Fatalf("stop_sequences=%v want %v", seqs, tc.want)
+			}
+			for i, want := range tc.want {
+				if seqs[i] != want {
+					t.Errorf("stop_sequences[%d]=%v want %v", i, seqs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestFromOpenAI_UnknownRoleRejected(t *testing.T) {
+	// Unknown roles (e.g. typos, future OpenAI roles we don't
+	// support) must surface as a translation error, not be silently
+	// coerced into a text block — silent coercion masks upstream
+	// schema errors and produces invalid Claude requests.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"asistant","content":"oops typo"}
+	]}`
+	_, err := FromOpenAI([]byte(in))
+	if err == nil {
+		t.Fatal("expected error for unknown role, got nil")
+	}
+}
+
+func TestFromOpenAI_ToolArgsInvalidJSON(t *testing.T) {
+	// A tool_call with malformed `arguments` JSON must surface an error
+	// instead of silently invoking the tool with input={}. A model that
+	// emits invalid args would otherwise be called server-side with
+	// the wrong (empty) payload — for tools that require non-optional
+	// fields, this turns a model bug into a destructive operation.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"delete_file","arguments":"{not valid json"}}
+		]}
+	]}`
+	_, err := FromOpenAI([]byte(in))
+	if err == nil {
+		t.Fatal("expected error for invalid tool arguments JSON, got nil")
+	}
+}
+
+func TestFromOpenAI_MaxCompletionTokens(t *testing.T) {
+	// OpenAI's `max_completion_tokens` (the newer o1-era field) maps
+	// to Claude's `max_tokens`. When both are set, the newer field
+	// wins, matching OpenAI API behavior.
+	tests := []struct {
+		name string
+		in   string
+		want float64
+	}{
+		{"only max_completion_tokens", `{"max_completion_tokens":256}`, 256},
+		{"max_completion_tokens overrides max_tokens", `{"max_tokens":100,"max_completion_tokens":256}`, 256},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := FromOpenAI([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			if got["max_tokens"] != tc.want {
+				t.Errorf("max_tokens=%v want %v", got["max_tokens"], tc.want)
+			}
+		})
 	}
 }

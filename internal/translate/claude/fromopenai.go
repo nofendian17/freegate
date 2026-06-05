@@ -6,6 +6,172 @@ import (
 	"strings"
 )
 
+// ============================================================================
+// Input types — OpenAI chat-completions request body shape.
+//
+// These mirror the subset of OpenAI fields the translator needs to inspect.
+// Fields that are pure pass-through (metadata, thinking) are kept as
+// json.RawMessage to avoid unmarshal/remarshal cost.
+// ============================================================================
+
+type oaiRequest struct {
+	Model               string             `json:"model,omitempty"`
+	MaxTokens           *int               `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int               `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64           `json:"temperature,omitempty"`
+	TopP                *float64           `json:"top_p,omitempty"`
+	Stream              *bool              `json:"stream,omitempty"`
+	Metadata            json.RawMessage    `json:"metadata,omitempty"`
+	StopSequences       []string           `json:"stop_sequences,omitempty"`
+	Stop                json.RawMessage    `json:"stop,omitempty"`
+	TopK                *int               `json:"top_k,omitempty"`
+	Messages            []oaiMessage       `json:"messages"`
+	Tools               []oaiTool          `json:"tools,omitempty"`
+	ToolChoice          json.RawMessage    `json:"tool_choice,omitempty"`
+	Thinking            json.RawMessage    `json:"thinking,omitempty"`
+	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
+	ResponseFormat      *oaiResponseFormat `json:"response_format,omitempty"`
+}
+
+type oaiMessage struct {
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content,omitempty"` // string or []oaiContentPart
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
+	ToolCalls  []oaiToolCall   `json:"tool_calls,omitempty"`
+}
+
+// oaiContentPart represents one element of a content array. The same
+// shape is used for both user content (text, image_url, image,
+// tool_result) and assistant content (text, tool_use, thinking);
+// unused fields stay at their zero value.
+type oaiContentPart struct {
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	ImageURL   *oaiImageURL    `json:"image_url,omitempty"`
+	Source     json.RawMessage `json:"source,omitempty"`
+	ToolUseID  string          `json:"tool_use_id,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	IsError    *bool           `json:"is_error,omitempty"`
+	// Content on a tool_result part (string or array of parts).
+	Content json.RawMessage `json:"content,omitempty"`
+	// Assistant content only:
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+}
+
+type oaiImageURL struct {
+	URL string `json:"url"`
+}
+
+// oaiTool represents both the OpenAI shape ({type, function}) and the
+// Claude-native shape ({name, description, input_schema}) plus
+// built-in pass-through tools. Unused fields stay zero.
+type oaiTool struct {
+	Type        string           `json:"type,omitempty"`
+	Function    *oaiToolFunction `json:"function,omitempty"`
+	Name        string           `json:"name,omitempty"`
+	Description string           `json:"description,omitempty"`
+	InputSchema json.RawMessage  `json:"input_schema,omitempty"`
+	Parameters  json.RawMessage  `json:"parameters,omitempty"`
+}
+
+type oaiToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type oaiToolCall struct {
+	ID       string              `json:"id"`
+	Type     string              `json:"type,omitempty"`
+	Function oaiToolCallFunction `json:"function"`
+}
+
+type oaiToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+type oaiResponseFormat struct {
+	Type       string         `json:"type"`
+	JSONSchema *oaiJSONSchema `json:"json_schema,omitempty"`
+}
+
+type oaiJSONSchema struct {
+	Schema json.RawMessage `json:"schema,omitempty"`
+}
+
+// ============================================================================
+// Output types — Claude Messages API request body shape.
+// ============================================================================
+
+type claudeRequest struct {
+	Model         string              `json:"model,omitempty"`
+	MaxTokens     *int                `json:"max_tokens,omitempty"`
+	Temperature   *float64            `json:"temperature,omitempty"`
+	TopP          *float64            `json:"top_p,omitempty"`
+	Stream        *bool               `json:"stream,omitempty"`
+	Metadata      json.RawMessage     `json:"metadata,omitempty"`
+	StopSequences []string            `json:"stop_sequences,omitempty"`
+	TopK          *int                `json:"top_k,omitempty"`
+	System        []claudeSystemBlock `json:"system,omitempty"`
+	Messages      []claudeMessage     `json:"messages,omitempty"`
+	Tools         []claudeTool        `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage     `json:"tool_choice,omitempty"`
+	Thinking      *claudeThinking     `json:"thinking,omitempty"`
+}
+
+type claudeSystemBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type claudeMessage struct {
+	Role    string          `json:"role"`
+	Content []claudeContent `json:"content"`
+}
+
+// claudeContent is the union of all Claude content-block types.
+// Unused fields stay at their zero value, so e.g. a text block
+// marshals as {"type":"text","text":"..."} only.
+type claudeContent struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Source    json.RawMessage `json:"source,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	IsError   *bool           `json:"is_error,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+}
+
+type claudeTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+type claudeThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+type claudeToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
+}
+
+// ============================================================================
+// FromOpenAI — entry point
+// ============================================================================
+
 // FromOpenAI converts an OpenAI-format chat-completions request body to
 // Claude format. Mirrors 9router's request/openai-to-claude.js, minus
 // the Claude-OAuth tool-name prefixing and the Claude Code system-prompt
@@ -15,119 +181,83 @@ import (
 // OpenAI body (AdjustMaxTokens, EnsureToolCallIds, FixMissingToolResponses,
 // NormalizeThinkingConfig) so the input is already normalized.
 func FromOpenAI(body []byte) ([]byte, error) {
-	var src map[string]any
+	var src oaiRequest
 	if err := json.Unmarshal(body, &src); err != nil {
 		return nil, fmt.Errorf("claude: invalid FromOpenAI body: %w", err)
 	}
 
-	out := map[string]any{}
-
-	// Pass-through scalars
-	if v, ok := src["model"]; ok {
-		out["model"] = v
+	out := claudeRequest{
+		Model:         src.Model,
+		MaxTokens:     src.MaxTokens,
+		Temperature:   src.Temperature,
+		TopP:          src.TopP,
+		Stream:        src.Stream,
+		Metadata:      src.Metadata,
+		StopSequences: mergeStop(src.StopSequences, src.Stop),
+		TopK:          src.TopK,
 	}
-	if v, ok := src["max_tokens"]; ok {
-		out["max_tokens"] = v
-	}
-	if v, ok := src["temperature"]; ok {
-		out["temperature"] = v
-	}
-	if v, ok := src["top_p"]; ok {
-		out["top_p"] = v
-	}
-	if v, ok := src["stream"]; ok {
-		out["stream"] = v
-	}
-	if v, ok := src["metadata"]; ok {
-		out["metadata"] = v
-	}
-	if v, ok := src["stop_sequences"]; ok {
-		out["stop_sequences"] = v
-	}
-	if v, ok := src["top_k"]; ok {
-		out["top_k"] = v
+	// OpenAI's newer `max_completion_tokens` (o1-era) supersedes
+	// `max_tokens`; apply after the max_tokens pass-through so it wins.
+	if src.MaxCompletionTokens != nil {
+		out.MaxTokens = src.MaxCompletionTokens
 	}
 
-	// Collect system prompt: from messages[role=system] + response_format
-	// (if any). Final result is a JSON array of {type, text} blocks.
+	// System prompt: from messages[role=system] + response_format.
 	systemParts := collectSystemParts(src)
-	if rf, ok := src["response_format"].(map[string]any); ok {
-		if extra := convertResponseFormatToSystem(rf); extra != "" {
+	if src.ResponseFormat != nil {
+		if extra := convertResponseFormatToSystem(*src.ResponseFormat); extra != "" {
 			systemParts = append(systemParts, extra)
 		}
 	}
 	if len(systemParts) > 0 {
-		blocks := []any{}
+		blocks := make([]claudeSystemBlock, 0, len(systemParts))
 		for _, s := range systemParts {
-			blocks = append(blocks, map[string]any{
-				"type": "text",
-				"text": s,
-			})
+			blocks = append(blocks, claudeSystemBlock{Type: "text", Text: s})
 		}
-		out["system"] = blocks
+		out.System = blocks
 	}
 
 	// Build messages by walking non-system messages with a state machine
 	// that merges consecutive same-role entries and flushes after each
 	// tool_use (Claude requires tool_use in its own assistant message).
-	out["messages"] = buildClaudeMessages(src)
+	msgs, err := buildClaudeMessages(src)
+	if err != nil {
+		return nil, err
+	}
+	out.Messages = msgs
 
-	// Tools
-	if tools, ok := src["tools"].([]any); ok && len(tools) > 0 {
-		claudeTools := make([]any, 0, len(tools))
-		for _, tAny := range tools {
-			t, _ := tAny.(map[string]any)
-			if t == nil {
-				continue
-			}
-			// Skip built-in non-function tools (e.g. web_search_20250305)
-			// — pass through unchanged.
-			if ttype, _ := t["type"].(string); ttype != "" && ttype != "function" {
-				claudeTools = append(claudeTools, t)
-				continue
-			}
-			fn, _ := t["function"].(map[string]any)
-			if fn == nil {
-				fn = t // already in Claude form (name, description, input_schema)
-			}
-			name, _ := fn["name"].(string)
-			if name == "" {
-				continue
-			}
-			desc, _ := fn["description"].(string)
-			params := fn["parameters"]
-			if params == nil {
-				if is, ok := t["input_schema"]; ok {
-					params = is
-				} else {
-					params = map[string]any{"type": "object", "properties": map[string]any{}}
+	// Tools. OpenAI's tool_choice="none" means "do not call any tool" —
+	// omit the tools block in that case so Claude has no tools to choose
+	// from. Claude's "auto" = model decides, which would otherwise
+	// override the caller's intent.
+	if !isToolChoiceNone(src.ToolChoice) {
+		if len(src.Tools) > 0 {
+			claudeTools := make([]claudeTool, 0, len(src.Tools))
+			for _, t := range src.Tools {
+				if ct, ok := convertOaiTool(t); ok {
+					claudeTools = append(claudeTools, ct)
 				}
 			}
-			claudeTools = append(claudeTools, map[string]any{
-				"name":        name,
-				"description": desc,
-				"input_schema": params,
-			})
-		}
-		if len(claudeTools) > 0 {
-			out["tools"] = claudeTools
+			if len(claudeTools) > 0 {
+				out.Tools = claudeTools
+			}
 		}
 	}
 
 	// Tool choice
-	if tc, ok := src["tool_choice"]; ok {
-		out["tool_choice"] = convertOpenAIToolChoice(tc)
+	if len(src.ToolChoice) > 0 {
+		out.ToolChoice = convertOpenAIToolChoice(src.ToolChoice)
 	}
 
 	// Thinking: pass-through, else map reasoning_effort
-	if th, ok := src["thinking"].(map[string]any); ok {
-		out["thinking"] = th
-	} else if eff, ok := src["reasoning_effort"].(string); ok && eff != "" {
+	if len(src.Thinking) > 0 {
+		var th claudeThinking
+		if err := json.Unmarshal(src.Thinking, &th); err == nil {
+			out.Thinking = &th
+		}
+	} else if eff := src.ReasoningEffort; eff != "" {
 		if budget := reasoningEffortToBudget(eff); budget > 0 {
-			out["thinking"] = map[string]any{
-				"type":         "enabled",
-				"budget_tokens": budget,
-			}
+			out.Thinking = &claudeThinking{Type: "enabled", BudgetTokens: budget}
 		}
 	}
 
@@ -138,131 +268,51 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-func collectSystemParts(src map[string]any) []string {
-	var parts []string
-	msgs, ok := src["messages"].([]any)
-	if !ok {
-		return parts
-	}
-	for _, mAny := range msgs {
-		m, _ := mAny.(map[string]any)
-		if m == nil {
-			continue
-		}
-		role, _ := m["role"].(string)
-		if role != "system" {
-			continue
-		}
-		switch c := m["content"].(type) {
-		case string:
-			if c != "" {
-				parts = append(parts, c)
-			}
-		case []any:
-			for _, pAny := range c {
-				p, _ := pAny.(map[string]any)
-				if p == nil {
-					continue
-				}
-				if typ, _ := p["type"].(string); typ == "text" {
-					if txt, _ := p["text"].(string); txt != "" {
-						parts = append(parts, txt)
-					}
-				}
-			}
-		}
-	}
-	return parts
-}
+// ============================================================================
+// Message walker
+// ============================================================================
 
-func convertResponseFormatToSystem(rf map[string]any) string {
-	typ, _ := rf["type"].(string)
-	switch typ {
-	case "json_object":
-		return "You must respond with valid JSON. Respond ONLY with a JSON object, no other text."
-	case "json_schema":
-		js, _ := rf["json_schema"].(map[string]any)
-		schema, _ := js["schema"]
-		if schema == nil {
-			return ""
-		}
-		// Marshal the schema to indented JSON for readability.
-		schemaBytes, err := json.MarshalIndent(schema, "", "  ")
-		if err != nil {
-			return ""
-		}
-		return fmt.Sprintf(
-			"You must respond with valid JSON that strictly follows this JSON schema:\n```json\n%s\n```\nRespond ONLY with the JSON object, no other text.",
-			string(schemaBytes),
-		)
-	}
-	return ""
-}
-
-// buildClaudeMessages walks the OpenAI messages and produces Claude-
-// shaped messages, merging consecutive same-role messages and flushing
-// after any tool_use. tool_result blocks are placed in their own user
-// message immediately following the assistant tool_use, as Claude
-// requires.
-func buildClaudeMessages(src map[string]any) []any {
-	rawMsgs, _ := src["messages"].([]any)
-	if len(rawMsgs) == 0 {
-		return nil
+func buildClaudeMessages(src oaiRequest) ([]claudeMessage, error) {
+	if len(src.Messages) == 0 {
+		return nil, nil
 	}
 
-	// Filter out system messages (they go into the system array).
-	nonSystem := make([]any, 0, len(rawMsgs))
-	for _, mAny := range rawMsgs {
-		m, _ := mAny.(map[string]any)
-		if m == nil {
-			continue
-		}
-		if role, _ := m["role"].(string); role == "system" {
-			continue
-		}
-		nonSystem = append(nonSystem, mAny)
-	}
-
-	var out []any
+	var out []claudeMessage
 	var currentRole string
-	var currentBlocks []any
+	var currentBlocks []claudeContent
 
 	flush := func() {
 		if currentRole != "" && len(currentBlocks) > 0 {
-			out = append(out, map[string]any{
-				"role":    currentRole,
-				"content": currentBlocks,
+			out = append(out, claudeMessage{
+				Role:    currentRole,
+				Content: currentBlocks,
 			})
 		}
 		currentRole = ""
 		currentBlocks = nil
 	}
 
-	for _, mAny := range nonSystem {
-		m, _ := mAny.(map[string]any)
-		role, _ := m["role"].(string)
-		// "tool" messages in OpenAI become Claude "user" messages with
-		// tool_result blocks; "user" stays "user"; everything else
-		// becomes "assistant".
-		newRole := role
-		if role == "tool" || role == "user" {
+	for _, m := range src.Messages {
+		if m.Role == "system" {
+			continue
+		}
+		// "tool" and "user" messages become Claude "user" messages;
+		// "assistant" stays "assistant" (the zero value, no rewrite
+		// needed). Unknown roles are rejected upstream by
+		// openaiMessageToBlocks, so no default branch is necessary.
+		newRole := m.Role
+		if m.Role == "tool" || m.Role == "user" {
 			newRole = "user"
-		} else if role == "assistant" {
-			newRole = "assistant"
-		} else {
-			// Unknown role: pass through as-is.
-			newRole = role
 		}
 
-		blocks := openaiMessageToBlocks(m)
+		blocks, err := openaiMessageToBlocks(m)
+		if err != nil {
+			return nil, err
+		}
 		hasToolResult := false
 		hasToolUse := false
-		for _, bAny := range blocks {
-			b, _ := bAny.(map[string]any)
-			if b == nil {
-				continue
-			}
-			switch b["type"] {
+		for _, b := range blocks {
+			switch b.Type {
 			case "tool_result":
 				hasToolResult = true
 			case "tool_use":
@@ -274,23 +324,25 @@ func buildClaudeMessages(src map[string]any) []any {
 		// separate user message. Flush any in-progress user message,
 		// push the tool_result blocks alone, then continue accumulating
 		// the non-tool_result parts under a fresh role.
+		//
+		// If the previous emitted message is already a user message of
+		// pure tool_result blocks, merge into it — Claude requires all
+		// tool_results for an assistant turn to live in a single user
+		// message immediately following the tool_use, and consecutive
+		// OpenAI tool messages are how multi-call responses arrive.
 		if hasToolResult {
-			toolResults := []any{}
-			others := []any{}
-			for _, bAny := range blocks {
-				b, _ := bAny.(map[string]any)
-				if b != nil && b["type"] == "tool_result" {
-					toolResults = append(toolResults, bAny)
+			toolResults := []claudeContent{}
+			others := []claudeContent{}
+			for _, b := range blocks {
+				if b.Type == "tool_result" {
+					toolResults = append(toolResults, b)
 				} else {
-					others = append(others, bAny)
+					others = append(others, b)
 				}
 			}
 			flush()
 			if len(toolResults) > 0 {
-				out = append(out, map[string]any{
-					"role":    "user",
-					"content": toolResults,
-				})
+				out = pushOrMergeToolResults(out, toolResults)
 			}
 			if len(others) > 0 {
 				currentRole = newRole
@@ -313,244 +365,431 @@ func buildClaudeMessages(src map[string]any) []any {
 	}
 
 	flush()
-	return out
+	return out, nil
 }
 
-// openaiMessageToBlocks converts a single OpenAI message into Claude
-// content blocks. Pure conversion: no role mapping, no merging.
-func openaiMessageToBlocks(m map[string]any) []any {
-	switch role := m["role"].(string); role {
+func openaiMessageToBlocks(m oaiMessage) ([]claudeContent, error) {
+	switch m.Role {
 	case "tool":
 		// tool_call_id + content → tool_result block
-		id, _ := m["tool_call_id"].(string)
-		return []any{
-			map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": id,
-				"content":     contentToString(m["content"]),
-			},
-		}
+		return []claudeContent{{
+			Type:      "tool_result",
+			ToolUseID: m.ToolCallID,
+			Content:   contentToStringRaw(m.Content),
+		}}, nil
 	case "user":
-		return userContentToBlocks(m)
+		return userContentToBlocks(m), nil
 	case "assistant":
 		return assistantContentToBlocks(m)
 	default:
-		// Unknown role: return a text block with the stringified content.
-		return []any{map[string]any{
-			"type": "text",
-			"text": contentToString(m["content"]),
-		}}
+		// Unknown role: reject explicitly rather than silently
+		// coercing to a text block. A typo or a future OpenAI role
+		// should surface as a translation error so the caller can
+		// fix the upstream request, not as an invalid Claude body.
+		return nil, fmt.Errorf("unsupported role %q", m.Role)
 	}
 }
 
-func userContentToBlocks(m map[string]any) []any {
-	switch c := m["content"].(type) {
-	case string:
-		if c == "" {
+func userContentToBlocks(m oaiMessage) []claudeContent {
+	s, parts, ok := splitContent(m.Content)
+	if !ok {
+		return nil
+	}
+	if s != "" {
+		if s == "" {
 			return nil
 		}
-		return []any{map[string]any{"type": "text", "text": c}}
-	case []any:
-		var blocks []any
-		for _, pAny := range c {
-			p, _ := pAny.(map[string]any)
-			if p == nil {
+		return []claudeContent{{Type: "text", Text: s}}
+	}
+	var blocks []claudeContent
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				blocks = append(blocks, claudeContent{Type: "text", Text: p.Text})
+			}
+		case "tool_result":
+			blk := claudeContent{
+				Type:      "tool_result",
+				ToolUseID: p.ToolUseID,
+				Content:   contentToStringRaw(p.Content),
+			}
+			if p.IsError != nil && *p.IsError {
+				isErr := true
+				blk.IsError = &isErr
+			}
+			blocks = append(blocks, blk)
+		case "image_url":
+			if p.ImageURL == nil || p.ImageURL.URL == "" {
 				continue
 			}
-			typ, _ := p["type"].(string)
-			switch typ {
-			case "text":
-				if txt, _ := p["text"].(string); txt != "" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": txt})
-				}
-			case "tool_result":
-				blk := map[string]any{
-					"type":        "tool_result",
-					"tool_use_id": p["tool_use_id"],
-					"content":     contentToString(p["content"]),
-				}
-				if isErr, ok := p["is_error"].(bool); ok && isErr {
-					blk["is_error"] = true
-				}
+			if blk, ok := imageURLToImageBlock(p.ImageURL.URL); ok {
 				blocks = append(blocks, blk)
-			case "image_url":
-				iu, _ := p["image_url"].(map[string]any)
-				url, _ := iu["url"].(string)
-				if url == "" {
-					continue
-				}
-				if blk, ok := imageURLToImageBlock(url); ok {
-					blocks = append(blocks, blk)
-				}
-			case "image":
-				if src, ok := p["source"].(map[string]any); ok {
-					blocks = append(blocks, map[string]any{"type": "image", "source": src})
-				}
 			}
-		}
-		return blocks
-	}
-	return nil
-}
-
-func assistantContentToBlocks(m map[string]any) []any {
-	var blocks []any
-	switch c := m["content"].(type) {
-	case string:
-		if c != "" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": c})
-		}
-	case []any:
-		for _, pAny := range c {
-			p, _ := pAny.(map[string]any)
-			if p == nil {
-				continue
+		case "image":
+			if len(p.Source) > 0 {
+				blocks = append(blocks, claudeContent{Type: "image", Source: p.Source})
 			}
-			typ, _ := p["type"].(string)
-			switch typ {
-			case "text":
-				if txt, _ := p["text"].(string); txt != "" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": txt})
-				}
-			case "tool_use":
-				tu := map[string]any{
-					"type": "tool_use",
-					"id":   p["id"],
-					"name": p["name"],
-				}
-				if input, ok := p["input"]; ok {
-					tu["input"] = input
-				} else {
-					tu["input"] = map[string]any{}
-				}
-				blocks = append(blocks, tu)
-			case "thinking":
-				// Strip cache_control if present.
-				tb := map[string]any{"type": "thinking"}
-				if t, _ := p["thinking"].(string); t != "" {
-					tb["thinking"] = t
-				}
-				if s, _ := p["signature"].(string); s != "" {
-					tb["signature"] = s
-				}
-				blocks = append(blocks, tb)
-			}
-		}
-	}
-
-	// OpenAI tool_calls → Claude tool_use blocks
-	if tcs, ok := m["tool_calls"].([]any); ok {
-		for _, tcAny := range tcs {
-			tc, _ := tcAny.(map[string]any)
-			if tc == nil {
-				continue
-			}
-			fn, _ := tc["function"].(map[string]any)
-			name, _ := fn["name"].(string)
-			id, _ := tc["id"].(string)
-			input := parseToolArgs(fn["arguments"])
-			blocks = append(blocks, map[string]any{
-				"type":  "tool_use",
-				"id":    id,
-				"name":  name,
-				"input": input,
-			})
 		}
 	}
 	return blocks
 }
 
-func parseToolArgs(raw any) any {
-	switch v := raw.(type) {
-	case nil:
-		return map[string]any{}
-	case string:
-		if v == "" {
-			return map[string]any{}
+func assistantContentToBlocks(m oaiMessage) ([]claudeContent, error) {
+	var blocks []claudeContent
+	if s, parts, ok := splitContent(m.Content); ok {
+		if s != "" {
+			blocks = append(blocks, claudeContent{Type: "text", Text: s})
 		}
-		var parsed any
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			return map[string]any{}
+		for _, p := range parts {
+			switch p.Type {
+			case "text":
+				if p.Text != "" {
+					blocks = append(blocks, claudeContent{Type: "text", Text: p.Text})
+				}
+			case "tool_use":
+				blk := claudeContent{
+					Type: "tool_use",
+					ID:   p.ID,
+					Name: p.Name,
+				}
+				if len(p.Input) > 0 {
+					blk.Input = p.Input
+				} else {
+					blk.Input = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, blk)
+			case "thinking":
+				// Strip cache_control if present (it's not a declared
+				// field, so the typed decode drops it automatically).
+				blocks = append(blocks, claudeContent{
+					Type:      "thinking",
+					Thinking:  p.Thinking,
+					Signature: p.Signature,
+				})
+			}
 		}
-		return parsed
-	default:
-		return v
 	}
+
+	// OpenAI tool_calls → Claude tool_use blocks
+	for _, tc := range m.ToolCalls {
+		input, err := parseToolArgs(tc.Function.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, claudeContent{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: input,
+		})
+	}
+	return blocks, nil
 }
 
-func imageURLToImageBlock(url string) (map[string]any, bool) {
+// ============================================================================
+// System prompt & response_format
+// ============================================================================
+
+func collectSystemParts(src oaiRequest) []string {
+	var parts []string
+	for _, m := range src.Messages {
+		if m.Role != "system" {
+			continue
+		}
+		s, parts2, ok := splitContent(m.Content)
+		if !ok {
+			continue
+		}
+		if s != "" {
+			parts = append(parts, s)
+			continue
+		}
+		for _, p := range parts2 {
+			if p.Type == "text" && p.Text != "" {
+				parts = append(parts, p.Text)
+			}
+		}
+	}
+	return parts
+}
+
+func convertResponseFormatToSystem(rf oaiResponseFormat) string {
+	switch rf.Type {
+	case "json_object":
+		return "You must respond with valid JSON. Respond ONLY with a JSON object, no other text."
+	case "json_schema":
+		if rf.JSONSchema == nil || len(rf.JSONSchema.Schema) == 0 {
+			return ""
+		}
+		// Marshal the schema to compact JSON. The result is wrapped
+		// in a markdown code fence, so indentation is wasted CPU and
+		// bytes on every request. If the input is already valid JSON,
+		// pass it through; otherwise re-marshal via interface{} to
+		// normalize spacing.
+		schemaBytes := rf.JSONSchema.Schema
+		if !json.Valid(schemaBytes) {
+			var v any
+			if err := json.Unmarshal(schemaBytes, &v); err != nil {
+				return ""
+			}
+			if b, err := json.Marshal(v); err == nil {
+				schemaBytes = b
+			} else {
+				return ""
+			}
+		}
+		return fmt.Sprintf(
+			"You must respond with valid JSON that strictly follows this JSON schema:\n```json\n%s\n```\nRespond ONLY with the JSON object, no other text.",
+			string(schemaBytes),
+		)
+	}
+	return ""
+}
+
+// ============================================================================
+// Tool & tool_choice
+// ============================================================================
+
+// convertOaiTool converts an OpenAI tool definition to Claude form.
+// Returns ok=false for tools that should be skipped (no name, or
+// non-function built-ins that don't fit the typed struct).
+func convertOaiTool(t oaiTool) (claudeTool, bool) {
+	// Built-in non-function tool (e.g. web_search_20250305) — the
+	// typed claudeTool struct can't represent it, so we drop it.
+	// Callers can extend this if they need pass-through for specific
+	// built-in types.
+	if t.Type != "" && t.Type != "function" {
+		return claudeTool{}, false
+	}
+	var name, desc string
+	var params json.RawMessage
+	if t.Function != nil {
+		name = t.Function.Name
+		desc = t.Function.Description
+		params = t.Function.Parameters
+	} else {
+		// Already in Claude form (function absent).
+		name = t.Name
+		desc = t.Description
+		params = t.InputSchema
+	}
+	if name == "" {
+		return claudeTool{}, false
+	}
+	if len(params) == 0 {
+		// Some clients put OpenAI's parameters at the top level when
+		// there's no function wrapper.
+		if len(t.Parameters) > 0 {
+			params = t.Parameters
+		} else {
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+	}
+	return claudeTool{
+		Name:        name,
+		Description: desc,
+		InputSchema: params,
+	}, true
+}
+
+func isToolChoiceNone(raw json.RawMessage) bool {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s == "none"
+	}
+	return false
+}
+
+func convertOpenAIToolChoice(raw json.RawMessage) json.RawMessage {
+	out := claudeToolChoice{Type: "auto"}
+	if len(raw) == 0 {
+		return mustMarshal(out)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		switch s {
+		case "required":
+			out.Type = "any"
+		}
+		return mustMarshal(out)
+	}
+	var obj struct {
+		Type     string `json:"type"`
+		Name     string `json:"name,omitempty"`
+		Function *struct {
+			Name string `json:"name"`
+		} `json:"function,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		switch obj.Type {
+		case "auto", "any":
+			out.Type = obj.Type
+		case "tool":
+			if obj.Name != "" {
+				out.Type = "tool"
+				out.Name = obj.Name
+			}
+		default:
+			// OpenAI object shape: {type:"function", function:{name}}
+			if obj.Function != nil && obj.Function.Name != "" {
+				out.Type = "tool"
+				out.Name = obj.Function.Name
+			}
+		}
+	}
+	return mustMarshal(out)
+}
+
+// ============================================================================
+// Image, content, args helpers
+// ============================================================================
+
+func imageURLToImageBlock(url string) (claudeContent, bool) {
 	const dataPrefix = "data:"
 	if !strings.HasPrefix(url, dataPrefix) {
 		// External http(s) URL — Claude supports source.url since 2024.
 		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
-			return map[string]any{
-				"type":   "image",
-				"source": map[string]any{"type": "url", "url": url},
+			return claudeContent{
+				Type:   "image",
+				Source: json.RawMessage(fmt.Sprintf(`{"type":"url","url":%q}`, url)),
 			}, true
 		}
-		return nil, false
+		return claudeContent{}, false
 	}
 	// data:<media>;base64,<data>
 	rest := strings.TrimPrefix(url, dataPrefix)
 	parts := strings.SplitN(rest, ";", 2)
 	if len(parts) != 2 {
-		return nil, false
+		return claudeContent{}, false
 	}
 	mediaType := parts[0]
 	encAndData := parts[1]
 	const base64Prefix = "base64,"
 	if !strings.HasPrefix(encAndData, base64Prefix) {
-		return nil, false
+		return claudeContent{}, false
 	}
 	data := strings.TrimPrefix(encAndData, base64Prefix)
 	if data == "" {
-		return nil, false
+		return claudeContent{}, false
 	}
-	return map[string]any{
-		"type": "image",
-		"source": map[string]any{
-			"type":       "base64",
-			"media_type": mediaType,
-			"data":       data,
-		},
+	return claudeContent{
+		Type: "image",
+		Source: json.RawMessage(fmt.Sprintf(
+			`{"type":"base64","media_type":%q,"data":%q}`, mediaType, data,
+		)),
 	}, true
 }
 
-func convertOpenAIToolChoice(raw any) any {
-	if raw == nil {
-		return map[string]any{"type": "auto"}
+func parseToolArgs(s string) (json.RawMessage, error) {
+	if s == "" {
+		return json.RawMessage(`{}`), nil
 	}
-	switch v := raw.(type) {
-	case string:
-		switch v {
-		case "required":
-			return map[string]any{"type": "any"}
-		case "auto", "none":
-			return map[string]any{"type": "auto"}
-		default:
-			return map[string]any{"type": "auto"}
-		}
-	case map[string]any:
-		// Already a Claude-style object?
-		if typ, ok := v["type"].(string); ok {
-			switch typ {
-			case "auto", "any", "tool":
-				if typ == "tool" {
-					if name, ok := v["name"].(string); ok {
-						return map[string]any{"type": "tool", "name": name}
-					}
-				}
-				return map[string]any{"type": typ}
+	// Validate the JSON, then pass it through verbatim. s is a Go
+	// string holding the JSON bytes the upstream produced; rejecting
+	// malformed input here surfaces model bugs at the translator
+	// boundary instead of silently calling the tool with `{}`.
+	if !json.Valid([]byte(s)) {
+		return nil, fmt.Errorf("parse tool arguments: invalid JSON")
+	}
+	return json.RawMessage(s), nil
+}
+
+// contentToStringRaw converts a tool/content json.RawMessage (which can
+// be a string, an array of content parts, or a single part) to a flat
+// string for embedding in a tool_result block.
+func contentToStringRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var arr []oaiContentPart
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		var parts []string
+		for _, p := range arr {
+			if p.Text != "" {
+				parts = append(parts, p.Text)
 			}
 		}
-		// OpenAI object shape: {type:"function", function:{name}}
-		if fn, ok := v["function"].(map[string]any); ok {
-			if name, _ := fn["name"].(string); name != "" {
-				return map[string]any{"type": "tool", "name": name}
-			}
+		return strings.Join(parts, "\n")
+	}
+	return string(raw)
+}
+
+// ============================================================================
+// Small utilities
+// ============================================================================
+
+// splitContent decodes an OAI content field (string or []oaiContentPart)
+// into its two possible forms. ok=false if the content is neither shape.
+func splitContent(raw json.RawMessage) (string, []oaiContentPart, bool) {
+	if len(raw) == 0 {
+		return "", nil, true
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil, true
+	}
+	var arr []oaiContentPart
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return "", arr, true
+	}
+	return "", nil, false
+}
+
+// mergeStop combines OpenAI's stop_sequences and stop into Claude's
+// stop_sequences. OpenAI's stop takes precedence when present.
+func mergeStop(stopSequences []string, stop json.RawMessage) []string {
+	if len(stop) == 0 {
+		return stopSequences
+	}
+	var s string
+	if err := json.Unmarshal(stop, &s); err == nil {
+		return []string{s}
+	}
+	var arr []string
+	if err := json.Unmarshal(stop, &arr); err == nil {
+		return arr
+	}
+	return stopSequences
+}
+
+// mustMarshal is a small helper for marshaling values where the only
+// possible error is a programming bug (unmarshaleable type).
+func mustMarshal(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+// pushOrMergeToolResults appends tool_result blocks to a Claude
+// messages slice, merging into the previous user message when it
+// already contains only tool_result blocks. Claude requires all
+// tool_results responding to a single assistant tool_use turn to
+// live in one user message; consecutive OpenAI tool messages
+// (one per tool_call) are how multi-call responses arrive.
+func pushOrMergeToolResults(out []claudeMessage, toolResults []claudeContent) []claudeMessage {
+	if n := len(out); n > 0 {
+		if out[n-1].Role == "user" && isAllToolResults(out[n-1].Content) {
+			out[n-1].Content = append(out[n-1].Content, toolResults...)
+			return out
 		}
 	}
-	return map[string]any{"type": "auto"}
+	return append(out, claudeMessage{
+		Role:    "user",
+		Content: toolResults,
+	})
+}
+
+func isAllToolResults(blocks []claudeContent) bool {
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			return false
+		}
+	}
+	return true
 }
 
 func reasoningEffortToBudget(effort string) int {
