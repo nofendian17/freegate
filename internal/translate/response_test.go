@@ -62,7 +62,7 @@ func TestRequest_UnknownSource(t *testing.T) {
 
 func TestResponseJSON_OpenAI(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"hi"}}]}`)
-	result, err := ResponseJSON(body, FormatOpenAI)
+	result, err := ResponseJSON(body, FormatOpenAI, FormatOpenAI)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,9 +71,9 @@ func TestResponseJSON_OpenAI(t *testing.T) {
 	}
 }
 
-func TestResponseJSON_Claude(t *testing.T) {
+func TestResponseJSON_OpenAIToClaude(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"content":"Hello world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
-	result, err := ResponseJSON(body, FormatClaude)
+	result, err := ResponseJSON(body, FormatOpenAI, FormatClaude)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -82,6 +82,19 @@ func TestResponseJSON_Claude(t *testing.T) {
 	json.Unmarshal(result, &claude)
 	if claude["type"] != "message" {
 		t.Errorf("expected type=message, got %v", claude["type"])
+	}
+}
+
+func TestResponseJSON_ClaudeToOpenAI(t *testing.T) {
+	body := []byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}`)
+	result, err := ResponseJSON(body, FormatClaude, FormatOpenAI)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var openai map[string]any
+	_ = json.Unmarshal(result, &openai)
+	if openai["object"] != "chat.completion" {
+		t.Errorf("expected object=chat.completion, got %v", openai["object"])
 	}
 }
 
@@ -239,8 +252,11 @@ func (w *writeOnlyWriter) Write(p []byte) (int, error) {
 func TestNewResponseWriter_NilFormat(t *testing.T) {
 	inner := httptest.NewRecorder()
 	rw := NewResponseWriter(inner, "")
-	if rw.format != "" {
-		t.Errorf("expected empty format, got %s", rw.format)
+	if rw.dst != "" {
+		t.Errorf("expected empty dst, got %s", rw.dst)
+	}
+	if rw.src != FormatOpenAI {
+		t.Errorf("expected src=FormatOpenAI, got %s", rw.src)
 	}
 }
 

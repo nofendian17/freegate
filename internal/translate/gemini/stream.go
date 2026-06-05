@@ -1,20 +1,44 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 )
 
-// geminiStreamState tracks state for OpenAI → Gemini streaming translation.
-type geminiStreamState struct {
+// StreamState tracks state for OpenAI → Gemini streaming translation.
+type StreamState struct {
 	textBuffer   string
 	finishReason string
 	usage        map[string]any
 	closed       bool
+	sseBuf       bytes.Buffer
 }
 
-// processGeminiChunk converts an OpenAI SSE chunk to Gemini SSE format.
+// Feed appends incoming bytes and returns complete newline-terminated
+// lines. Partial trailing data is retained for the next call.
+func (s *StreamState) Feed(p []byte) []string {
+	s.sseBuf.Write(p)
+	data := s.sseBuf.String()
+	var lines []string
+	for {
+		idx := bytes.IndexByte([]byte(data), '\n')
+		if idx < 0 {
+			break
+		}
+		lines = append(lines, data[:idx])
+		data = data[idx+1:]
+	}
+	s.sseBuf.Reset()
+	s.sseBuf.WriteString(data)
+	return lines
+}
+
+// IsClosed reports whether the stream has finished.
+func (s *StreamState) IsClosed() bool { return s.closed }
+
+// ProcessChunk converts an OpenAI SSE chunk to Gemini SSE format.
 // Returns the formatted SSE line(s) to send to the client, or nil to skip.
-func processGeminiChunk(chunk map[string]any, state *geminiStreamState) []string {
+func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 	if state.closed {
 		return nil
 	}
@@ -82,7 +106,23 @@ func processGeminiChunk(chunk map[string]any, state *geminiStreamState) []string
 	return []string{"data: " + string(data) + "\n\n"}
 }
 
-// NewGeminiStreamState creates a new Gemini streaming state.
-func NewGeminiStreamState() *geminiStreamState {
-	return &geminiStreamState{}
+// NewStreamState creates a new Gemini streaming state.
+func NewStreamState() *StreamState {
+	return &StreamState{}
+}
+
+// --- Legacy aliases for backward compatibility with internal callers
+// that pre-date the public streaming API. ---
+
+// geminiStreamState is the legacy name; new code should use StreamState.
+type geminiStreamState = StreamState
+
+// processGeminiChunk is the legacy name; new code should use ProcessChunk.
+func processGeminiChunk(chunk map[string]any, state *StreamState) []string {
+	return ProcessChunk(chunk, state)
+}
+
+// NewGeminiStreamState is the legacy name; new code should use NewStreamState.
+func NewGeminiStreamState() *StreamState {
+	return NewStreamState()
 }

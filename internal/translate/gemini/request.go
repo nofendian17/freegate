@@ -3,8 +3,11 @@ package gemini
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var invalidGeminiIDChars = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 // ToOpenAI translates a Gemini-format request body to OpenAI format.
 // Gemini reference: https://ai.google.dev/api/generate-content
@@ -43,15 +46,17 @@ func ToOpenAI(body []byte) ([]byte, error) {
 		}
 	}
 
-	// Convert contents → messages
+	// Convert contents → messages (a single Gemini content can produce
+	// multiple OpenAI messages — e.g. a functionResponse part becomes
+	// a {role:"tool"} message).
 	if contents, ok := gemini["contents"].([]any); ok {
 		for _, c := range contents {
 			content, ok := c.(map[string]any)
 			if !ok {
 				continue
 			}
-			msg := convertGeminiContent(content)
-			messages = append(messages, msg)
+			msgs := convertGeminiContent(content)
+			messages = append(messages, msgs...)
 		}
 	}
 
@@ -105,9 +110,13 @@ func ToOpenAI(body []byte) ([]byte, error) {
 	return result, nil
 }
 
-// convertGeminiContent converts a Gemini content object to an OpenAI message.
-func convertGeminiContent(content map[string]any) map[string]any {
-	role, _ := content["role"].(string)
+// convertGeminiContent converts a Gemini content object to one or more
+// OpenAI messages. A single Gemini content can produce multiple OpenAI
+// messages when it contains a functionResponse part: that becomes a
+// {role:"tool"} message emitted *before* any text/image content from
+// the same Gemini content.
+func convertGeminiContent(input map[string]any) []any {
+	role, _ := input["role"].(string)
 	switch role {
 	case "model":
 		role = "assistant"
@@ -115,59 +124,146 @@ func convertGeminiContent(content map[string]any) map[string]any {
 		role = "user"
 	}
 
-	parts, _ := content["parts"].([]any)
+	parts, _ := input["parts"].([]any)
 	if len(parts) == 0 {
-		return map[string]any{"role": role, "content": ""}
+		return []any{map[string]any{"role": role, "content": ""}}
 	}
 
-	// If single text part, return as string
-	if len(parts) == 1 {
-		if p, ok := parts[0].(map[string]any); ok {
-			if txt, ok := p["text"].(string); ok {
-				return map[string]any{"role": role, "content": txt}
-			}
-		}
-	}
+	var textParts []string
+	var imageBlocks []any
+	var toolCalls []any
+	var toolResponses []any
 
-	// Multiple parts → array content
-	var contentBlocks []any
-	for _, p := range parts {
+	for i, p := range parts {
 		part, ok := p.(map[string]any)
 		if !ok {
 			continue
 		}
 		if txt, ok := part["text"].(string); ok && txt != "" {
-			contentBlocks = append(contentBlocks, map[string]any{
-				"type": "text",
-				"text": txt,
-			})
+			textParts = append(textParts, txt)
 		}
 		if id, ok := part["inlineData"].(map[string]any); ok {
 			mimeType, _ := id["mimeType"].(string)
-			data, _ := id["data"].(string)
 			if mimeType == "" {
 				mimeType = "image/png"
 			}
-			contentBlocks = append(contentBlocks, map[string]any{
+			data, _ := id["data"].(string)
+			imageBlocks = append(imageBlocks, map[string]any{
 				"type": "image_url",
 				"image_url": map[string]any{
 					"url": fmt.Sprintf("data:%s;base64,%s", mimeType, data),
 				},
 			})
 		}
-	}
-
-	if len(contentBlocks) == 0 {
-		return map[string]any{"role": role, "content": ""}
-	}
-	if len(contentBlocks) == 1 {
-		if c, ok := contentBlocks[0].(map[string]any); ok && c["type"] == "text" {
-			if txt, ok := c["text"].(string); ok {
-				return map[string]any{"role": role, "content": txt}
+		if fc, ok := part["functionCall"].(map[string]any); ok {
+			name, _ := fc["name"].(string)
+			if name == "" {
+				continue
 			}
+			args, _ := fc["args"].(map[string]any)
+			if args == nil {
+				args = map[string]any{}
+			}
+			argsBytes, _ := json.Marshal(args)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   geminiToolCallID(name, i),
+				"type": "function",
+				"function": map[string]any{
+					"name":      name,
+					"arguments": string(argsBytes),
+				},
+			})
+		}
+		if fr, ok := part["functionResponse"].(map[string]any); ok {
+			id, _ := fr["id"].(string)
+			if id == "" {
+				if name, _ := fr["name"].(string); name != "" {
+					id = name
+				}
+			}
+			if id == "" {
+				continue
+			}
+			payload := extractFunctionResponseContent(fr["response"])
+			payloadBytes, _ := json.Marshal(payload)
+			toolResponses = append(toolResponses, map[string]any{
+				"role":         "tool",
+				"tool_call_id": id,
+				"content":      string(payloadBytes),
+			})
 		}
 	}
-	return map[string]any{"role": role, "content": contentBlocks}
+
+	out := make([]any, 0, 1+len(toolResponses))
+
+	// Tool responses come first (separate messages).
+	out = append(out, toolResponses...)
+
+	if role == "assistant" && len(toolCalls) > 0 {
+		msg := map[string]any{
+			"role":       "assistant",
+			"tool_calls": toolCalls,
+		}
+		switch {
+		case len(textParts) == 0:
+			msg["content"] = ""
+		case len(textParts) == 1:
+			msg["content"] = textParts[0]
+		default:
+			msg["content"] = textParts
+		}
+		out = append(out, msg)
+		return out
+	}
+
+	// Plain user / assistant message (no tool_calls).
+	var content any
+	switch {
+	case len(imageBlocks) == 0:
+		switch {
+		case len(textParts) == 0:
+			content = ""
+		case len(textParts) == 1:
+			content = textParts[0]
+		default:
+			content = textParts
+		}
+	default:
+		// Mix of text and images → array content.
+		blocks := make([]any, 0, len(textParts)+len(imageBlocks))
+		for _, t := range textParts {
+			blocks = append(blocks, map[string]any{"type": "text", "text": t})
+		}
+		blocks = append(blocks, imageBlocks...)
+		content = blocks
+	}
+	out = append(out, map[string]any{"role": role, "content": content})
+	return out
+}
+
+// extractFunctionResponseContent returns the inner "result" payload of
+// a Gemini functionResponse.response, falling back to the whole object
+// when no result key is present.
+func extractFunctionResponseContent(raw any) any {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw
+	}
+	if r, ok := m["result"]; ok {
+		return r
+	}
+	return m
+}
+
+// geminiToolCallID synthesizes a deterministic OpenAI tool_call.id from
+// the Gemini function name and the part index. Keeps ids unique within
+// a single content and Anthropic-pattern-clean.
+func geminiToolCallID(name string, partIndex int) string {
+	safe := invalidGeminiIDChars.ReplaceAllString(name, "_")
+	if safe == "" {
+		safe = "f"
+	}
+	return fmt.Sprintf("call_gemini_%s_%d", safe, partIndex)
 }
 
 // convertGeminiFunctionDecl converts a Gemini functionDeclaration to an OpenAI tool.
