@@ -349,6 +349,59 @@ func TestFromOpenAI_ToolUseFlushedToOwnMessage(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_MultipleToolResultsGrouped(t *testing.T) {
+	// An assistant turn with N tool_calls followed by N tool messages
+	// must collapse into a single user message with N tool_result
+	// blocks — Claude rejects the alternative shape (consecutive user
+	// turns, or tool_results orphaned from their tool_use).
+	in := `{"messages":[
+		{"role":"user","content":"what's the weather in SF and NYC?"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}},
+			{"id":"c2","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"NYC\"}"}}
+		]},
+		{"role":"tool","tool_call_id":"c1","content":"72F"},
+		{"role":"tool","tool_call_id":"c2","content":"55F"}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Expect: [user, assistant{tool_use c1, tool_use c2}, user{tool_result c1, tool_result c2}]
+	if len(got.Messages) != 3 {
+		t.Fatalf("expected 3 messages (grouped), got %d: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[2].Role != "user" {
+		t.Errorf("msg[2] role=%q want user", got.Messages[2].Role)
+	}
+	results := got.Messages[2].Content
+	if len(results) != 2 {
+		t.Fatalf("expected 2 tool_result blocks in msg[2], got %d: %+v", len(results), results)
+	}
+	gotIDs := map[string]bool{}
+	for _, b := range results {
+		if b["type"] != "tool_result" {
+			t.Errorf("msg[2] block type=%q want tool_result", b["type"])
+		}
+		id, _ := b["tool_use_id"].(string)
+		gotIDs[id] = true
+	}
+	for _, want := range []string{"c1", "c2"} {
+		if !gotIDs[want] {
+			t.Errorf("missing tool_result for %q in msg[2]; got ids=%v", want, gotIDs)
+		}
+	}
+}
+
 func TestFromOpenAI_EmptyBody(t *testing.T) {
 	_, err := FromOpenAI([]byte(`{`))
 	if err == nil {

@@ -274,6 +274,12 @@ func buildClaudeMessages(src map[string]any) []any {
 		// separate user message. Flush any in-progress user message,
 		// push the tool_result blocks alone, then continue accumulating
 		// the non-tool_result parts under a fresh role.
+		//
+		// If the previous emitted message is already a user message of
+		// pure tool_result blocks, merge into it — Claude requires all
+		// tool_results for an assistant turn to live in a single user
+		// message immediately following the tool_use, and consecutive
+		// OpenAI tool messages are how multi-call responses arrive.
 		if hasToolResult {
 			toolResults := []any{}
 			others := []any{}
@@ -287,10 +293,7 @@ func buildClaudeMessages(src map[string]any) []any {
 			}
 			flush()
 			if len(toolResults) > 0 {
-				out = append(out, map[string]any{
-					"role":    "user",
-					"content": toolResults,
-				})
+				out = pushOrMergeToolResults(out, toolResults)
 			}
 			if len(others) > 0 {
 				currentRole = newRole
@@ -567,4 +570,35 @@ func reasoningEffortToBudget(effort string) int {
 		return 0
 	}
 	return 0
+}
+
+// pushOrMergeToolResults appends tool_result blocks to a Claude
+// messages slice, merging into the previous user message when it
+// already contains only tool_result blocks. Claude requires all
+// tool_results responding to a single assistant tool_use turn to
+// live in one user message; consecutive OpenAI tool messages
+// (one per tool_call) are how multi-call responses arrive.
+func pushOrMergeToolResults(out []any, toolResults []any) []any {
+	if n := len(out); n > 0 {
+		if last, ok := out[n-1].(map[string]any); ok && last["role"] == "user" {
+			if content, ok := last["content"].([]any); ok && isAllToolResults(content) {
+				last["content"] = append(content, toolResults...)
+				return out
+			}
+		}
+	}
+	return append(out, map[string]any{
+		"role":    "user",
+		"content": toolResults,
+	})
+}
+
+func isAllToolResults(blocks []any) bool {
+	for _, bAny := range blocks {
+		b, ok := bAny.(map[string]any)
+		if !ok || b["type"] != "tool_result" {
+			return false
+		}
+	}
+	return true
 }
