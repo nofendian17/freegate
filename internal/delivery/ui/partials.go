@@ -68,6 +68,8 @@ type requestRow struct {
 	Tokens     string
 	IP         string
 	Error      string
+	HasError   bool
+	FullError  string
 }
 
 type requestRowsView []requestRow
@@ -100,6 +102,8 @@ func (h *Handler) buildRequestRows() requestRowsView {
 			Tokens:     tokenDisplay(e.TotalTokens, e.PromptTokens, e.CompletionTokens),
 			IP:         e.IP,
 			Error:      errStr,
+			HasError:   len(e.Error) > 0,
+			FullError:  e.Error,
 		})
 	}
 	return rows

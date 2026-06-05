@@ -6,8 +6,16 @@
 //	Client (Claude/Gemini)         → Request Translation (→OpenAI) → Upstream
 //	Client (Claude/Gemini) ← Response Translation (OpenAI→)       ← Upstream
 //
-// All upstreams speak OpenAI format; the translator converts to/from
-// that intermediate format as needed.
+// Default hub: upstreams speak OpenAI format; the translator converts
+// to/from that intermediate format as needed. The package can
+// additionally translate non-OpenAI upstreams for future use; see
+// NewResponseWriterWithDst for the full two-direction signature.
+//
+// All translation goes through OpenAI as the intermediate format. For
+// non-streaming requests/responses, this is a two-hop conversion (e.g.
+// Claude JSON → OpenAI JSON → Gemini JSON). For streaming, only the
+// directions whose endpoints are OpenAI (Claude→OpenAI, Gemini→OpenAI,
+// OpenAI→Claude, OpenAI→Gemini) are supported in real time.
 package translate
 
 import (
