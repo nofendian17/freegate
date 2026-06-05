@@ -463,6 +463,30 @@ func TestFromOpenAI_ToolArgsPassThroughRaw(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_ToolChoiceNoneOmitsTools(t *testing.T) {
+	// OpenAI's tool_choice="none" means "do not call any tool".
+	// The translator must omit the `tools` block in this case —
+	// otherwise Claude sees a tools list and may still call one
+	// (Claude's tool_choice="auto" = model decides).
+	in := `{
+		"tools":[
+			{"type":"function","function":{"name":"f","description":"a tool","parameters":{"type":"object"}}}
+		],
+		"tool_choice":"none"
+	}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := got["tools"]; ok {
+		t.Errorf("expected tools to be omitted when tool_choice=none, got: %v", got["tools"])
+	}
+}
+
 func TestFromOpenAI_EmptyBody(t *testing.T) {
 	_, err := FromOpenAI([]byte(`{`))
 	if err == nil {

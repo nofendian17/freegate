@@ -76,45 +76,50 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	}
 	out["messages"] = msgs
 
-	// Tools
-	if tools, ok := src["tools"].([]any); ok && len(tools) > 0 {
-		claudeTools := make([]any, 0, len(tools))
-		for _, tAny := range tools {
-			t, _ := tAny.(map[string]any)
-			if t == nil {
-				continue
-			}
-			// Skip built-in non-function tools (e.g. web_search_20250305)
-			// — pass through unchanged.
-			if ttype, _ := t["type"].(string); ttype != "" && ttype != "function" {
-				claudeTools = append(claudeTools, t)
-				continue
-			}
-			fn, _ := t["function"].(map[string]any)
-			if fn == nil {
-				fn = t // already in Claude form (name, description, input_schema)
-			}
-			name, _ := fn["name"].(string)
-			if name == "" {
-				continue
-			}
-			desc, _ := fn["description"].(string)
-			params := fn["parameters"]
-			if params == nil {
-				if is, ok := t["input_schema"]; ok {
-					params = is
-				} else {
-					params = map[string]any{"type": "object", "properties": map[string]any{}}
+	// Tools. OpenAI's tool_choice="none" means "do not call any
+	// tool" — omit the tools block in that case so Claude has no
+	// tools to choose from. Claude's "auto" = model decides, which
+	// would otherwise override the caller's intent.
+	if tcNone, _ := src["tool_choice"].(string); tcNone != "none" {
+		if tools, ok := src["tools"].([]any); ok && len(tools) > 0 {
+			claudeTools := make([]any, 0, len(tools))
+			for _, tAny := range tools {
+				t, _ := tAny.(map[string]any)
+				if t == nil {
+					continue
 				}
+				// Skip built-in non-function tools (e.g. web_search_20250305)
+				// — pass through unchanged.
+				if ttype, _ := t["type"].(string); ttype != "" && ttype != "function" {
+					claudeTools = append(claudeTools, t)
+					continue
+				}
+				fn, _ := t["function"].(map[string]any)
+				if fn == nil {
+					fn = t // already in Claude form (name, description, input_schema)
+				}
+				name, _ := fn["name"].(string)
+				if name == "" {
+					continue
+				}
+				desc, _ := fn["description"].(string)
+				params := fn["parameters"]
+				if params == nil {
+					if is, ok := t["input_schema"]; ok {
+						params = is
+					} else {
+						params = map[string]any{"type": "object", "properties": map[string]any{}}
+					}
+				}
+				claudeTools = append(claudeTools, map[string]any{
+					"name":         name,
+					"description":  desc,
+					"input_schema": params,
+				})
 			}
-			claudeTools = append(claudeTools, map[string]any{
-				"name":        name,
-				"description": desc,
-				"input_schema": params,
-			})
-		}
-		if len(claudeTools) > 0 {
-			out["tools"] = claudeTools
+			if len(claudeTools) > 0 {
+				out["tools"] = claudeTools
+			}
 		}
 	}
 
@@ -129,7 +134,7 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	} else if eff, ok := src["reasoning_effort"].(string); ok && eff != "" {
 		if budget := reasoningEffortToBudget(eff); budget > 0 {
 			out["thinking"] = map[string]any{
-				"type":         "enabled",
+				"type":          "enabled",
 				"budget_tokens": budget,
 			}
 		}
