@@ -111,7 +111,10 @@ func convertClaudeMessages(claudeMsgs []any) []any {
 
 		switch role {
 		case "user":
-			result = append(result, convertClaudeUserMessage(msg))
+			// A Claude user message can produce 0+ OpenAI messages
+			// (text-only → 1 user msg; text+tool_results → user + tool msgs;
+			// tool_results-only → tool msgs only). Flatten into the result.
+			result = append(result, convertClaudeUserMessage(msg)...)
 		case "assistant":
 			result = append(result, convertClaudeAssistantMessage(msg))
 		case "tool":
@@ -130,23 +133,28 @@ func convertClaudeMessages(claudeMsgs []any) []any {
 	return result
 }
 
-// convertClaudeUserMessage converts a Claude user message to OpenAI format.
-// Claude user messages may contain tool_result content blocks, which need
-// to be extracted as separate {role:"tool"} messages.
-func convertClaudeUserMessage(msg map[string]any) any {
+// convertClaudeUserMessage converts a Claude user message to zero or more
+// OpenAI messages. Claude user messages may contain tool_result content
+// blocks, which need to be extracted as separate {role:"tool"} messages;
+// the remaining text (if any) becomes a user message.
+//
+// Returns a slice so the caller can flatten: a text-only block becomes
+// one user message; tool_results alone become tool messages; text plus
+// tool_results become a user message followed by tool messages.
+func convertClaudeUserMessage(msg map[string]any) []any {
 	content, ok := msg["content"]
 	if !ok {
-		return msg
+		return []any{msg}
 	}
 
 	// String content → passthrough
 	if _, ok := content.(string); ok {
-		return msg
+		return []any{msg}
 	}
 
 	blocks, ok := content.([]any)
 	if !ok {
-		return msg
+		return []any{msg}
 	}
 
 	// Check for tool_result blocks
@@ -182,24 +190,24 @@ func convertClaudeUserMessage(msg map[string]any) any {
 		openaiBlocks := convertClaudeContentBlocks(blocks, false)
 		newMsg := cloneMap(msg)
 		newMsg["content"] = openaiBlocks
-		return newMsg
+		return []any{newMsg}
 	}
 
-	// If only tool_results, drop the user message (OpenAI doesn't need it)
-	// If there are also text parts, create a user message with just the text
+	// Build the result list: tool messages first, then the user text
+	// message (if any). This is the OpenAI-idiomatic order: tool
+	// responses sit right after the assistant tool_calls. Putting the
+	// user text first breaks FixMissingToolResponses (and upstreams
+	// like MiniMax) which expect to see the tool response directly
+	// after the assistant, leading to a duplicate tool_call_id when
+	// the prepost step synthesizes a missing response.
 	var results []any
+	results = append(results, toolMessages...)
 	if len(textParts) > 0 {
 		results = append(results, map[string]any{
 			"role":    "user",
 			"content": strings.Join(textParts, "\n"),
 		})
 	}
-	results = append(results, toolMessages...)
-
-	if len(results) == 1 {
-		return results[0]
-	}
-	// Return as array so caller can merge into the main message list
 	return results
 }
 
