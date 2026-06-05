@@ -245,17 +245,13 @@ func buildClaudeMessages(src map[string]any) ([]any, error) {
 	for _, mAny := range nonSystem {
 		m, _ := mAny.(map[string]any)
 		role, _ := m["role"].(string)
-		// "tool" messages in OpenAI become Claude "user" messages with
-		// tool_result blocks; "user" stays "user"; everything else
-		// becomes "assistant".
+		// "tool" and "user" messages become Claude "user" messages;
+		// "assistant" stays "assistant" (the zero value, no rewrite
+		// needed). Unknown roles are rejected upstream by
+		// openaiMessageToBlocks, so no default branch is necessary.
 		newRole := role
 		if role == "tool" || role == "user" {
 			newRole = "user"
-		} else if role == "assistant" {
-			newRole = "assistant"
-		} else {
-			// Unknown role: pass through as-is.
-			newRole = role
 		}
 
 		blocks, err := openaiMessageToBlocks(m)
