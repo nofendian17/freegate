@@ -179,6 +179,56 @@ func TestClaudeToOpenAI_ToolUseAndResult(t *testing.T) {
 	}
 }
 
+func TestClaudeToOpenAI_UserMessageWithTextAndToolResult(t *testing.T) {
+	body := `{
+		"model":"claude","max_tokens":100,
+		"messages":[
+			{"role":"user","content":"What is the weather?"},
+			{"role":"assistant","content":[
+				{"type":"text","text":"Let me check."},
+				{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"NYC"}}
+			]},
+			{"role":"user","content":[
+				{"type":"text","text":"Note: please retry."},
+				{"type":"tool_result","tool_use_id":"tu_1","content":"sunny, 72F"}
+			]}
+		]
+	}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON result: %v", err)
+	}
+
+	msgs, ok := openai["messages"].([]any)
+	if !ok {
+		t.Fatalf("expected messages array, got %T", openai["messages"])
+	}
+
+	for i, m := range msgs {
+		if _, ok := m.(map[string]any); !ok {
+			t.Errorf("message %d is %T, want map (nested array bug): %+v", i, m, msgs)
+		}
+	}
+
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages (system+nothing+assistant+user+tool from split), got %d: %+v", len(msgs), msgs)
+	}
+
+	textUser, _ := msgs[2].(map[string]any)
+	if textUser["role"] != "user" || textUser["content"] != "Note: please retry." {
+		t.Errorf("expected msg[2]={role:user,content:\"Note: please retry.\"}, got %+v", textUser)
+	}
+	tool, _ := msgs[3].(map[string]any)
+	if tool["role"] != "tool" || tool["tool_call_id"] != "tu_1" {
+		t.Errorf("expected msg[3]={role:tool,tool_call_id:tu_1}, got %+v", tool)
+	}
+}
+
 func TestClaudeToOpenAI_StopSequences(t *testing.T) {
 	body := `{"model":"claude","stop_sequences":["\n\nHuman:","\n\nAssistant:"],"max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 	result, err := ToOpenAI([]byte(body))
