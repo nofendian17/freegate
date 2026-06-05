@@ -976,6 +976,15 @@ body::after {
 .msg-error     .msg-meta::before { content: "! ";       color: var(--error); }
 .msg-error     .msg-body         { color: var(--error); }
 
+.msg-streaming .msg-body::after {
+  content: "_";
+  animation: pg-blink 1s step-end infinite;
+  color: var(--primary);
+}
+@keyframes pg-blink {
+  50% { opacity: 0; }
+}
+
 .pg-footer {
   border-top: 1px solid var(--border);
   background: var(--surface);

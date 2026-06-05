@@ -45,6 +45,13 @@
       state.stream = parsed.stream !== false;
       if (Array.isArray(parsed.messages)) {
         state.messages = parsed.messages.filter(isValidMessage);
+        // Strip orphaned trailing user message (interrupted send)
+        if (state.messages.length > 0) {
+          var last = state.messages[state.messages.length - 1];
+          if (last.role === 'user') {
+            state.messages.pop();
+          }
+        }
       }
     } catch (e) {
       console.warn('[playground] failed to load thread:', e);
@@ -144,7 +151,10 @@
   function renderList() {
     var list = $('pg-list');
     var empty = $('pg-empty');
-    list.innerHTML = '';
+    var msgs = list.querySelectorAll('.msg');
+    for (var i = 0; i < msgs.length; i++) {
+      msgs[i].remove();
+    }
     if (state.messages.length === 0) {
       empty.style.display = '';
       return;
@@ -420,7 +430,7 @@
 
     $('pg-send').addEventListener('click', send);
     $('pg-input').addEventListener('keydown', function (e) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         send();
       }
