@@ -105,9 +105,9 @@ func TestPlaygroundJSExists(t *testing.T) {
 	js := string(data)
 
 	must := []string{
-		"freegate.playground.v1",  // localStorage key
-		"/v1/chat/completions",     // proxy endpoint
-		"/v1/models",               // model list endpoint
+		"freegate.playground.v1", // localStorage key
+		"/v1/chat/completions",   // proxy endpoint
+		"/v1/models",             // model list endpoint
 		"function open(",
 		"function close(",
 		"function send(",
@@ -128,6 +128,30 @@ func TestPlaygroundJSExists(t *testing.T) {
 	for _, bad := range []string{"eval(", "document.write"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("playground.js contains forbidden pattern %q", bad)
+		}
+	}
+}
+
+// TestDashboardWiresPlayground asserts that the dashboard template
+// includes the playground modal partial, the playground.js script,
+// and the open-playground button. This is a string-search guardrail
+// that catches wiring regressions without running a browser.
+func TestDashboardWiresPlayground(t *testing.T) {
+	const tplPath = "../../../web/templates/dashboard.html"
+	data, err := os.ReadFile(tplPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tplPath, err)
+	}
+	body := string(data)
+
+	must := []string{
+		`id="open-playground"`,                                   // open button
+		`partials/playground_modal.html`,                         // modal include
+		`<script src="/static/js/playground.js" defer></script>`, // js include
+	}
+	for _, want := range must {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard.html missing %q", want)
 		}
 	}
 }
