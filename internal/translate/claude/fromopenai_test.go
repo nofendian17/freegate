@@ -402,6 +402,41 @@ func TestFromOpenAI_MultipleToolResultsGrouped(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_ResponseFormatSchemaCompact(t *testing.T) {
+	// The JSON schema inside the system block is wrapped in a markdown
+	// fence for Claude to read. It does not need to be indented —
+	// indentation is wasted CPU on the encoder and wasted bytes for
+	// every request with response_format=json_schema.
+	in := `{
+		"response_format":{
+			"type":"json_schema",
+			"json_schema":{"schema":{"type":"object","properties":{"a":{"type":"string"}}}}
+		},
+		"messages":[{"role":"user","content":"hi"}]
+	}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		System []struct {
+			Text string `json:"text"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(got.System) == 0 {
+		t.Fatal("expected a system block")
+	}
+	text := got.System[0].Text
+	// Indented JSON has lines that start with newline + 2 spaces.
+	// Compact JSON (json.Marshal) has neither.
+	if strings.Contains(text, "\n  ") {
+		t.Errorf("expected compact JSON, but output contains indented lines:\n%s", text)
+	}
+}
+
 func TestFromOpenAI_EmptyBody(t *testing.T) {
 	_, err := FromOpenAI([]byte(`{`))
 	if err == nil {

@@ -190,8 +190,10 @@ func convertResponseFormatToSystem(rf map[string]any) string {
 		if schema == nil {
 			return ""
 		}
-		// Marshal the schema to indented JSON for readability.
-		schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+		// Marshal the schema to compact JSON. The result is wrapped
+		// in a markdown code fence, so indentation is wasted CPU and
+		// bytes on every request.
+		schemaBytes, err := json.Marshal(schema)
 		if err != nil {
 			return ""
 		}
