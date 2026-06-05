@@ -479,11 +479,13 @@ func parseToolArgs(raw any) (any, error) {
 		if v == "" {
 			return map[string]any{}, nil
 		}
-		var parsed any
-		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			return nil, fmt.Errorf("parse tool arguments: %w", err)
+		// Validate the JSON, then pass it through verbatim via
+		// json.RawMessage. Unmarshaling into interface{} and
+		// re-marshaling would re-sort map keys and reformat numbers.
+		if !json.Valid([]byte(v)) {
+			return nil, fmt.Errorf("parse tool arguments: invalid JSON")
 		}
-		return parsed, nil
+		return json.RawMessage(v), nil
 	default:
 		return v, nil
 	}

@@ -437,6 +437,32 @@ func TestFromOpenAI_ResponseFormatSchemaCompact(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_ToolArgsPassThroughRaw(t *testing.T) {
+	// Valid JSON arguments must pass through verbatim, not be
+	// unmarshaled into a map and re-marshaled — the round-trip would
+	// re-sort keys alphabetically and lose the original formatting.
+	// Tool input that the model produced verbatim may carry semantic
+	// structure (key order, number formatting) that the receiver
+	// should see unchanged.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"f","arguments":"{\"z\":1,\"a\":2}"}}
+		]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"z":1,"a":2`) {
+		t.Errorf("expected key order and spacing preserved (z before a, no spaces); got: %s", s)
+	}
+	if strings.Contains(s, `"a": 2, "z": 1`) {
+		t.Errorf("expected key order NOT to be re-sorted by Go's json.Marshal; got: %s", s)
+	}
+}
+
 func TestFromOpenAI_EmptyBody(t *testing.T) {
 	_, err := FromOpenAI([]byte(`{`))
 	if err == nil {
