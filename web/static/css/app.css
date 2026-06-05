@@ -556,16 +556,6 @@ button.btn-tertiary:hover {
   margin-left: auto;
 }
 
-/* ----- Error Text ----- */
-.error-text {
-  color: var(--error);
-  font-size: 12px;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ----- HTMX Indicator ----- */
 .htmx-indicator {
   display: none;
@@ -733,10 +723,6 @@ button.btn-tertiary:hover {
     padding: var(--space-1) var(--space-2);
     font-size: 11px;
     white-space: nowrap;
-  }
-
-  .error-text {
-    max-width: 80px;
   }
 
   .endpoint-row {
