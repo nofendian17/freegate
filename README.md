@@ -14,7 +14,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
 - **Rate limiting** — per-IP rate limiter, configurable via env
-- **Optional auth** — API key validation via `Authorization: Bearer <key>` header
+- **Optional auth** — API key validation via `Authorization: Bearer <key>` or `X-API-Key: <key>` header
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
 - **Docker Compose** — single command to start both proxy and Tor
@@ -147,6 +147,9 @@ The dashboard follows the **TerminalUI** design system:
 | Path | Description |
 |------|-------------|
 | `GET /` | HTML dashboard (server-rendered initial state) |
+| `GET /partials/stats` | HTMX partial: 5 metric cards (requests, retries, errors, rate-limit hits, tokens) |
+| `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
+| `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo` |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
 | `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
@@ -234,10 +237,34 @@ freegate
 ├── docker-compose.yml        # Proxy + Tor containers
 ├── Dockerfile                # Multi-stage Go build
 ├── Dockerfile.tor            # Tor daemon with health check
+├── Makefile                  # test, build, docker compose targets
 └── .env.example              # Environment variable reference
 ```
 
 ## Development
+
+A `Makefile` wraps the common workflows. Run `make help` for the full list.
+
+```bash
+# Common targets
+make test         # run all tests
+make test-v       # run tests (verbose)
+make test-cover   # run tests with coverage report
+make build        # build the server binary -> ./server
+make run          # run the server locally
+make vet          # go vet
+make fmt          # gofmt
+make check        # fmt + vet + test
+
+# Docker Compose
+make up           # docker compose up -d
+make down         # docker compose down
+make logs svc=proxy
+make ps
+make clean        # stop services and remove build artifacts
+```
+
+The same targets are also available directly:
 
 ```bash
 # Build
