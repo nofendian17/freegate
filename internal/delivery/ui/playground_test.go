@@ -91,3 +91,43 @@ func TestPlaygroundModalTemplateLoads(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaygroundJSExists is a smoke test that catches gross omissions in
+// the JS module. It does not execute the code — that happens in a real
+// browser. It asserts the file exists and contains the function and
+// identifier names the rest of the system depends on.
+func TestPlaygroundJSExists(t *testing.T) {
+	const jsPath = "../../../web/static/js/playground.js"
+	data, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", jsPath, err)
+	}
+	js := string(data)
+
+	must := []string{
+		"freegate.playground.v1",  // localStorage key
+		"/v1/chat/completions",     // proxy endpoint
+		"/v1/models",               // model list endpoint
+		"function open(",
+		"function close(",
+		"function send(",
+		"function load(",
+		"function save(",
+		"function loadModels(",
+		"function streamResponse(",
+		"function nonStreamResponse(",
+		"window.fgPlayground",
+	}
+	for _, want := range must {
+		if !strings.Contains(js, want) {
+			t.Errorf("playground.js missing %q", want)
+		}
+	}
+
+	// Guardrail: never use eval or document.write.
+	for _, bad := range []string{"eval(", "document.write"} {
+		if strings.Contains(js, bad) {
+			t.Errorf("playground.js contains forbidden pattern %q", bad)
+		}
+	}
+}
