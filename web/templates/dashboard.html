@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/static/css/app.css">
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/chart.umd.js" defer></script>
+  <script src="/static/js/playground.js" defer></script>
 </head>
 <body>
 
@@ -15,9 +16,12 @@
 
     <!-- Navigation -->
     <nav class="nav">
-      <div class="nav-brand">
-        <span class="brand-dot" id="status-dot"></span>
-        freegate
+      <div class="nav-left">
+        <div class="nav-brand">
+          <span class="brand-dot" id="status-dot"></span>
+          freegate
+        </div>
+        <button id="open-playground" class="btn-tertiary pg-nav-btn" type="button">> playground</button>
       </div>
       <div class="nav-meta">
         <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
@@ -305,5 +309,7 @@
       }
     });
   </script>
+  {{template "partials/playground_modal.html" .}}
+
 </body>
 </html>

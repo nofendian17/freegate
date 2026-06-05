@@ -1,0 +1,30 @@
+<div id="pg-overlay" class="pg-overlay" role="dialog" aria-modal="true" aria-labelledby="pg-title" style="display:none">
+  <div id="pg-panel" class="pg-panel">
+    <header class="pg-header">
+      <span id="pg-title" class="pg-title">> playground</span>
+      <div class="pg-header-controls">
+        <select id="pg-model" class="pg-model" aria-label="Model">
+          <option value="">// pick a model</option>
+        </select>
+        <label class="pg-stream-toggle" title="Stream responses">
+          <input id="pg-stream" type="checkbox" checked> stream
+        </label>
+        <button id="pg-clear" class="btn-tertiary" title="Clear thread" type="button">clear</button>
+        <button id="pg-close" class="pg-close" aria-label="Close playground" type="button">&times;</button>
+      </div>
+    </header>
+    <div id="pg-list" class="pg-body" role="log" aria-live="polite">
+      <div id="pg-empty" class="pg-empty">// pick a model and say something</div>
+    </div>
+    <footer class="pg-footer">
+      <div id="pg-system-wrap" class="pg-system-wrap collapsed">
+        <button id="pg-system-toggle" class="pg-system-toggle" type="button" aria-expanded="false">// system prompt ▾</button>
+        <textarea id="pg-system" class="pg-system" rows="2" placeholder="optional system prompt..."></textarea>
+      </div>
+      <div class="pg-input-row">
+        <textarea id="pg-input" class="pg-input" rows="3" placeholder="type a message... (Enter to send, Shift+Enter for new line)"></textarea>
+        <button id="pg-send" class="btn-primary" type="button">> send</button>
+      </div>
+    </footer>
+  </div>
+</div>
