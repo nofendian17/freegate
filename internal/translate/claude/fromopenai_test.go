@@ -447,6 +447,24 @@ func TestFromOpenAI_StopToStopSequences(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_ToolArgsInvalidJSON(t *testing.T) {
+	// A tool_call with malformed `arguments` JSON must surface an error
+	// instead of silently invoking the tool with input={}. A model that
+	// emits invalid args would otherwise be called server-side with
+	// the wrong (empty) payload — for tools that require non-optional
+	// fields, this turns a model bug into a destructive operation.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"delete_file","arguments":"{not valid json"}}
+		]}
+	]}`
+	_, err := FromOpenAI([]byte(in))
+	if err == nil {
+		t.Fatal("expected error for invalid tool arguments JSON, got nil")
+	}
+}
+
 func TestFromOpenAI_MaxCompletionTokens(t *testing.T) {
 	// OpenAI's `max_completion_tokens` (the newer o1-era field) maps
 	// to Claude's `max_tokens`. When both are set, the newer field

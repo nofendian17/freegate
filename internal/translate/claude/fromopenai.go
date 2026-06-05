@@ -86,7 +86,11 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	// Build messages by walking non-system messages with a state machine
 	// that merges consecutive same-role entries and flushes after each
 	// tool_use (Claude requires tool_use in its own assistant message).
-	out["messages"] = buildClaudeMessages(src)
+	msgs, err := buildClaudeMessages(src)
+	if err != nil {
+		return nil, err
+	}
+	out["messages"] = msgs
 
 	// Tools
 	if tools, ok := src["tools"].([]any); ok && len(tools) > 0 {
@@ -220,10 +224,10 @@ func convertResponseFormatToSystem(rf map[string]any) string {
 // after any tool_use. tool_result blocks are placed in their own user
 // message immediately following the assistant tool_use, as Claude
 // requires.
-func buildClaudeMessages(src map[string]any) []any {
+func buildClaudeMessages(src map[string]any) ([]any, error) {
 	rawMsgs, _ := src["messages"].([]any)
 	if len(rawMsgs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Filter out system messages (they go into the system array).
@@ -270,7 +274,10 @@ func buildClaudeMessages(src map[string]any) []any {
 			newRole = role
 		}
 
-		blocks := openaiMessageToBlocks(m)
+		blocks, err := openaiMessageToBlocks(m)
+		if err != nil {
+			return nil, err
+		}
 		hasToolResult := false
 		hasToolUse := false
 		for _, bAny := range blocks {
@@ -332,12 +339,12 @@ func buildClaudeMessages(src map[string]any) []any {
 	}
 
 	flush()
-	return out
+	return out, nil
 }
 
 // openaiMessageToBlocks converts a single OpenAI message into Claude
 // content blocks. Pure conversion: no role mapping, no merging.
-func openaiMessageToBlocks(m map[string]any) []any {
+func openaiMessageToBlocks(m map[string]any) ([]any, error) {
 	switch role := m["role"].(string); role {
 	case "tool":
 		// tool_call_id + content → tool_result block
@@ -348,9 +355,9 @@ func openaiMessageToBlocks(m map[string]any) []any {
 				"tool_use_id": id,
 				"content":     contentToString(m["content"]),
 			},
-		}
+		}, nil
 	case "user":
-		return userContentToBlocks(m)
+		return userContentToBlocks(m), nil
 	case "assistant":
 		return assistantContentToBlocks(m)
 	default:
@@ -358,7 +365,7 @@ func openaiMessageToBlocks(m map[string]any) []any {
 		return []any{map[string]any{
 			"type": "text",
 			"text": contentToString(m["content"]),
-		}}
+		}}, nil
 	}
 }
 
@@ -412,7 +419,7 @@ func userContentToBlocks(m map[string]any) []any {
 	return nil
 }
 
-func assistantContentToBlocks(m map[string]any) []any {
+func assistantContentToBlocks(m map[string]any) ([]any, error) {
 	var blocks []any
 	switch c := m["content"].(type) {
 	case string:
@@ -467,7 +474,10 @@ func assistantContentToBlocks(m map[string]any) []any {
 			fn, _ := tc["function"].(map[string]any)
 			name, _ := fn["name"].(string)
 			id, _ := tc["id"].(string)
-			input := parseToolArgs(fn["arguments"])
+			input, err := parseToolArgs(fn["arguments"])
+			if err != nil {
+				return nil, err
+			}
 			blocks = append(blocks, map[string]any{
 				"type":  "tool_use",
 				"id":    id,
@@ -476,24 +486,24 @@ func assistantContentToBlocks(m map[string]any) []any {
 			})
 		}
 	}
-	return blocks
+	return blocks, nil
 }
 
-func parseToolArgs(raw any) any {
+func parseToolArgs(raw any) (any, error) {
 	switch v := raw.(type) {
 	case nil:
-		return map[string]any{}
+		return map[string]any{}, nil
 	case string:
 		if v == "" {
-			return map[string]any{}
+			return map[string]any{}, nil
 		}
 		var parsed any
 		if err := json.Unmarshal([]byte(v), &parsed); err != nil {
-			return map[string]any{}
+			return nil, fmt.Errorf("parse tool arguments: %w", err)
 		}
-		return parsed
+		return parsed, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 
