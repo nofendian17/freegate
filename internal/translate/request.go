@@ -18,15 +18,18 @@ import (
 // body is fixed:
 //
 //  1. NormalizeThinkingConfig
-//  2. EnsureToolCallIds
-//  3. FixMissingToolResponses
-//  4. AdjustMaxTokens
-//  5. PrepareClaudeRequest (only if target == FormatClaude)
+//  2. SanitizeToolHistory
+//  3. EnsureToolCallIds
+//  4. FixMissingToolResponses
+//  5. AdjustMaxTokens
+//  6. PrepareClaudeRequest (only if target == FormatClaude)
 //
-// FixMissingToolResponses runs AFTER EnsureToolCallIds so any synthetic
-// tool messages we insert use the sanitized ids. AdjustMaxTokens runs
-// last so it sees the final tools array and (possibly) inserted tool
-// messages.
+// SanitizeToolHistory runs first (after thinking normalization) to strip
+// orphaned tool interactions at conversation edges. EnsureToolCallIds
+// then sanitizes remaining tool-call ids. FixMissingToolResponses runs
+// after both so any synthetic tool messages it inserts use the sanitized
+// ids. AdjustMaxTokens runs last so it sees the final tools array and
+// (possibly) inserted tool messages.
 func Request(body []byte, source, target Format) ([]byte, error) {
 	if source == target {
 		return body, nil
@@ -42,6 +45,10 @@ func Request(body []byte, source, target Format) ([]byte, error) {
 	out, err = prepost.NormalizeThinkingConfig(out)
 	if err != nil {
 		return nil, fmt.Errorf("translate: normalize thinking: %w", err)
+	}
+	out, err = prepost.SanitizeToolHistory(out)
+	if err != nil {
+		return nil, fmt.Errorf("translate: sanitize tool history: %w", err)
 	}
 	out, err = prepost.EnsureToolCallIds(out)
 	if err != nil {

@@ -45,6 +45,36 @@ func TestFixMissingToolResponses(t *testing.T) {
 			wantTool:  []string{"a2"}, // a1 already has a real response; only a2 inserted
 		},
 		{
+			name: "multi tool_calls with consecutive tool responses all found",
+			in: `{"messages":[
+				{"role":"user","content":"hi"},
+				{"role":"assistant","content":"","tool_calls":[
+					{"id":"a1","type":"function","function":{"name":"f","arguments":"{}"}},
+					{"id":"a2","type":"function","function":{"name":"g","arguments":"{}"}},
+					{"id":"a3","type":"function","function":{"name":"h","arguments":"{}"}}
+				]},
+				{"role":"tool","tool_call_id":"a1","content":"r1"},
+				{"role":"tool","tool_call_id":"a2","content":"r2"},
+				{"role":"tool","tool_call_id":"a3","content":"r3"}
+			]}`,
+			wantRoles: []string{"user", "assistant", "tool", "tool", "tool"},
+			wantTool:  nil, // all responded, no synthetics
+		},
+		{
+			name: "multi tool_calls with only first responded — fills rest",
+			in: `{"messages":[
+				{"role":"user","content":"hi"},
+				{"role":"assistant","content":"","tool_calls":[
+					{"id":"a1","type":"function","function":{"name":"f","arguments":"{}"}},
+					{"id":"a2","type":"function","function":{"name":"g","arguments":"{}"}},
+					{"id":"a3","type":"function","function":{"name":"h","arguments":"{}"}}
+				]},
+				{"role":"tool","tool_call_id":"a1","content":"r1"}
+			]}`,
+			wantRoles: []string{"user", "assistant", "tool", "tool", "tool"},
+			wantTool:  []string{"a2", "a3"},
+		},
+		{
 			name: "no tool_calls, no fix",
 			in: `{"messages":[
 				{"role":"user","content":"hi"},
@@ -95,8 +125,8 @@ func TestFixMissingToolResponses(t *testing.T) {
 			for _, m := range got.Messages {
 				if role, _ := m["role"].(string); role == "tool" {
 					if id, ok := m["tool_call_id"].(string); ok && id != "" {
-						// collect only the synthetic ones (content=="")
-						if c, _ := m["content"].(string); c == "" {
+						// collect only the synthetic ones (content matches SyntheticToolContent)
+						if c, _ := m["content"].(string); c == SyntheticToolContent {
 							inserted = append(inserted, id)
 						}
 					}
