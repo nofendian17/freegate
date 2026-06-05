@@ -104,8 +104,8 @@ func FromOpenAI(body []byte) ([]byte, error) {
 				}
 			}
 			claudeTools = append(claudeTools, map[string]any{
-				"name":        name,
-				"description": desc,
+				"name":         name,
+				"description":  desc,
 				"input_schema": params,
 			})
 		}
@@ -125,7 +125,7 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	} else if eff, ok := src["reasoning_effort"].(string); ok && eff != "" {
 		if budget := reasoningEffortToBudget(eff); budget > 0 {
 			out["thinking"] = map[string]any{
-				"type":         "enabled",
+				"type":          "enabled",
 				"budget_tokens": budget,
 			}
 		}
@@ -245,11 +245,12 @@ func buildClaudeMessages(src map[string]any) []any {
 		// tool_result blocks; "user" stays "user"; everything else
 		// becomes "assistant".
 		newRole := role
-		if role == "tool" || role == "user" {
+		switch role {
+		case "tool", "user":
 			newRole = "user"
-		} else if role == "assistant" {
+		case "assistant":
 			newRole = "assistant"
-		} else {
+		default:
 			// Unknown role: pass through as-is.
 			newRole = role
 		}
