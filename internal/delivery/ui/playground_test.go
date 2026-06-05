@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"os"
 	"regexp"
 	"strings"
@@ -54,5 +55,39 @@ func TestPlaygroundCSSNoDesignViolations(t *testing.T) {
 			continue
 		}
 		t.Errorf("playground CSS contains non-mono font-family: %q", m[1])
+	}
+}
+
+// TestPlaygroundModalTemplateLoads verifies the partial is registered
+// with the loader and renders the expected element IDs.
+func TestPlaygroundModalTemplateLoads(t *testing.T) {
+	tpl, err := LoadTemplates(webTemplatesFS(t))
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tpl.ExecuteTemplate(&buf, "partials/playground_modal.html", map[string]any{}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	body := buf.String()
+
+	for _, id := range []string{
+		`id="pg-overlay"`,
+		`id="pg-panel"`,
+		`id="pg-model"`,
+		`id="pg-stream"`,
+		`id="pg-system"`,
+		`id="pg-list"`,
+		`id="pg-empty"`,
+		`id="pg-input"`,
+		`id="pg-send"`,
+		`id="pg-close"`,
+		`id="pg-clear"`,
+		`id="pg-system-toggle"`,
+	} {
+		if !strings.Contains(body, id) {
+			t.Errorf("playground modal missing %s", id)
+		}
 	}
 }
