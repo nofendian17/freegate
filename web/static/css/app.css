@@ -919,15 +919,15 @@ body::after {
 
 .pg-close {
   background: transparent;
-  border: 0;
-  color: var(--text-dim);
+  border: 1px solid var(--border-hover);
+  color: var(--text);
   font-family: var(--mono);
   font-size: 18px;
   cursor: pointer;
   line-height: 1;
   padding: 0 var(--space-1);
 }
-.pg-close:hover { color: var(--primary); }
+.pg-close:hover { color: var(--primary); border-color: var(--primary); }
 
 .pg-body {
   flex: 1 1 auto;
