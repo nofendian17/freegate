@@ -919,15 +919,15 @@ body::after {
 
 .pg-close {
   background: transparent;
-  border: 0;
-  color: var(--text-dim);
+  border: 1px solid var(--border-hover);
+  color: var(--text);
   font-family: var(--mono);
   font-size: 18px;
   cursor: pointer;
   line-height: 1;
   padding: 0 var(--space-1);
 }
-.pg-close:hover { color: var(--primary); }
+.pg-close:hover { color: var(--primary); border-color: var(--primary); }
 
 .pg-body {
   flex: 1 1 auto;
@@ -1099,9 +1099,29 @@ body::after {
   .pg-stream-toggle { font-size: 14px; }
   .pg-system-toggle { font-size: 14px; }
 
-  /* Close button: visible border on mobile (no hover state on touch) */
+  /* Close button: visible border + brighter color on mobile (no hover on touch) */
   .pg-close {
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-hover);
+    color: var(--text);
+  }
+
+  /* Clear button: override the transparent border (btn-tertiary default) so
+     it's visible on touch devices where :hover never fires */
+  button.btn-tertiary {
+    border-color: var(--border-hover);
+    color: var(--text);
+  }
+
+  /* Open playground button: same treatment */
+  button.pg-nav-btn {
+    border-color: var(--border-hover);
+    color: var(--text);
+  }
+
+  /* Model select: bump border + brighter color (no hover on touch) */
+  .pg-model {
+    border-color: var(--border-hover);
+    color: var(--text);
   }
 }
 
