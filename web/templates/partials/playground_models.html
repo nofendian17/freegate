@@ -1,0 +1,9 @@
+{{define "partials/playground_models.html"}}
+{{if .}}
+{{range .}}
+<option value="{{.ID}}">{{.ID}}</option>
+{{end}}
+{{else}}
+<option value="" disabled selected>// no models available</option>
+{{end}}
+{{end}}

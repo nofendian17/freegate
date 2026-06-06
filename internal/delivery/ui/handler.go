@@ -51,6 +51,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/partials/stats", h.partialStats)
 	r.Get("/partials/requests", h.partialRequests)
 	r.Get("/partials/models", h.partialModels)
+	r.Get("/partials/playground/models", h.partialPlaygroundModels)
 
 	r.Get("/api/timeseries", h.apiTimeseries)
 	r.Get("/api/health", h.apiHealth)

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"freegate/internal/model"
 )
 
 // TestPlaygroundCSSNoDesignViolations asserts that the playground CSS block
@@ -104,23 +106,46 @@ func TestPlaygroundJSExists(t *testing.T) {
 	}
 	js := string(data)
 
+	// Persistence + shim identity (must keep working across refactors)
 	must := []string{
-		"freegate.playground.v1", // localStorage key
-		"/v1/chat/completions",   // proxy endpoint
-		"/v1/models",             // model list endpoint
-		"function open(",
-		"function close(",
-		"function send(",
-		"function load(",
-		"function save(",
-		"function loadModels(",
-		"function streamResponse(",
-		"function nonStreamResponse(",
-		"window.fgPlayground",
+		"freegate.playground.v1",      // localStorage key
+		"window.fgPlayground",         // public surface
+		"function open(",              // modal open
+		"function close(",             // modal close
+		"function clear(",             // clear thread
+		"function load(",              // localStorage load
+		"function save(",              // localStorage save
+		"function onInputKeydown(",    // Enter-to-send
+		"function onModelsLoaded(",    // model select restore
+		"function onSystemInput(",     // system prompt input
+		"function toggleSystem(",      // collapse/expand
+		"function requestBody(",       // build OpenAI request body
+		"function beforeSend(",        // validation + optimistic UI
+		"function send(",              // form submit handler (hx-on:submit)
+		"function handleFetchResponse(", // fetch() response handler
+		"function appendUserMessage(", // optimistic user bubble
+		"function createAssistantPlaceholder(", // optimistic assistant bubble
+		"function finalizeAssistant(", // close out the assistant bubble
 	}
 	for _, want := range must {
 		if !strings.Contains(js, want) {
 			t.Errorf("playground.js missing %q", want)
+		}
+	}
+
+	// The HTMX rewrite must NOT re-introduce manual SSE parsing or the old
+	// htmx:after-request handler (we use fetch() now).
+	for _, banned := range []string{
+		"ReadableStream",  // streaming reader
+		"TextDecoder",     // SSE byte stream decoder
+		"getReader()",     // fetch streaming
+		"streamResponse(", // legacy streaming function
+		"nonStreamResponse(", // legacy non-streaming function
+		"loadModels(",     // legacy model fetcher
+		"function handleResponse(", // legacy htmx:after-request hook
+	} {
+		if strings.Contains(js, banned) {
+			t.Errorf("playground.js contains forbidden pattern %q (streaming code should be handled by HTMX, not the shim)", banned)
 		}
 	}
 
@@ -129,6 +154,89 @@ func TestPlaygroundJSExists(t *testing.T) {
 		if strings.Contains(js, bad) {
 			t.Errorf("playground.js contains forbidden pattern %q", bad)
 		}
+	}
+}
+
+// TestPlaygroundModalUsesHTMX asserts that the modal template now drives
+// behavior via HTMX attributes (hx-get for the model picker, hx-on:* for
+// event wiring) and uses hx-on:submit + the shim's send() for the chat
+// form. The earlier hx-post + hx-vals='js:...' design was removed because
+// htmx 2.0.4's js: expression evaluator chokes on member-access expressions
+// (see .claude/validation/playground-rewrite-2026-06-07/report.md).
+func TestPlaygroundModalUsesHTMX(t *testing.T) {
+	const tplPath = "../../../web/templates/partials/playground_modal.html"
+	data, err := os.ReadFile(tplPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tplPath, err)
+	}
+	body := string(data)
+
+	must := []string{
+		`hx-get="/partials/playground/models"`,            // model picker loads via HTMX
+		`hx-on:submit="window.fgPlayground.send(event)"`, // form submit goes to shim
+		`hx-on:htmx:after-request="window.fgPlayground.onModelsLoaded()"`, // model list swap
+		`window.fgPlayground.close`,            // close trigger
+		`window.fgPlayground.clear`,            // clear trigger
+		`window.fgPlayground.toggleSystem`,     // system prompt collapse
+		`window.fgPlayground.onInputKeydown`,   // Enter-to-send
+	}
+	for _, want := range must {
+		if !strings.Contains(body, want) {
+			t.Errorf("playground_modal.html missing %q", want)
+		}
+	}
+
+	// Ban the old hx-post + hx-vals='js:...' design — it does not work in
+	// htmx 2.0.4 (see validation report). The form must use hx-on:submit
+	// with a shim function that calls fetch() directly.
+	for _, banned := range []string{
+		`hx-post="/v1/chat/completions"`,
+		`hx-vals='js:`,
+		`hx-on:htmx:before-request`,
+		`hx-on:htmx:after-request="window.fgPlayground.handleResponse`,
+		`onsubmit="window.fgPlayground.send`,
+	} {
+		if strings.Contains(body, banned) {
+			t.Errorf("playground_modal.html still uses legacy pattern %q; should use hx-on:submit + shim send()", banned)
+		}
+	}
+}
+
+// TestPlaygroundModelsPartial asserts the new partial renders a proper
+// <option> list (one per model) and the empty-state fallback.
+func TestPlaygroundModelsPartial(t *testing.T) {
+	tpl, err := LoadTemplates(webTemplatesFS(t))
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+
+	// Happy path: with models
+	var buf bytes.Buffer
+	models := []model.Model{
+		{ID: "test-model-1", Provider: "opencode", IsFree: true},
+		{ID: "test-model-2", Provider: "kilo", IsFree: true},
+	}
+	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", models); err != nil {
+		t.Fatalf("execute with models: %v", err)
+	}
+	body := buf.String()
+	for _, want := range []string{
+		`<option value="test-model-1">test-model-1</option>`,
+		`<option value="test-model-2">test-model-2</option>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("playground_models.html missing %q (got: %s)", want, body)
+		}
+	}
+
+	// Empty path: no models
+	buf.Reset()
+	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", []model.Model{}); err != nil {
+		t.Fatalf("execute empty: %v", err)
+	}
+	body = buf.String()
+	if !strings.Contains(body, "// no models available") {
+		t.Errorf("playground_models.html missing empty-state placeholder (got: %s)", body)
 	}
 }
 

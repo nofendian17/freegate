@@ -156,6 +156,19 @@ func (h *Handler) partialModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// partialPlaygroundModels renders the <option> list for the playground's
+// model picker. It is a thin wrapper over DataSource.Models() that
+// returns plain HTML fragments (no table rows). The playground modal
+// is open/close and system-prompt state is managed client-side; this
+// endpoint only provides the option list so HTMX can swap it into the
+// <select id="pg-model"> without a fetch+innerHTML round-trip in JS.
+func (h *Handler) partialPlaygroundModels(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.templates.ExecuteTemplate(w, "partials/playground_models.html", h.data.Models()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func toneForStatus(code int) string {
 	switch {
 	case code >= 200 && code < 300:
