@@ -50,8 +50,8 @@ func FromOpenAI(body []byte) ([]byte, error) {
 	if th, ok := src["thinking"].(map[string]any); ok {
 		if budget, ok := th["budget_tokens"]; ok {
 			gc["thinkingConfig"] = map[string]any{
-				"thinkingBudget":    budget,
-				"include_thoughts":  true,
+				"thinkingBudget":   budget,
+				"include_thoughts": true,
 			}
 		}
 	} else if eff, ok := src["reasoning_effort"].(string); ok && eff != "" {
@@ -402,9 +402,9 @@ func openaiAssistantContentToParts(m map[string]any) ([]any, []string) {
 			args := tryParseJSON(contentToStringForGemini(fn["arguments"]))
 			parts = append(parts, map[string]any{
 				"functionCall": map[string]any{
-					"id":    id,
-					"name":  name,
-					"args":  args,
+					"id":   id,
+					"name": name,
+					"args": args,
 				},
 			})
 			toolCallIDs = append(toolCallIDs, id)

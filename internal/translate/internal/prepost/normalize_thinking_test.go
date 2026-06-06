@@ -7,9 +7,9 @@ import (
 
 func TestNormalizeThinkingConfig(t *testing.T) {
 	tests := []struct {
-		name      string
-		in        string
-		wantKept  bool // expect "thinking" key to still exist in output
+		name     string
+		in       string
+		wantKept bool // expect "thinking" key to still exist in output
 	}{
 		{
 			name:     "last message user, thinking kept",

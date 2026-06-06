@@ -16,10 +16,10 @@ import (
 // streamState bundles the per-direction streaming state holders. Only
 // one of these is non-nil for any (src, dst) pair.
 type streamState struct {
-	oaiToClaude *claude.StreamState          // src=OpenAI, dst=Claude
-	claudeToOAI *claude.ClaudeToOpenAIState  // src=Claude,  dst=OpenAI
-	oaiToGemini *gemini.StreamState          // src=OpenAI, dst=Gemini
-	geminiToOAI *gemini.GeminiToOpenAIState  // src=Gemini,  dst=OpenAI
+	oaiToClaude *claude.StreamState         // src=OpenAI, dst=Claude
+	claudeToOAI *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
+	oaiToGemini *gemini.StreamState         // src=OpenAI, dst=Gemini
+	geminiToOAI *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
 }
 
 // ResponseWriter wraps an http.ResponseWriter to translate upstream

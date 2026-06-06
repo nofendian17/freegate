@@ -7,10 +7,10 @@ import (
 
 func TestEnsureToolCallIds(t *testing.T) {
 	tests := []struct {
-		name     string
-		in       string
-		check    string // JSON path (jq-style) of ids to inspect after the call
-		wantIDs  []string
+		name    string
+		in      string
+		check   string // JSON path (jq-style) of ids to inspect after the call
+		wantIDs []string
 	}{
 		{
 			name: "valid OpenAI id left alone",

@@ -17,7 +17,7 @@ var (
 //
 //   - OpenAI shape:  messages[i].tool_calls[j].id  and  messages[i].tool_call_id (role:"tool")
 //   - Claude shape:  messages[i].content[k].id     (type:"tool_use")
-//                    messages[i].content[k].tool_use_id (type:"tool_result")
+//     messages[i].content[k].tool_use_id (type:"tool_result")
 //
 // Sanitization strips invalid characters. If nothing remains, a
 // deterministic id of the form "call_msg{i}_tc{j}_{name}" is generated.
