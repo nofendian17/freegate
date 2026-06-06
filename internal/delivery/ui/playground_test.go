@@ -188,3 +188,43 @@ func TestPlaygroundCSSHasMobileRules(t *testing.T) {
 		}
 	}
 }
+
+// TestErrorModalCSSHasMobileRules asserts that the error modal CSS section
+// (shown when clicking an .error-link in the recent-requests table) becomes
+// full-width on mobile, with safe-area insets and a WCAG-compliant close
+// button touch target. This is a string-search guardrail that catches
+// responsive regressions without running a browser.
+func TestErrorModalCSSHasMobileRules(t *testing.T) {
+	const startMarker = "/* ----- Error Modal ----- */"
+	const endMarker = "/* ----- Error Link"
+	const cssPath = "../../../web/static/css/app.css"
+
+	data, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cssPath, err)
+	}
+	css := string(data)
+	start := strings.Index(css, startMarker)
+	if start == -1 {
+		t.Skip("error modal CSS section not yet added")
+	}
+	end := strings.Index(css[start:], endMarker)
+	if end == -1 {
+		t.Fatalf("error modal CSS section end marker %q not found", endMarker)
+	}
+	section := css[start : start+end]
+
+	must := []string{
+		"@media (max-width: 480px)", // small phones
+		"@media (max-width: 768px)", // tablets / large phones
+		"safe-area-inset",           // iOS notch / home indicator
+		"min-height: 44px",          // WCAG touch target (close button)
+		"min-width: 44px",           // WCAG touch target (close button)
+		"width: 100%",               // full-width on mobile (not 480px)
+	}
+	for _, want := range must {
+		if !strings.Contains(section, want) {
+			t.Errorf("error modal CSS section missing mobile rule %q", want)
+		}
+	}
+}
