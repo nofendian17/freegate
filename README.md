@@ -2,14 +2,14 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
 
-freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses include dual reasoning fields (`reasoning` + `reasoning_content`) for compatibility with both OpenCode and OpenRouter/Kilo clients.
+freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
 - **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
-- **Reasoning normalization** — every response (streaming + non-streaming) includes both `reasoning` and `reasoning_content` fields, regardless of upstream format
+- **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
@@ -98,21 +98,20 @@ freegate accepts **OpenAI**, **Claude** (`/v1/messages`), and **Gemini** request
 
 ### Reasoning Normalization
 
-OpenCode uses `reasoning_content` for reasoning tokens; OpenRouter/Kilo use `reasoning`. freegate normalizes so both fields appear in every response:
+OpenCode and DeepSeek stream their reasoning tokens in the `reasoning_content` field; OpenRouter/Kilo use `reasoning`. freegate collapses both into a single `reasoning` field so the client only ever sees one:
 
 ```json
 {
   "choices": [{
     "message": {
       "content": "Final answer here",
-      "reasoning": "Step-by-step thought process...",
-      "reasoning_content": "Step-by-step thought process..."
+      "reasoning": "Step-by-step thought process..."
     }
   }]
 }
 ```
 
-This applies to both streaming (`delta`) and non-streaming (`message`) responses.
+This applies to both streaming (`delta`) and non-streaming (`message`) responses. The upstream `reasoning_content` is always dropped, so clients that render `reasoning` (or `reasoning_content`) do not see the thinking text twice.
 
 ## Dashboard
 

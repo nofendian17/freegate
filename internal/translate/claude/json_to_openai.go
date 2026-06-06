@@ -64,9 +64,9 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 	}
 
 	result := map[string]any{
-		"id":      id,
-		"object":  "chat.completion",
-		"model":   model,
+		"id":     id,
+		"object": "chat.completion",
+		"model":  model,
 		"choices": []any{
 			map[string]any{
 				"index":         0,

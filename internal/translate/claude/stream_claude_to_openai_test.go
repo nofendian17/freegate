@@ -167,7 +167,7 @@ func TestProcessClaudeChunk_ToolUseStreamed(t *testing.T) {
 func TestProcessClaudeChunk_FinishOnMessageDelta(t *testing.T) {
 	s := NewClaudeToOpenAIState()
 	out := s.ProcessChunk(map[string]any{
-		"type": "message_delta",
+		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{"input_tokens": float64(5), "output_tokens": float64(3)},
 	})
@@ -225,7 +225,7 @@ func TestProcessClaudeChunk_FallbackWithToolCalls(t *testing.T) {
 func TestProcessClaudeChunk_CacheTokensUsage(t *testing.T) {
 	s := NewClaudeToOpenAIState()
 	out := s.ProcessChunk(map[string]any{
-		"type": "message_delta",
+		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": "end_turn"},
 		"usage": map[string]any{
 			"input_tokens":                float64(5),

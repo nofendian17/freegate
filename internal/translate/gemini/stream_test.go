@@ -229,7 +229,7 @@ func TestGeminiToOpenAIStream_FinishReasonLength(t *testing.T) {
 	chunk := map[string]any{
 		"candidates": []any{
 			map[string]any{
-				"content":     map[string]any{"parts": []any{}, "role": "model"},
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
 				"finishReason": "MAX_TOKENS",
 			},
 		},
@@ -239,7 +239,7 @@ func TestGeminiToOpenAIStream_FinishReasonLength(t *testing.T) {
 	state.ProcessChunk(map[string]any{
 		"candidates": []any{
 			map[string]any{
-				"content":     map[string]any{"parts": []any{}, "role": "model"},
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
 				"finishReason": "MAX_TOKENS",
 			},
 		},
@@ -265,7 +265,7 @@ func TestGeminiToOpenAIStream_UsageWithThinking(t *testing.T) {
 	chunk := map[string]any{
 		"candidates": []any{
 			map[string]any{
-				"content": map[string]any{"parts": []any{}, "role": "model"},
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
 				"finishReason": "STOP",
 			},
 		},
@@ -298,15 +298,15 @@ func TestGeminiToOpenAIStream_UsageWithCached(t *testing.T) {
 	chunk := map[string]any{
 		"candidates": []any{
 			map[string]any{
-				"content":     map[string]any{"parts": []any{}, "role": "model"},
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
 				"finishReason": "STOP",
 			},
 		},
 		"usageMetadata": map[string]any{
-			"promptTokenCount":         10.0,
-			"candidatesTokenCount":     4.0,
-			"cachedContentTokenCount":  3.0,
-			"totalTokenCount":          14.0,
+			"promptTokenCount":        10.0,
+			"candidatesTokenCount":    4.0,
+			"cachedContentTokenCount": 3.0,
+			"totalTokenCount":         14.0,
 		},
 	}
 	events := state.ProcessChunk(chunk)
@@ -328,7 +328,7 @@ func TestGeminiToOpenAIStream_ClosedNoEmit(t *testing.T) {
 	state.ProcessChunk(map[string]any{
 		"candidates": []any{
 			map[string]any{
-				"content":     map[string]any{"parts": []any{}, "role": "model"},
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
 				"finishReason": "STOP",
 			},
 		},
@@ -368,10 +368,10 @@ func TestGeminiToOpenAIStream_FeedBuffersPartialLines(t *testing.T) {
 
 func TestParseGeminiUsage(t *testing.T) {
 	um := map[string]any{
-		"promptTokenCount":         float64(7),
-		"candidatesTokenCount":     float64(3),
-		"thoughtsTokenCount":       float64(2),
-		"cachedContentTokenCount":  float64(1),
+		"promptTokenCount":        float64(7),
+		"candidatesTokenCount":    float64(3),
+		"thoughtsTokenCount":      float64(2),
+		"cachedContentTokenCount": float64(1),
 	}
 	u := parseGeminiUsage(um)
 	if u.PromptTokens != 7 {

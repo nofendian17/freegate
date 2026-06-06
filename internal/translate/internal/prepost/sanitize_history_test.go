@@ -7,10 +7,10 @@ import (
 
 func TestSanitizeToolHistory(t *testing.T) {
 	tests := []struct {
-		name      string
-		in        string
-		wantRoles []string // role of each message after sanitization
-		wantChanged bool   // true if the body should differ from input
+		name        string
+		in          string
+		wantRoles   []string // role of each message after sanitization
+		wantChanged bool     // true if the body should differ from input
 	}{
 		{
 			name: "leading orphaned tool messages are stripped",
