@@ -155,3 +155,36 @@ func TestDashboardWiresPlayground(t *testing.T) {
 		}
 	}
 }
+
+// TestPlaygroundCSSHasMobileRules asserts that the playground CSS section
+// includes mobile-friendly rules: small-phone breakpoint, touch target sizing,
+// iOS-safe font sizes for inputs, and safe-area insets.
+func TestPlaygroundCSSHasMobileRules(t *testing.T) {
+	const marker = "/* Playground Modal */"
+	const cssPath = "../../../web/static/css/app.css"
+
+	data, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", cssPath, err)
+	}
+	css := string(data)
+	start := strings.Index(css, marker)
+	if start == -1 {
+		t.Skip("playground CSS section not yet added")
+	}
+	section := css[start:]
+
+	must := []string{
+		"@media (max-width: 480px)", // small phones
+		"@media (max-width: 768px)", // tablets / large phones
+		"safe-area-inset",           // iOS notch / home indicator
+		"min-height: 44px",          // WCAG touch target
+		"min-width: 44px",           // WCAG touch target
+		"font-size: 16px",           // iOS no-zoom
+	}
+	for _, want := range must {
+		if !strings.Contains(section, want) {
+			t.Errorf("playground CSS section missing mobile rule %q", want)
+		}
+	}
+}

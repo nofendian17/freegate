@@ -1053,3 +1053,88 @@ body::after {
   .pg-panel { width: 100vw; }
   .pg-model { min-width: 120px; max-width: 160px; }
 }
+
+/* === Mobile refinements (touch targets, iOS safe-areas, font sizes) === */
+
+@media (max-width: 768px) {
+  /* iOS safe-area insets for notch + home indicator */
+  .pg-header {
+    padding-top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
+  }
+  .pg-footer {
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    padding-left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
+    padding-right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
+  }
+
+  /* Header controls wrap to a second line when crowded */
+  .pg-header {
+    flex-wrap: wrap;
+  }
+  .pg-header-controls {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    row-gap: var(--space-2);
+  }
+
+  /* WCAG 2.5.5: touch targets >= 44x44px on mobile */
+  .pg-close,
+  .pg-clear,
+  .pg-send,
+  .pg-system-toggle {
+    min-height: 44px;
+    min-width: 44px;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* iOS Safari: prevent auto-zoom on focus (inputs must be >= 16px) */
+  .pg-input,
+  .pg-system {
+    font-size: 16px;
+  }
+
+  /* Bump font sizes for readability on mobile */
+  .msg-body { font-size: 14px; }
+  .msg-meta { font-size: 12px; }
+  .pg-stream-toggle { font-size: 14px; }
+  .pg-system-toggle { font-size: 14px; }
+
+  /* Close button: visible border on mobile (no hover state on touch) */
+  .pg-close {
+    border: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 480px) {
+  /* Tiny phones: model select on its own row, full width */
+  .pg-header-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .pg-model {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .pg-stream-toggle,
+  .pg-clear,
+  .pg-close {
+    flex: 0 0 auto;
+  }
+
+  /* Send button: full width below the textarea */
+  .pg-input-row {
+    flex-direction: column;
+  }
+  .pg-input-row .btn-primary {
+    align-self: stretch;
+    width: 100%;
+  }
+}
+
+@media (max-width: 768px) and (orientation: landscape) and (max-height: 500px) {
+  /* Landscape phones: compact footer, hide system prompt (saves vertical space) */
+  .pg-body { padding: var(--space-2) var(--space-3); }
+  .pg-system-wrap { display: none; }
+  .pg-input { min-height: 44px; }
+}
