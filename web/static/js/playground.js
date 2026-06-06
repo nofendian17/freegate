@@ -16,6 +16,33 @@
   var inFlight = false;
   var activeAssistantBubble = null; // reference to the live assistant <pre> being filled
 
+  // Pre-populate window.fgPlayground with no-op stubs so that any htmx
+  // hx-on expression that fires before the rest of the IIFE completes
+  // (e.g. an htmx:after-request from the model picker loading, or a
+  // keydown on the textarea) finds a defined function instead of
+  // throwing "window.fgPlayground.X is not a function". The real
+  // implementations below overwrite these stubs. The hx-on attributes
+  // in playground_modal.html do not need a defensive guard because of
+  // this.
+  //
+  // We declare isOpen as a function expression inline because it does
+  // not depend on the state that may not yet be initialised at the
+  // time the stub is captured.
+  window.fgPlayground = {
+    open: function () {},
+    close: function () {},
+    clear: function () {},
+    onInputKeydown: function () {},
+    onModelsLoaded: function () {},
+    onSystemInput: function () {},
+    toggleSystem: function () {},
+    requestBody: function () { return { model: '', messages: [], stream: false }; },
+    beforeSend: function () { return false; },
+    send: function () {},
+    handleFetchResponse: function () {},
+    isOpen: function () { return false; }
+  };
+
   // ----- DOM helpers -----
   function $(id) { return document.getElementById(id); }
   function fmtTime(ts) {
