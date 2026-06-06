@@ -3,8 +3,8 @@
 
   // ----- Constants -----
   var STORAGE_KEY = 'freegate.playground.v1';
-  var CHAT_URL = '/v1/chat/completions';
-  var MODELS_URL = '/v1/models';
+  var SYSTEM_COLLAPSE_KEY = 'freegate.playground.systemCollapsed';
+  var MAX_THREAD_BYTES = 100 * 1024; // cap persisted thread size; clear if exceeded
 
   // ----- State -----
   var state = {
@@ -13,12 +13,11 @@
     stream: true,
     messages: []
   };
-  var inFlight = null;
-  var modelsLoaded = false;
+  var inFlight = false;
+  var activeAssistantBubble = null; // reference to the live assistant <pre> being filled
 
   // ----- DOM helpers -----
   function $(id) { return document.getElementById(id); }
-
   function fmtTime(ts) {
     if (!ts) return '';
     var d = new Date(ts);
@@ -60,6 +59,11 @@
 
   function save() {
     try {
+      var payload = JSON.stringify(state);
+      if (payload.length > MAX_THREAD_BYTES) {
+        console.warn('[playground] thread exceeds ' + MAX_THREAD_BYTES + ' bytes, clearing');
+        state.messages = [];
+      }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (e) {
       if (e && e.name === 'QuotaExceededError') {
@@ -70,64 +74,11 @@
     }
   }
 
-  // ----- Models -----
-  function setModelOptions(items) {
-    var sel = $('pg-model');
-    sel.innerHTML = '';
-    var placeholder = document.createElement('option');
-    placeholder.value = '';
-    if (items.length === 0) {
-      placeholder.textContent = '// no models available';
-    } else {
-      placeholder.textContent = '// pick a model';
-    }
-    placeholder.disabled = true;
-    sel.appendChild(placeholder);
-    for (var i = 0; i < items.length; i++) {
-      var opt = document.createElement('option');
-      opt.value = items[i].id;
-      opt.textContent = items[i].id;
-      sel.appendChild(opt);
-    }
-    if (state.model && items.some(function (m) { return m.id === state.model; })) {
-      sel.value = state.model;
-    } else if (items.length > 0) {
-      sel.value = items[0].id;
-      state.model = items[0].id;
-    } else {
-      sel.value = '';
-      state.model = '';
-    }
-    sel.disabled = items.length === 0;
-  }
-
-  function loadModels() {
-    if (modelsLoaded) return Promise.resolve();
-    return fetch(MODELS_URL)
-      .then(function (resp) {
-        if (!resp.ok) throw new Error('status ' + resp.status);
-        return resp.json();
-      })
-      .then(function (data) {
-        var items = [];
-        if (data && Array.isArray(data.data)) {
-          items = data.data;
-        } else if (Array.isArray(data)) {
-          items = data;
-        }
-        setModelOptions(items);
-        modelsLoaded = true;
-      })
-      .catch(function (e) {
-        console.warn('[playground] failed to load models:', e);
-        setModelOptions([]);
-      });
-  }
-
   // ----- Rendering -----
   function buildMessageEl(m) {
     var wrap = document.createElement('div');
     wrap.className = 'msg ' + (m.role === 'user' ? 'msg-user' : 'msg-assistant');
+    wrap.setAttribute('data-role', m.role);
 
     var meta = document.createElement('div');
     meta.className = 'msg-meta';
@@ -151,17 +102,23 @@
   function renderList() {
     var list = $('pg-list');
     var empty = $('pg-empty');
-    var msgs = list.querySelectorAll('.msg');
-    for (var i = 0; i < msgs.length; i++) {
-      msgs[i].remove();
+    // Snapshot the children before mutating: live HTMLCollection iteration
+    // is not safe across removeChild in all browsers. We keep the
+    // pg-empty placeholder in the DOM (just hide it) so subsequent calls
+    // to $('pg-empty') still find it. Detaching + re-attaching it leaves
+    // the variable bound to a detached node, and a second renderList
+    // would dereference a null $('pg-empty') result.
+    var children = Array.prototype.slice.call(list.children);
+    for (var i = 0; i < children.length; i++) {
+      if (children[i] !== empty) list.removeChild(children[i]);
     }
     if (state.messages.length === 0) {
-      empty.style.display = '';
+      if (empty) empty.style.display = '';
       return;
     }
-    empty.style.display = 'none';
-    for (var i = 0; i < state.messages.length; i++) {
-      list.appendChild(buildMessageEl(state.messages[i]));
+    if (empty) empty.style.display = 'none';
+    for (var j = 0; j < state.messages.length; j++) {
+      list.appendChild(buildMessageEl(state.messages[j]));
     }
     list.scrollTop = list.scrollHeight;
   }
@@ -171,7 +128,8 @@
     state.messages.push(m);
     save();
     var list = $('pg-list');
-    $('pg-empty').style.display = 'none';
+    var empty = $('pg-empty');
+    if (empty) empty.style.display = 'none';
     list.appendChild(buildMessageEl(m));
     list.scrollTop = list.scrollHeight;
   }
@@ -182,6 +140,7 @@
     var list = $('pg-list');
     var wrap = document.createElement('div');
     wrap.className = 'msg msg-assistant msg-streaming';
+    wrap.setAttribute('data-role', 'assistant');
     var meta = document.createElement('div');
     meta.className = 'msg-meta';
     meta.textContent = '$ assistant ' + (m.model || '');
@@ -214,8 +173,76 @@
     save();
   }
 
-  // ----- Request body -----
-  function buildRequestBody(userText) {
+  // ----- Public surface (called from HTMX attributes in the modal template) -----
+
+  function open() {
+    load();
+    $('pg-overlay').style.display = 'flex';
+    document.body.classList.add('modal-open');
+    $('pg-system').value = state.system;
+    $('pg-stream').checked = state.stream;
+    renderList();
+    // Model options load via hx-get when the <select> intersects the viewport.
+    // After they swap in, onModelsLoaded() restores state.model.
+    $('pg-input').focus();
+  }
+
+  function close() {
+    $('pg-overlay').style.display = 'none';
+    document.body.classList.remove('modal-open');
+  }
+
+  function clear() {
+    if (!window.confirm('Clear playground thread?')) return;
+    state.messages = [];
+    save();
+    renderList();
+  }
+
+  function onInputKeydown(evt) {
+    if (evt.key === 'Enter' && !evt.shiftKey) {
+      evt.preventDefault();
+      $('pg-form').requestSubmit
+        ? $('pg-form').requestSubmit()
+        : $('pg-form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+  }
+
+  function onModelsLoaded() {
+    var sel = $('pg-model');
+    if (!sel) return;
+    if (state.model) {
+      var found = false;
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === state.model) { found = true; break; }
+      }
+      sel.value = found ? state.model : '';
+      if (!found) state.model = '';
+    }
+    sel.addEventListener('change', function (e) {
+      state.model = e.target.value;
+      save();
+    });
+  }
+
+  function onSystemInput(_evt) {
+    state.system = $('pg-system').value;
+    save();
+  }
+
+  function toggleSystem() {
+    var wrap = $('pg-system-wrap');
+    if (!wrap) return;
+    var collapsed = wrap.classList.toggle('collapsed');
+    try { localStorage.setItem(SYSTEM_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) {}
+    var btn = $('pg-system-toggle');
+    if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+
+  // Build the request body sent by the HTMX form. Always non-streaming in
+  // this rewrite (htmx-sse does not solve POST-to-SSE for our case). Streaming
+  // can be added later as a follow-up.
+  function requestBody() {
     var msgs = [];
     if (state.system && state.system.trim()) {
       msgs.push({ role: 'system', content: state.system });
@@ -231,8 +258,30 @@
     return {
       model: state.model,
       messages: msgs,
-      stream: !!state.stream
+      stream: false
     };
+  }
+
+  function beforeSend() {
+    // Called by send() before issuing the XHR. Returns true if the send
+    // should proceed, false to cancel. Performs the optimistic UI work
+    // (clears the input, appends the user bubble, creates the assistant
+    // placeholder, locks the send button).
+    if (inFlight) return false;
+    var input = $('pg-input');
+    var text = input.value;
+    if (!text || !text.trim()) return false;
+    if (!state.model) {
+      console.warn('[playground] no model selected');
+      return false;
+    }
+    text = text.trim();
+    input.value = '';
+    appendUserMessage(text);
+    activeAssistantBubble = createAssistantPlaceholder();
+    inFlight = true;
+    $('pg-send').disabled = true;
+    return true;
   }
 
   function truncate(s, n) {
@@ -240,170 +289,84 @@
     return s.length > n ? s.slice(0, n) + '…' : s;
   }
 
-  // ----- Send (stream + non-stream) -----
-  function send() {
-    if (inFlight) return;
-    var input = $('pg-input');
-    var text = input.value;
-    if (!text || !text.trim()) return;
-    if (!state.model) {
-      console.warn('[playground] no model selected');
-      return;
-    }
-    text = text.trim();
-    input.value = '';
-    appendUserMessage(text);
-    var placeholder = createAssistantPlaceholder();
-    var sendBtn = $('pg-send');
-    sendBtn.disabled = true;
-    inFlight = true;
-    var t0 = performance.now();
-
-    var opts = {
+  // Form submit handler — bound to the form via hx-on:submit. We use
+  // fetch() directly rather than hx-post + hx-vals='js:...': the htmx
+  // 2.0.4 js: expression evaluator chokes on member-access expressions
+  // (see validation report 2026-06-07), and the shim already owns all
+  // the request state. Direct fetch is the simpler path.
+  function send(evt) {
+    if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+    if (!beforeSend()) return;
+    var t0 = window.performance ? performance.now() : Date.now();
+    fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildRequestBody(text))
-    };
-
-    fetch(CHAT_URL, opts)
+      body: JSON.stringify(requestBody())
+    })
       .then(function (resp) {
-        if (!resp.ok) {
-          return resp.text().then(function (txt) {
-            finalizeAssistant(placeholder, {
-              error: resp.status + ' ' + truncate(txt || resp.statusText, 500),
-              duration_ms: Math.round(performance.now() - t0)
-            });
-          });
-        }
-        if (state.stream && resp.body) {
-          return streamResponse(resp, placeholder, t0);
-        }
-        return nonStreamResponse(resp, placeholder, t0);
-      })
-      .catch(function (e) {
-        finalizeAssistant(placeholder, {
-          error: (e && e.message) ? e.message : String(e),
-          duration_ms: Math.round(performance.now() - t0)
+        return resp.text().then(function (text) {
+          return { status: resp.status, body: text };
         });
       })
-      .then(function () {
-        sendBtn.disabled = false;
-        inFlight = null;
+      .then(function (result) { handleFetchResponse(result, t0); })
+      .catch(function (err) {
+        handleFetchResponse({ status: 0, body: 'network error: ' + (err && err.message ? err.message : String(err)) }, t0);
       });
   }
 
-  function streamResponse(resp, placeholder, t0) {
-    var reader = resp.body.getReader();
-    var decoder = new TextDecoder('utf-8');
-    var buffer = '';
-    var tokens = 0;
-
-    function pump() {
-      return reader.read().then(function (r) {
-        if (r.done) {
-          // Stream ended without [DONE] / finish_reason
-          finalizeAssistant(placeholder, {
-            duration_ms: Math.round(performance.now() - t0),
-            tokens: tokens,
-            truncated: true
-          });
-          return;
-        }
-        buffer += decoder.decode(r.value, { stream: true });
-        var nl;
-        while ((nl = buffer.indexOf('\n')) !== -1) {
-          var line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (!line || !line.startsWith('data:')) continue;
-          var payload = line.slice(5).trim();
-          if (payload === '[DONE]') {
-            finalizeAssistant(placeholder, {
-              duration_ms: Math.round(performance.now() - t0),
-              tokens: tokens
-            });
-            return;
-          }
-          var obj;
-          try { obj = JSON.parse(payload); } catch (e) { continue; }
-          var choice = obj.choices && obj.choices[0];
-          if (!choice) continue;
-          var delta = choice.delta || {};
-          if (delta.content) {
-            placeholder.body.textContent += delta.content;
-            tokens++;
-            $('pg-list').scrollTop = $('pg-list').scrollHeight;
-          }
-          if (obj.usage && typeof obj.usage.total_tokens === 'number') {
-            tokens = obj.usage.total_tokens;
-          }
-          var finish = choice.finish_reason;
-          if (finish === 'stop' || finish === 'length') {
-            finalizeAssistant(placeholder, {
-              duration_ms: Math.round(performance.now() - t0),
-              tokens: tokens
-            });
-            return;
-          }
-        }
-        return pump();
-      });
+  function handleFetchResponse(result, t0) {
+    if (!activeAssistantBubble) {
+      inFlight = false;
+      $('pg-send').disabled = false;
+      return;
     }
+    var status = result.status;
+    var raw = result.body || '';
+    var now = (window.performance ? performance.now() : Date.now());
 
-    return pump().catch(function (e) {
-      finalizeAssistant(placeholder, {
-        duration_ms: Math.round(performance.now() - t0),
-        tokens: tokens,
-        truncated: true
+    if (status < 200 || status >= 300) {
+      finalizeAssistant(activeAssistantBubble, {
+        error: status + ' ' + truncate(raw, 500),
+        duration_ms: Math.round(now - t0)
       });
-    });
-  }
-
-  function nonStreamResponse(resp, placeholder, t0) {
-    return resp.json().then(function (data) {
-      var choice = data.choices && data.choices[0];
-      var msg = choice && choice.message;
-      var content = (msg && msg.content) || '';
-      placeholder.body.textContent = content;
-      var tokens = (data.usage && typeof data.usage.total_tokens === 'number')
-        ? data.usage.total_tokens
-        : null;
-      finalizeAssistant(placeholder, {
-        duration_ms: Math.round(performance.now() - t0),
+    } else {
+      var content = '';
+      var tokens = null;
+      try {
+        var data = JSON.parse(raw);
+        var choice = data.choices && data.choices[0];
+        var msg = choice && choice.message;
+        content = (msg && msg.content) || '';
+        if (data.usage && typeof data.usage.total_tokens === 'number') {
+          tokens = data.usage.total_tokens;
+        }
+      } catch (e) {
+        finalizeAssistant(activeAssistantBubble, {
+          error: 'invalid response: ' + truncate(raw, 200),
+          duration_ms: Math.round(now - t0)
+        });
+        activeAssistantBubble = null;
+        inFlight = false;
+        $('pg-send').disabled = false;
+        return;
+      }
+      activeAssistantBubble.body.textContent = content;
+      activeAssistantBubble.message.content = content;
+      finalizeAssistant(activeAssistantBubble, {
+        duration_ms: Math.round(now - t0),
         tokens: tokens
       });
-    });
+    }
+    activeAssistantBubble = null;
+    inFlight = false;
+    $('pg-send').disabled = false;
   }
 
-  // ----- UI binding -----
-  function open() {
-    load();
-    $('pg-overlay').style.display = 'flex';
-    document.body.classList.add('modal-open');
-    $('pg-system').value = state.system;
-    $('pg-stream').checked = state.stream;
-    renderList();
-    loadModels().then(function () {
-      $('pg-model').value = state.model || '';
-      $('pg-input').focus();
-    });
-  }
-
-  function close() {
-    $('pg-overlay').style.display = 'none';
-    document.body.classList.remove('modal-open');
-  }
-
-  function clear() {
-    state.messages = [];
-    save();
-    renderList();
-  }
-
-  function bind() {
+  // ----- Bootstrap -----
+  function bindGlobal() {
     var openBtn = document.getElementById('open-playground');
     if (openBtn) openBtn.addEventListener('click', open);
 
-    $('pg-close').addEventListener('click', close);
     $('pg-overlay').addEventListener('click', function (e) {
       if (e.target === $('pg-overlay')) close();
     });
@@ -411,53 +374,36 @@
       if (e.key === 'Escape' && $('pg-overlay').style.display === 'flex') close();
     });
 
-    $('pg-clear').addEventListener('click', function () {
-      if (window.confirm('Clear playground thread?')) clear();
-    });
-
-    $('pg-model').addEventListener('change', function (e) {
-      state.model = e.target.value;
-      save();
-    });
-    $('pg-system').addEventListener('input', function (e) {
-      state.system = e.target.value;
-      save();
-    });
-    $('pg-stream').addEventListener('change', function (e) {
-      state.stream = e.target.checked;
-      save();
-    });
-
-    $('pg-send').addEventListener('click', send);
-    $('pg-input').addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send();
+    // Restore system-prompt collapse state
+    try {
+      if (localStorage.getItem(SYSTEM_COLLAPSE_KEY) === '0') {
+        var wrap = $('pg-system-wrap');
+        if (wrap) wrap.classList.remove('collapsed');
+        var btn = $('pg-system-toggle');
+        if (btn) btn.setAttribute('aria-expanded', 'true');
       }
-    });
-
-    $('pg-system-toggle').addEventListener('click', function () {
-      var wrap = $('pg-system-wrap');
-      wrap.classList.toggle('collapsed');
-      $('pg-system-toggle').setAttribute(
-        'aria-expanded',
-        wrap.classList.contains('collapsed') ? 'false' : 'true'
-      );
-    });
+    } catch (e) {}
   }
 
-  // ----- Bootstrap -----
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bind);
+    document.addEventListener('DOMContentLoaded', bindGlobal);
   } else {
-    bind();
+    bindGlobal();
   }
 
-  // ----- Public surface -----
+  // Public surface used by hx-on:* in the modal template
   window.fgPlayground = {
     open: open,
     close: close,
     clear: clear,
+    onInputKeydown: onInputKeydown,
+    onModelsLoaded: onModelsLoaded,
+    onSystemInput: onSystemInput,
+    toggleSystem: toggleSystem,
+    requestBody: requestBody,
+    beforeSend: beforeSend,
+    send: send,
+    handleFetchResponse: handleFetchResponse,
     isOpen: function () { return $('pg-overlay').style.display === 'flex'; }
   };
 })();

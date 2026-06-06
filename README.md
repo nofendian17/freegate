@@ -16,6 +16,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` or `X-API-Key: <key>` header
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
+- **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
 - **Docker Compose** — single command to start both proxy and Tor
 
@@ -96,6 +97,19 @@ All settings are environment variables:
 
 freegate accepts **OpenAI**, **Claude** (`/v1/messages`), and **Gemini** request formats on `/v1/chat/completions` and `/v1/messages`. Incoming requests are detected and translated to the upstream OpenAI format; responses are translated back. Both streaming and non-streaming responses are supported.
 
+Detection is structural (no URL path needed) and ordered:
+
+1. **Gemini** — top-level `contents` array with no `messages` key
+2. **Claude** — `messages` plus a Claude-specific hint (`anthropic_version`, top-level `max_tokens`, a `system` prompt, or `tool_use` / `tool_result` / `image` content blocks)
+3. **OpenAI** — default
+
+### Request Limits & Middleware
+
+- **Request body limit:** 10 MB (`MaxRequestBodySize` in `internal/delivery/handler/chat.go`); oversized bodies are rejected with HTTP 413.
+- **CORS:** wildcard `Access-Control-Allow-Origin: *` plus `OPTIONS` short-circuit on every route, so browser clients can call the proxy from any origin.
+- **Request ID:** every request gets an `X-Request-ID` (echoed if the client sent one, otherwise an 8-byte hex value); included in logs and the recent-requests table.
+- **Error format:** OpenAI-compatible `{"error":{"type","message"}}` envelope used for all `4xx` / `5xx` responses.
+
 ### Reasoning Normalization
 
 OpenCode and DeepSeek stream their reasoning tokens in the `reasoning_content` field; OpenRouter/Kilo use `reasoning`. freegate collapses both into a single `reasoning` field so the client only ever sees one:
@@ -159,6 +173,20 @@ The dashboard follows the **TerminalUI** design system:
 - **No login, no auth.** The dashboard is open. The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default.
 - **In-memory only.** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
 - **No persistence layer.** A future revision could add SQLite for historical requests; for now, this is a live-only monitoring surface.
+
+## Playground
+
+The dashboard includes an embedded **chat playground** — a modal chat UI served by the same `web/static/js/playground.js` bundle that the dashboard already loads. Open it from the **> playground** button in the nav.
+
+- **Model picker** — populated from `GET /v1/models` (auto-loaded on first open; refreshes on demand)
+- **System prompt** — collapsible; persists with the thread in `localStorage`
+- **Stream toggle** — switches between SSE streaming and one-shot responses
+- **Multi-turn thread** — keep the conversation going; full history is sent with each request
+- **Persistence** — the thread survives page reloads via `localStorage` (key: `freegate.playground.v1`); "clear" wipes it
+- **Shortcuts** — `Enter` sends, `Shift+Enter` inserts a newline
+- **No auth on the dashboard mount** — the playground honors the same `API_KEY` as the API: the modal calls `/v1/chat/completions`, so if `API_KEY` is set the browser will need to include the same `Authorization: Bearer <key>` / `X-API-Key: <key>` header (e.g. via a browser extension)
+
+Internally the playground is **HTMX-driven** with a small JS shim for client-side state. The form posts to `/v1/chat/completions` via `hx-post`, the model picker loads via `hx-get="/partials/playground/models"`, and event hooks (`hx-on:htmx:after-request`, etc.) hand responses off to the shim. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the option-list partial in `web/templates/partials/playground_models.html`, the server route at `internal/delivery/ui/handler.go` (`/partials/playground/models`), and the shim in `web/static/js/playground.js`. **Streaming is not yet implemented** in this version — the form sends `stream: false` and waits for the full response. A streaming follow-up is tracked.
 
 ## Architecture
 
@@ -225,11 +253,11 @@ freegate
 │   └── translate/            # Format translation: Claude, Gemini detect + request/response
 ├── web/                      # Embedded assets (templates, CSS, JS, fonts)
 │   ├── templates/
-│   │   ├── dashboard.html    # Main page
-│   │   └── partials/         # HTMX partial fragments (stats, requests, models)
+│   │   ├── dashboard.html    # Main page (includes playground modal via {{template}})
+│   │   └── partials/         # HTMX partial fragments (stats, requests, models, playground modal + playground model options)
 │   ├── static/
 │   │   ├── css/app.css       # TerminalUI design system
-│   │   ├── js/               # Vendored HTMX 2.x + Chart.js 4.x
+│   │   ├── js/               # Vendored HTMX 2.x + Chart.js 4.x + playground.js
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
@@ -248,19 +276,27 @@ A `Makefile` wraps the common workflows. Run `make help` for the full list.
 # Common targets
 make test         # run all tests
 make test-v       # run tests (verbose)
-make test-cover   # run tests with coverage report
+make test-cover   # run tests with coverage report (writes coverage.html)
+make test-race    # run tests with the race detector
+make test-one name=TestFoo  # run a single test by name
 make build        # build the server binary -> ./server
 make run          # run the server locally
 make vet          # go vet
 make fmt          # gofmt
 make check        # fmt + vet + test
+make tidy         # go mod tidy
 
 # Docker Compose
-make up           # docker compose up -d
-make down         # docker compose down
-make logs svc=proxy
-make ps
-make clean        # stop services and remove build artifacts
+make up             # docker compose up -d
+make down           # docker compose down
+make restart        # docker compose restart
+make logs svc=proxy # tail a service's logs
+make ps             # list running services
+make ps-all         # list all services including stopped
+make rebuild svc=proxy  # rebuild and restart a service
+make compose-build  # build service images
+make compose-pull   # pull service images
+make clean          # docker compose down -v + remove build artifacts
 ```
 
 The same targets are also available directly:
