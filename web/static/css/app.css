@@ -925,7 +925,9 @@ body::after {
   font-size: 18px;
   cursor: pointer;
   line-height: 1;
-  padding: 0 var(--space-1);
+  padding: 6px 10px;
+  min-width: 32px;
+  min-height: 32px;
 }
 .pg-close:hover { color: var(--primary); border-color: var(--primary); }
 
@@ -1057,8 +1059,10 @@ body::after {
 /* === Mobile refinements (touch targets, iOS safe-areas, font sizes) === */
 
 @media (max-width: 768px) {
-  /* iOS safe-area insets for notch + home indicator */
+  /* iOS safe-area insets for notch + home indicator.
+     Header also wraps so controls reflow on narrow screens. */
   .pg-header {
+    flex-wrap: wrap;
     padding-top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
   }
   .pg-footer {
@@ -1068,9 +1072,6 @@ body::after {
   }
 
   /* Header controls wrap to a second line when crowded */
-  .pg-header {
-    flex-wrap: wrap;
-  }
   .pg-header-controls {
     flex-wrap: wrap;
     gap: var(--space-2);
@@ -1099,27 +1100,16 @@ body::after {
   .pg-stream-toggle { font-size: 14px; }
   .pg-system-toggle { font-size: 14px; }
 
-  /* Close button: visible border + brighter color on mobile (no hover on touch) */
-  .pg-close {
-    border: 1px solid var(--border-hover);
-    color: var(--text);
-  }
-
-  /* Clear button: override the transparent border (btn-tertiary default) so
-     it's visible on touch devices where :hover never fires */
-  button.btn-tertiary {
-    border-color: var(--border-hover);
-    color: var(--text);
-  }
-
-  /* Open playground button: same treatment */
-  button.pg-nav-btn {
-    border-color: var(--border-hover);
-    color: var(--text);
-  }
-
-  /* Model select: bump border + brighter color (no hover on touch) */
+  /* Controls rely on :hover for border color on desktop, but :hover never
+     fires on touch. Override the transparent/invisible defaults so the
+     playground chrome stays visible on mobile. */
+  .pg-close,
   .pg-model {
+    border-color: var(--border-hover);
+    color: var(--text);
+  }
+  #pg-clear,
+  #open-playground {
     border-color: var(--border-hover);
     color: var(--text);
   }
