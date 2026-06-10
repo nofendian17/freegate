@@ -322,6 +322,33 @@ func TestRandID(t *testing.T) {
 	}
 }
 
+func TestProcessChunkReasoning_NoDuplicateWhenBothFields(t *testing.T) {
+	state := NewStreamState()
+	// Both fields present (as happens after proxy normalization)
+	chunk := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"reasoning_content": "my thought",
+					"reasoning":         "my thought",
+				},
+			},
+		},
+	}
+	events := ProcessChunk(chunk, state)
+	// Count thinking_delta events — should be exactly 1
+	count := 0
+	for _, e := range events {
+		if strings.Contains(e, "thinking_delta") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 thinking_delta event, got %d", count)
+	}
+}
+
 // Ensure no data races by running in parallel
 func TestProcessChunkConcurrent(t *testing.T) {
 	t.Parallel()

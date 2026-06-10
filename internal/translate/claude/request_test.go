@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -304,6 +305,50 @@ func TestClaudeToOpenAI_ToolChoiceAuto(t *testing.T) {
 	json.Unmarshal(result, &openai)
 	if openai["tool_choice"] != "auto" {
 		t.Errorf("expected tool_choice=auto, got %v", openai["tool_choice"])
+	}
+}
+
+func TestClaudeToOpenAI_ThinkingBlockSetsReasoningContent(t *testing.T) {
+	body := `{
+		"model":"deepseek-reasoner",
+		"max_tokens":100,
+		"messages":[
+			{"role":"user","content":"Q1"},
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"Let me reason..."},
+				{"type":"text","text":"The answer is 42."}
+			]},
+			{"role":"user","content":"Q2"}
+		]
+	}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	msgs := openai["messages"].([]any)
+	// Find assistant message
+	var asstMsg map[string]any
+	for _, m := range msgs {
+		msg := m.(map[string]any)
+		if msg["role"] == "assistant" {
+			asstMsg = msg
+			break
+		}
+	}
+	if asstMsg == nil {
+		t.Fatal("assistant message not found")
+	}
+	rc, ok := asstMsg["reasoning_content"].(string)
+	if !ok || rc != "Let me reason..." {
+		t.Errorf("expected reasoning_content='Let me reason...', got %v", asstMsg["reasoning_content"])
+	}
+	// Text content should NOT contain the thinking text
+	if strings.Contains(fmt.Sprintf("%v", asstMsg["content"]), "Let me reason") {
+		t.Error("thinking text should not appear in content")
 	}
 }
 

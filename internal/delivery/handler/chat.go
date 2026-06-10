@@ -56,6 +56,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize reasoning fields: copy reasoning → reasoning_content for
+	// assistant messages that are missing reasoning_content. Required for
+	// DeepSeek thinking mode (deepseek-reasoner).
+	body, err = translate.NormalizeRequestReasoning(body)
+	if err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
 	// For non-OpenAI clients, wrap the response writer to translate
 	// the upstream's OpenAI response back to the source format
 	if format != translate.FormatOpenAI {

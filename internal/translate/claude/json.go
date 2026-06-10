@@ -57,6 +57,19 @@ func JSONToClaude(body []byte) ([]byte, error) {
 func convertOpenAIMessage(msg map[string]any) []any {
 	var content []any
 
+	// Add thinking block first (reasoning_content preferred over reasoning)
+	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+		content = append(content, map[string]any{
+			"type":     "thinking",
+			"thinking": rc,
+		})
+	} else if r, ok := msg["reasoning"].(string); ok && r != "" {
+		content = append(content, map[string]any{
+			"type":     "thinking",
+			"thinking": r,
+		})
+	}
+
 	// Add text content
 	switch c := msg["content"].(type) {
 	case string:

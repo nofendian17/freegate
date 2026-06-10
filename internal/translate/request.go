@@ -101,6 +101,14 @@ func NormalizeRoles(body []byte) ([]byte, error) {
 	return prepost.NormalizeRoles(body)
 }
 
+// NormalizeRequestReasoning copies "reasoning" to "reasoning_content" for
+// assistant messages where the former is present but the latter is absent.
+// DeepSeek thinking mode requires reasoning_content in conversation history;
+// some clients only pass back the proxy-normalized "reasoning" field.
+func NormalizeRequestReasoning(body []byte) ([]byte, error) {
+	return prepost.NormalizeRequestReasoning(body)
+}
+
 func sourceToOpenAI(body []byte, source Format) ([]byte, error) {
 	switch source {
 	case FormatClaude:

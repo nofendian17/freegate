@@ -86,6 +86,42 @@ func TestJSONToClaudeWithTools(t *testing.T) {
 	}
 }
 
+func TestJSONToClaude_ReasoningContentBecomesThinkingBlock(t *testing.T) {
+	openaiResp := `{
+		"id":"chatcmpl-123",
+		"object":"chat.completion",
+		"model":"deepseek-reasoner",
+		"choices":[{
+			"index":0,
+			"message":{"role":"assistant","content":"The answer.","reasoning_content":"Let me think..."},
+			"finish_reason":"stop"
+		}],
+		"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}
+	}`
+	result, err := JSONToClaude([]byte(openaiResp))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var claude map[string]any
+	if err := json.Unmarshal(result, &claude); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	content := claude["content"].([]any)
+	// Should have a thinking block first
+	hasThinking := false
+	for _, b := range content {
+		block := b.(map[string]any)
+		if block["type"] == "thinking" {
+			if block["thinking"] == "Let me think..." {
+				hasThinking = true
+			}
+		}
+	}
+	if !hasThinking {
+		t.Errorf("expected thinking block with 'Let me think...', got content: %v", content)
+	}
+}
+
 func TestExtractUsage(t *testing.T) {
 	u := extractUsage(map[string]any{
 		"prompt_tokens":     20.0,
