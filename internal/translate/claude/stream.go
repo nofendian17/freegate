@@ -139,12 +139,11 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 		state.MarkStartSent()
 	}
 
-	// Handle reasoning_content (Claude thinking)
+	// Handle reasoning_content (Claude thinking) — prefer reasoning_content;
+	// fall back to reasoning only when reasoning_content is absent.
 	if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
 		events = append(events, handleReasoningContent(rc, state)...)
-	}
-	// Also check for "reasoning" field
-	if r, ok := delta["reasoning"].(string); ok && r != "" {
+	} else if r, ok := delta["reasoning"].(string); ok && r != "" {
 		events = append(events, handleReasoningContent(r, state)...)
 	}
 

@@ -231,6 +231,7 @@ func convertClaudeAssistantMessage(msg map[string]any) any {
 
 	// Check for tool_use blocks
 	var textParts []string
+	var thinkingParts []string
 	var toolCalls []any
 	toolUseFound := false
 
@@ -258,14 +259,12 @@ func convertClaudeAssistantMessage(msg map[string]any) any {
 			}
 			toolCalls = append(toolCalls, tc)
 		case "thinking":
-			// Claude thinking blocks: append text
+			// Collect thinking text separately; set as reasoning_content below.
 			if txt, _ := block["thinking"].(string); txt != "" {
-				textParts = append(textParts, txt)
+				thinkingParts = append(thinkingParts, txt)
 			}
 		case "redacted_thinking":
-			if txt, _ := block["text"].(string); txt != "" {
-				textParts = append(textParts, txt)
-			}
+			// Cannot reconstruct reasoning_content from opaque redacted data; skip.
 		default:
 			// Image blocks in assistant response? handle generically
 		}
@@ -281,6 +280,13 @@ func convertClaudeAssistantMessage(msg map[string]any) any {
 		// No tool_use, convert content blocks
 		openaiBlocks := convertClaudeContentBlocks(blocks, false)
 		newMsg["content"] = openaiBlocks
+	}
+
+	// Set reasoning_content from thinking blocks (required by DeepSeek thinking mode)
+	if len(thinkingParts) > 0 {
+		if _, hasRC := newMsg["reasoning_content"]; !hasRC {
+			newMsg["reasoning_content"] = strings.Join(thinkingParts, "")
+		}
 	}
 
 	delete(newMsg, "role")
