@@ -12,6 +12,8 @@ services:
         limits:
           memory: 256M
           cpus: "0.5"
+    volumes:
+      - tor-data:/tmp/tor
     networks:
       - fg-net
 
@@ -46,6 +48,9 @@ services:
     restart: unless-stopped
     networks:
       - fg-net
+
+volumes:
+  tor-data:
 
 networks:
   fg-net:

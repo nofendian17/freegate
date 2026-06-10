@@ -4,6 +4,6 @@ COPY torrc /etc/tor/torrc
 COPY entrypoint-tor.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 9050 9051
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -sfL --socks5 127.0.0.1:9050 https://check.torproject.org/ || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD bash -c 'echo >/dev/tcp/127.0.0.1/9050' || exit 1
 ENTRYPOINT ["/entrypoint.sh"]
