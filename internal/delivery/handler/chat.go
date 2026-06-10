@@ -47,6 +47,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		body = translated
 	}
 
+	// Normalize roles for upstream compatibility (e.g., developer → system).
+	// This runs for all formats — the normalization is a no-op when no
+	// unsupported roles are present.
+	body, err = translate.NormalizeRoles(body)
+	if err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
 	// For non-OpenAI clients, wrap the response writer to translate
 	// the upstream's OpenAI response back to the source format
 	if format != translate.FormatOpenAI {

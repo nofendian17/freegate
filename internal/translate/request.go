@@ -89,6 +89,18 @@ func Request(body []byte, source, target Format) ([]byte, error) {
 	return out, nil
 }
 
+// NormalizeRoles converts OpenAI "developer" role messages to "system"
+// for upstream compatibility. Providers like DeepSeek do not support the
+// "developer" role (introduced by OpenAI for o-series models). Since
+// "developer" is semantically equivalent to "system", normalizing it
+// before forwarding ensures broad compatibility.
+//
+// Uses a cheap byte scan to avoid JSON parsing when no "developer"
+// substring exists in the body.
+func NormalizeRoles(body []byte) ([]byte, error) {
+	return prepost.NormalizeRoles(body)
+}
+
 func sourceToOpenAI(body []byte, source Format) ([]byte, error) {
 	switch source {
 	case FormatClaude:
