@@ -17,6 +17,7 @@ import (
 // The order of pre-processing helpers applied to the OpenAI intermediate
 // body is fixed:
 //
+//  0. NormalizeRoles          (also runs for same-format passthrough)
 //  1. NormalizeThinkingConfig
 //  2. SanitizeToolHistory
 //  3. EnsureToolCallIds
@@ -24,7 +25,11 @@ import (
 //  5. AdjustMaxTokens
 //  6. PrepareClaudeRequest (only if target == FormatClaude)
 //
-// SanitizeToolHistory runs first (after thinking normalization) to strip
+// NormalizeRoles runs first and unconditionally (even when source == target)
+// so that roles like "developer" are normalized to "system" before upstreams
+// that do not support the "developer" role (e.g. DeepSeek) see them.
+//
+// SanitizeToolHistory runs next (after thinking normalization) to strip
 // orphaned tool interactions at conversation edges. EnsureToolCallIds
 // then sanitizes remaining tool-call ids. FixMissingToolResponses runs
 // after both so any synthetic tool messages it inserts use the sanitized
@@ -32,7 +37,7 @@ import (
 // (possibly) inserted tool messages.
 func Request(body []byte, source, target Format) ([]byte, error) {
 	if source == target {
-		return body, nil
+		return prepost.NormalizeRoles(body)
 	}
 
 	// Step 1: source → OpenAI.
@@ -42,6 +47,10 @@ func Request(body []byte, source, target Format) ([]byte, error) {
 	}
 
 	// Step 2: pre-processing on the OpenAI body.
+	out, err = prepost.NormalizeRoles(out)
+	if err != nil {
+		return nil, fmt.Errorf("translate: normalize roles: %w", err)
+	}
 	out, err = prepost.NormalizeThinkingConfig(out)
 	if err != nil {
 		return nil, fmt.Errorf("translate: normalize thinking: %w", err)
