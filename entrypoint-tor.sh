@@ -14,4 +14,6 @@ chmod 600 /tmp/tor-control-pass
 
 export TOR_PASS
 
+chown -R tor:tor /tmp/tor
+
 exec tor -f /etc/tor/torrc
