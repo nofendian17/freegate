@@ -5,3 +5,7 @@ ControlPort 0.0.0.0:9051
 HashedControlPassword 16:EBDAB70A302B1445605D08EF96A5FC3FFA3C0C251A97F6B4CE2B4CDBF6
 User tor
 DataDirectory /tmp/tor
+FetchDirInfoEarly 1
+FetchUselessDescriptors 0
+UseMicrodescriptors 1
+UseBridges 0
