@@ -188,24 +188,23 @@ func syncMessageReasoning(resp map[string]interface{}) {
 	}
 }
 
-// syncReasoning collapses both `reasoning` and `reasoning_content` into
-// a single `reasoning` field. Some upstreams (notably DeepSeek served
-// through OpenCode) emit the reasoning text in both fields; passing
-// both through makes clients that render either field show the
-// reasoning twice. `reasoning` is treated as the canonical field: if
-// both are present, `reasoning_content` is dropped; if only
-// `reasoning_content` is present, it is copied to `reasoning` and
-// dropped; if neither is present, `reasoning` is set to nil so the
-// JSON encoder emits the key.
+// syncReasoning copies `reasoning_content` into `reasoning` when the
+// latter is absent, so clients that only read the `reasoning` field
+// still get the text. `reasoning_content` is preserved because
+// providers like DeepSeek require it to be passed back through
+// conversation history in thinking mode; stripping it causes
+// subsequent requests to be rejected.
+//
+// If neither field is present, `reasoning` is set to nil so the JSON
+// encoder emits the key.
 func syncReasoning(m map[string]interface{}) {
-	if rc, ok := m["reasoning_content"]; ok {
-		if _, hasR := m["reasoning"]; !hasR {
-			m["reasoning"] = rc
-		}
-		delete(m, "reasoning_content")
-		return
+	rc, hasRC := m["reasoning_content"]
+	_, hasR := m["reasoning"]
+
+	if hasRC && !hasR {
+		m["reasoning"] = rc
 	}
-	if _, ok := m["reasoning"]; !ok {
+	if !hasRC && !hasR {
 		m["reasoning"] = nil
 	}
 }
