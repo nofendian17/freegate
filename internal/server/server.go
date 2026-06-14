@@ -45,6 +45,7 @@ type Server struct {
 	tc        *tor.Controller
 	opencode  *upstream.OpenCodeUpstream
 	kilo      *upstream.KiloUpstream
+	mimo      *upstream.MimoFreeUpstream
 	rec       *recorder.Recorder
 	rateLimit *middleware.RateLimiter
 }
@@ -97,7 +98,12 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg.SOCKSAddr,
 	)
 
-	infraRouter := upstream.NewRouter(opencode, kilo)
+	mimo := upstream.NewMimoFreeUpstream(
+		cfg.UpstreamURLMimo,
+		cfg.SOCKSAddr,
+	)
+
+	infraRouter := upstream.NewRouter(opencode, kilo, mimo)
 	appRouter := &routerAdapter{Router: infraRouter}
 
 	m := metrics.New()
@@ -156,6 +162,7 @@ func New(cfg *config.Config) (*Server, error) {
 		tc:        tc,
 		opencode:  opencode,
 		kilo:      kilo,
+		mimo:      mimo,
 		rec:       rec,
 		rateLimit: rl,
 	}, nil
@@ -171,6 +178,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Background workers
 	s.opencode.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshOpenCode)*time.Second)
 	s.kilo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshKilo)*time.Second)
+	s.mimo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshMimo)*time.Second)
 	s.rec.Start(bgCtx)
 
 	stopIP := make(chan struct{})
