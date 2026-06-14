@@ -24,10 +24,13 @@ type Config struct {
 	UpstreamURLKilo string
 	UpstreamKeyKilo string
 
+	UpstreamURLMimo string
+
 	UpstreamDefault string
 
 	UpstreamRefreshOpenCode int
 	UpstreamRefreshKilo     int
+	UpstreamRefreshMimo     int
 
 	SOCKSAddr string
 }
@@ -50,10 +53,13 @@ func Load() *Config {
 		UpstreamURLKilo: envStr("UPSTREAM_URL_KILO", "https://api.kilo.ai/api/openrouter"),
 		UpstreamKeyKilo: envStr("UPSTREAM_KEY_KILO", "anonymous"),
 
+		UpstreamURLMimo: envStr("UPSTREAM_URL_MIMO", "https://api.xiaomimimo.com/api/free-ai/openai/chat"),
+
 		UpstreamDefault: envStr("UPSTREAM_DEFAULT", "opencode"),
 
 		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
+		UpstreamRefreshMimo:     envInt("UPSTREAM_REFRESH_MIMO", 300),
 	}
 
 	cfg.SOCKSAddr = cfg.TorHost + ":" + strconv.Itoa(cfg.TorPort)
