@@ -78,6 +78,12 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 
 	if u, ok := claude["usage"].(map[string]any); ok {
 		result["usage"] = convertUsageOpenAI(u)
+	} else {
+		result["usage"] = map[string]any{
+			"prompt_tokens":     0,
+			"completion_tokens": 0,
+			"total_tokens":      0,
+		}
 	}
 
 	out, err := json.Marshal(result)

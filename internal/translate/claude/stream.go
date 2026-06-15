@@ -28,6 +28,7 @@ type StreamState struct {
 	finishSent       bool
 	closed           bool
 	sseBuf           bytes.Buffer
+	outputContent    strings.Builder
 }
 
 type toolCallInfo struct {
@@ -197,6 +198,8 @@ func handleReasoningContent(text string, state *StreamState) []string {
 		})...)
 	}
 
+	state.outputContent.WriteString(text)
+
 	events = append(events, formatSSE("content_block_delta", map[string]any{
 		"type":  "content_block_delta",
 		"index": state.thinkingIdx,
@@ -232,6 +235,8 @@ func handleTextContent(text string, state *StreamState) []string {
 			},
 		})...)
 	}
+
+	state.outputContent.WriteString(text)
 
 	events = append(events, formatSSE("content_block_delta", map[string]any{
 		"type":  "content_block_delta",
@@ -296,6 +301,7 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		if fn, ok := tc["function"].(map[string]any); ok {
 			if args, ok := fn["arguments"].(string); ok && args != "" {
 				state.toolArgBufs[intIdx].WriteString(args)
+				state.outputContent.WriteString(args)
 				ti := state.toolCalls[intIdx]
 				if ti != nil {
 					events = append(events, formatSSE("content_block_delta", map[string]any{
@@ -345,6 +351,14 @@ func handleFinish(state *StreamState) []string {
 	}
 	if state.usage != nil {
 		msgDelta["usage"] = state.usage
+	} else {
+		estimatedTokens := int64(state.outputContent.Len() / 4)
+		if estimatedTokens == 0 && state.outputContent.Len() > 0 {
+			estimatedTokens = 1
+		}
+		msgDelta["usage"] = &usageInfo{
+			OutputTokens: estimatedTokens,
+		}
 	}
 
 	events = append(events, formatSSE("message_delta", msgDelta)...)
@@ -404,10 +418,7 @@ func buildClaudeMessage(state *StreamState) map[string]any {
 	if state.usage != nil {
 		msg["usage"] = state.usage
 	} else {
-		msg["usage"] = map[string]any{
-			"input_tokens":  0,
-			"output_tokens": 0,
-		}
+		msg["usage"] = &usageInfo{}
 	}
 	return msg
 }
