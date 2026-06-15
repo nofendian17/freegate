@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"net/http"
@@ -107,7 +108,7 @@ func TestNormalizeSSELine_EmptyData(t *testing.T) {
 func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeStream(&buf, strings.NewReader(input))
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning":"thinking"`) {
@@ -203,7 +204,7 @@ func TestCopyNormalized_JSON(t *testing.T) {
 func TestNormalizeStream_DeepSeekDoubleResponse(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"step\",\"reasoning_content\":\"step\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeStream(&buf, strings.NewReader(input))
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning_content":"step"`) {

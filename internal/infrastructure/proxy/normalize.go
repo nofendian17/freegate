@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"freegate/internal/httputil"
+	"freegate/internal/translate/claude"
 )
 
 // TokenUsage holds token counts extracted from an upstream response.
@@ -23,14 +25,27 @@ func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, err
 	isStreaming := strings.Contains(ct, "text/event-stream")
 
 	if isStreaming {
-		return normalizeStream(w, resp.Body), nil
+		rd := bufio.NewReader(resp.Body)
+		if isAnthropicSSE(rd) {
+			return normalizeClaudeStream(w, rd), nil
+		}
+		return normalizeOpenAIStream(w, rd), nil
 	}
 	return normalizeJSON(w, resp.Body), nil
 }
 
-func normalizeStream(dst io.Writer, src io.Reader) TokenUsage {
+// isAnthropicSSE peeks at the stream to check if it starts with "event:",
+// which indicates Anthropic/Claude SSE format vs OpenAI SSE format.
+func isAnthropicSSE(rd *bufio.Reader) bool {
+	peek, err := rd.Peek(6)
+	if err != nil {
+		return false
+	}
+	return bytes.HasPrefix(peek, []byte("event:"))
+}
+
+func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
-	rd := bufio.NewReader(src)
 	var usage TokenUsage
 
 	for {
@@ -57,6 +72,107 @@ func normalizeStream(dst io.Writer, src io.Reader) TokenUsage {
 		}
 	}
 	return usage
+}
+
+// normalizeClaudeStream translates Anthropic/Claude SSE events into
+// OpenAI chat.completion.chunk SSE lines using the existing claude
+// streaming translator and writes them to dst.
+func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
+	fl, _ := dst.(http.Flusher)
+	state := claude.NewClaudeToOpenAIState()
+	var usage TokenUsage
+
+	for {
+		line, err := src.ReadString('\n')
+		if err != nil && err != io.EOF {
+			slog.Warn("claude stream read error", "error", err)
+			break
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
+		// Only process data: lines; skip event: and others
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		data = strings.TrimRight(data, "\r\n ")
+
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+
+		// Extract usage from Claude events for TokenUsage reporting
+		eventType, _ := chunk["type"].(string)
+		switch eventType {
+		case "message_start":
+			if msg, ok := chunk["message"].(map[string]any); ok {
+				usage = extractClaudeUsage(msg, usage)
+			}
+		case "message_delta":
+			if u, ok := chunk["usage"].(map[string]any); ok {
+				usage = extractClaudeUsage(u, usage)
+			}
+		}
+
+		events := state.ProcessChunk(chunk)
+		for _, evt := range events {
+			if _, werr := io.WriteString(dst, evt); werr != nil {
+				slog.Warn("claude stream write error", "error", werr)
+				return usage
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
+	}
+
+	// Send the terminal [DONE] marker for OpenAI clients
+	if _, err := io.WriteString(dst, "data: [DONE]\n\n"); err == nil {
+		if fl != nil {
+			fl.Flush()
+		}
+	}
+
+	return usage
+}
+
+// extractClaudeUsage parses Claude-style usage (input_tokens,
+// output_tokens) and merges into the running TokenUsage.
+func extractClaudeUsage(m map[string]any, current TokenUsage) TokenUsage {
+	if v, ok := asInt(m["input_tokens"]); ok {
+		current.Prompt = v
+	}
+	if v, ok := asInt(m["output_tokens"]); ok {
+		current.Completion = v
+	}
+	current.Total = current.Prompt + current.Completion
+	return current
+}
+
+// asInt tries to coerce a JSON-decoded value (float64) to int.
+func asInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // extractUsageFromSSE checks if line contains a data: JSON with usage.

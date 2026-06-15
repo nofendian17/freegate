@@ -259,7 +259,7 @@ func TestProxyChatWithClaudeFormat(t *testing.T) {
 	inner := httptest.NewRecorder()
 
 	// This simulates what the handler does
-	body := []byte(`{"model":"claude-sonnet","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
+	body := []byte(`{"model":"claude-sonnet","anthropic_version":"test-2025-01-01","messages":[{"role":"user","content":"hi"}]}`)
 	format := Detect(body)
 	if format != FormatClaude {
 		t.Fatalf("expected Claude format, got %s", format)
@@ -292,7 +292,7 @@ func TestProxyChatWithClaudeFormat(t *testing.T) {
 func TestProxyChatWithClaudeStreaming(t *testing.T) {
 	inner := httptest.NewRecorder()
 
-	body := []byte(`{"model":"claude-sonnet","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	body := []byte(`{"model":"claude-sonnet","anthropic_version":"test-2025-01-01","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 	format := Detect(body)
 	if format != FormatClaude {
 		t.Fatalf("expected Claude format, got %s", format)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"freegate/internal/delivery/respond"
 	"freegate/internal/translate"
@@ -25,6 +26,16 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	// Detect format from body (OpenAI, Claude, or Gemini)
 	format := translate.Detect(body)
+
+	// The URL path disambiguates when body-based detection is ambiguous:
+	// POST /v1/messages is always Claude, POST /v1/chat/completions is always OpenAI.
+	// This handles real Anthropic SDKs that send requests without anthropic_version
+	// in the body (only the anthropic-version header).
+	if format == translate.FormatOpenAI && strings.HasSuffix(r.URL.Path, "/messages") {
+		format = translate.FormatClaude
+	} else if format == translate.FormatClaude && strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		format = translate.FormatOpenAI
+	}
 
 	// Extract model ID (works for OpenAI, Claude; Gemini may need fallback)
 	modelID := translate.ExtractModelID(body)

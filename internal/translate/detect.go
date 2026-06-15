@@ -37,12 +37,6 @@ func Detect(body []byte) Format {
 		if _, ok := raw["anthropic_version"]; ok {
 			return FormatClaude
 		}
-		if _, ok := raw["max_tokens"]; ok {
-			// max_tokens at top level = very likely Claude
-			if _, ok := raw["max_tokens"].(float64); ok {
-				return FormatClaude
-			}
-		}
 
 		// Claude system prompt at top level (string or array of {type:"text"})
 		if sys, ok := raw["system"]; ok {
