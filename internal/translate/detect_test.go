@@ -20,8 +20,11 @@ func TestDetect_OpenAI_Multimodal(t *testing.T) {
 
 func TestDetect_Claude_Basic(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`)
-	if f := Detect(body); f != FormatClaude {
-		t.Errorf("expected claude (max_tokens), got %s", f)
+	// max_tokens alone is no longer sufficient to detect Claude (OpenAI also
+	// uses max_tokens). Without other Claude indicators (anthropic_version,
+	// top-level system, or Claude content types), this defaults to OpenAI.
+	if f := Detect(body); f != FormatOpenAI {
+		t.Errorf("expected openai (max_tokens alone is ambiguous), got %s", f)
 	}
 }
 
