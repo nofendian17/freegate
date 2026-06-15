@@ -282,6 +282,12 @@ func (s *ClaudeToOpenAIState) finalChunk() string {
 			u["prompt_tokens_details"] = details
 		}
 		chunk["usage"] = u
+	} else {
+		chunk["usage"] = map[string]any{
+			"prompt_tokens":     0,
+			"completion_tokens": 0,
+			"total_tokens":      0,
+		}
 	}
 	data, err := json.Marshal(chunk)
 	if err != nil {
