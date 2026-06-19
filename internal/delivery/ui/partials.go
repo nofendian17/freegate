@@ -93,7 +93,7 @@ func (h *Handler) buildRequestRows() requestRowsView {
 			errStr = errStr[:60] + "…"
 		}
 		rows = append(rows, requestRow{
-			Time:       e.Ts.Format("15:04:05"),
+			Time:       e.Ts.UTC().Format("15:04:05"),
 			Model:      model,
 			Upstream:   upstream,
 			Status:     fmt.Sprintf("%d", e.Status),

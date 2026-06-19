@@ -48,7 +48,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	data := pageData{
 		Title:         "freegate dashboard",
 		Uptime:        formatDuration(uptime),
-		StartedAt:     time.Unix(h.data.StartedAtUnix(), 0).Format("2006-01-02 15:04:05 MST"),
+		StartedAt:     time.Unix(h.data.StartedAtUnix(), 0).UTC().Format("2006-01-02 15:04:05 UTC"),
 		ModelCount:    len(models),
 		RequestCount:  len(h.data.Requests()),
 		Stats:         h.renderToString("partials/stats.html", buildStatsData(m)),
