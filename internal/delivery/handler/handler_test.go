@@ -203,6 +203,103 @@ func TestHandler_Chat_MissingModel(t *testing.T) {
 	}
 }
 
+func TestHandler_Chat_StreamAddsStreamOptions(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	body := `{"model":"deepseek-v4-flash-free","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if !chat.chatCalled {
+		t.Fatal("expected ProxyChat to be called")
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal(chat.lastBody, &forwarded); err != nil {
+		t.Fatalf("failed to unmarshal forwarded body: %v", err)
+	}
+	stream, _ := forwarded["stream"].(bool)
+	if !stream {
+		t.Error("expected stream=true in forwarded body")
+	}
+	so, ok := forwarded["stream_options"]
+	if !ok {
+		t.Fatal("expected stream_options in forwarded body, got none")
+	}
+	soMap, ok := so.(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options should be an object, got %T", so)
+	}
+	includeUsage, _ := soMap["include_usage"].(bool)
+	if !includeUsage {
+		t.Errorf("expected stream_options.include_usage=true, got %v", includeUsage)
+	}
+}
+
+func TestHandler_Chat_StreamOptionsAlreadyPresent(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	body := `{"model":"deepseek-v4-flash-free","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if !chat.chatCalled {
+		t.Fatal("expected ProxyChat to be called")
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal(chat.lastBody, &forwarded); err != nil {
+		t.Fatalf("failed to unmarshal forwarded body: %v", err)
+	}
+	so, ok := forwarded["stream_options"]
+	if !ok {
+		t.Fatal("expected stream_options to be preserved in forwarded body")
+	}
+	soMap, ok := so.(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options should be an object, got %T", so)
+	}
+	includeUsage, _ := soMap["include_usage"].(bool)
+	if includeUsage {
+		t.Error("expected stream_options.include_usage to remain false (user-provided value preserved)")
+	}
+}
+
+func TestHandler_Chat_NonStreamNoStreamOptions(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	body := `{"model":"deepseek-v4-flash-free","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if !chat.chatCalled {
+		t.Fatal("expected ProxyChat to be called")
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal(chat.lastBody, &forwarded); err != nil {
+		t.Fatalf("failed to unmarshal forwarded body: %v", err)
+	}
+	if _, ok := forwarded["stream_options"]; ok {
+		t.Error("expected no stream_options when stream=false")
+	}
+}
+
 func TestHandler_Chat_InvalidJSON(t *testing.T) {
 	h, _, _, _ := newMockHandler()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString("not json"))
