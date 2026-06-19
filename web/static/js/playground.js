@@ -36,6 +36,8 @@
     onModelsLoaded: function () {},
     onSystemInput: function () {},
     toggleSystem: function () {},
+    onStreamToggle: function () {},
+    stopStreaming: function () {},
     requestBody: function () { return { model: '', messages: [], stream: false }; },
     beforeSend: function () { return false; },
     send: function () {},
@@ -185,7 +187,14 @@
     handle.wrap.classList.remove('msg-streaming');
     if (opts.error) {
       handle.wrap.classList.add('msg-error');
-      handle.body.textContent = '! error: ' + opts.error;
+      if (opts.preserveContent) {
+        // Preserve partial content received so far, append error indicator
+        handle.body.textContent = (handle.body.textContent || '') + '\n! error: ' + opts.error;
+        handle.message.content = handle.body.textContent;
+      } else {
+        handle.body.textContent = '! error: ' + opts.error;
+        handle.message.content = '';
+      }
     } else if (opts.truncated) {
       handle.body.textContent = (handle.body.textContent || '') + '\n! truncated';
     }
@@ -266,9 +275,17 @@
     if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   }
 
-  // Build the request body sent by the HTMX form. Always non-streaming in
-  // this rewrite (htmx-sse does not solve POST-to-SSE for our case). Streaming
-  // can be added later as a follow-up.
+  function onStreamToggle(evt) {
+    if (inFlight) {
+      // Revert the checkbox — cannot switch modes mid-flight
+      evt.target.checked = state.stream;
+      return;
+    }
+    state.stream = evt.target.checked;
+    save();
+  }
+
+  // Build the request body sent by the fetch call.
   function requestBody() {
     var msgs = [];
     if (state.system && state.system.trim()) {
@@ -282,11 +299,15 @@
         msgs.push({ role: m.role, content: m.content });
       }
     }
-    return {
+    var body = {
       model: state.model,
       messages: msgs,
-      stream: false
+      stream: state.stream
     };
+    if (state.stream) {
+      body.stream_options = { include_usage: true };
+    }
+    return body;
   }
 
   function beforeSend() {
@@ -308,12 +329,203 @@
     activeAssistantBubble = createAssistantPlaceholder();
     inFlight = true;
     $('pg-send').disabled = true;
+    $('pg-stream').disabled = true;
     return true;
   }
 
   function truncate(s, n) {
     s = String(s || '');
     return s.length > n ? s.slice(0, n) + '…' : s;
+  }
+
+  // ----- SSE Parser (OpenAI streaming format) -----
+  // Given a buffer string (may contain partial events), splits on '\n\n'
+  // boundaries and invokes callbacks for complete events.
+  // Returns the unconsumed tail of the buffer for the next call.
+  function parseSSEChunks(buffer, onChunk, onEvent) {
+    var parts = buffer.split('\n\n');
+    // The last element may be an incomplete event; keep it as the new buffer
+    var remaining = parts.pop();
+
+    for (var i = 0; i < parts.length; i++) {
+      var block = parts[i].trim();
+      if (!block) continue;
+
+      var lines = block.split('\n');
+      for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (line.indexOf('data: ') === 0) {
+          var payload = line.slice(6);
+          if (payload === '[DONE]') {
+            if (onEvent) onEvent({ type: 'done' });
+          } else {
+            try {
+              var parsed = JSON.parse(payload);
+              // Delta content chunk
+              if (parsed.choices && parsed.choices[0]) {
+                var delta = parsed.choices[0].delta;
+                if (delta && typeof delta.content === 'string') {
+                  if (onChunk) onChunk(delta.content);
+                }
+              }
+              // Usage tail chunk (comes after [DONE] when include_usage is set)
+              if (parsed.usage && typeof parsed.usage === 'object') {
+                if (onEvent) onEvent({ type: 'usage', usage: parsed.usage });
+              }
+            } catch (e) {
+              // Malformed JSON — skip the chunk silently
+            }
+          }
+          // Each SSE event has exactly one data: line; stop processing this event
+          break;
+        }
+      }
+    }
+
+    return remaining;
+  }
+
+  // ----- Streaming state -----
+  var streamStartTime = 0;
+  var streamUsage = null;
+
+  function cleanupStreamUI() {
+    state.abortController = null;
+    inFlight = false;
+    $('pg-send').disabled = false;
+    $('pg-send').style.display = '';
+    var stopEl = $('pg-stop');
+    if (stopEl) stopEl.style.display = 'none';
+    $('pg-stream').disabled = false;
+  }
+
+  function onStreamChunk(content) {
+    if (!activeAssistantBubble) return;
+    activeAssistantBubble.body.textContent += content;
+    activeAssistantBubble.message.content += content;
+    var list = $('pg-list');
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function onStreamEvent(evt) {
+    if (evt.type === 'usage') {
+      streamUsage = evt.usage;
+    }
+  }
+
+  function finalizeStream(errorMsg) {
+    if (!activeAssistantBubble) return;
+    var now = window.performance ? performance.now() : Date.now();
+    var opts = {
+      duration_ms: Math.round(now - streamStartTime),
+      tokens: streamUsage && streamUsage.total_tokens ? streamUsage.total_tokens : null
+    };
+    if (errorMsg) {
+      opts.error = errorMsg;
+      opts.preserveContent = true;
+    }
+    finalizeAssistant(activeAssistantBubble, opts);
+    activeAssistantBubble = null;
+    cleanupStreamUI();
+  }
+
+  function handleStreamingSend(t0) {
+    streamStartTime = t0 || (window.performance ? performance.now() : Date.now());
+    streamUsage = null;
+
+    var controller = new AbortController();
+    state.abortController = controller;
+
+    // Swap send button for stop button
+    $('pg-send').style.display = 'none';
+    var stopEl = $('pg-stop');
+    if (stopEl) stopEl.style.display = '';
+
+    fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody()),
+      signal: controller.signal
+    })
+    .then(function(resp) {
+      if (!resp.ok) {
+        // HTTP error before stream — read body as text, parse JSON error
+        return resp.text().then(function(text) {
+          if (!activeAssistantBubble) return;
+          var errorBody = text;
+          try {
+            var errJson = JSON.parse(text);
+            if (errJson.error && typeof errJson.error === 'object' && errJson.error.message) {
+              errorBody = errJson.error.message;
+            } else if (errJson.error && typeof errJson.error === 'string') {
+              errorBody = errJson.error;
+            } else if (errJson.error) {
+              errorBody = JSON.stringify(errJson.error);
+            }
+          } catch (e) { /* use raw body */ }
+          finalizeStream(resp.status + ' ' + truncate(errorBody, 500));
+        });
+      }
+
+      // Feature-detect ReadableStream — fall back to non-streaming if unsupported
+      if (typeof ReadableStream === 'undefined' || !resp.body || !resp.body.getReader) {
+        return resp.text().then(function(text) {
+          handleFetchResponse({ status: resp.status, body: text }, streamStartTime);
+          cleanupStreamUI();
+        });
+      }
+
+      // Verify the response is actually an SSE stream — fall back otherwise
+      var ct = resp.headers.get('content-type');
+      if (!ct || ct.indexOf('text/event-stream') === -1) {
+        return resp.text().then(function(text) {
+          handleFetchResponse({ status: resp.status, body: text }, streamStartTime);
+          cleanupStreamUI();
+        });
+      }
+
+      // Streaming path: consume the ReadableStream
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+
+      function pump() {
+        return reader.read().then(function(result) {
+          if (result.done) {
+            // Final decode for any lingering bytes
+            buf = parseSSEChunks(buf + decoder.decode(), onStreamChunk, onStreamEvent);
+            finalizeStream(null);
+            return;
+          }
+
+          buf = parseSSEChunks(
+            buf + decoder.decode(result.value, { stream: true }),
+            onStreamChunk,
+            onStreamEvent
+          );
+          return pump();
+        });
+      }
+
+      return pump();
+    })
+    .catch(function(err) {
+      if (err && err.name === 'AbortError') {
+        // User stopped — preserve partial content
+        finalizeStream('stopped');
+      } else {
+        // Network error mid-stream
+        var msg = err && err.message ? err.message : String(err);
+        finalizeStream(msg);
+      }
+    });
+  }
+
+  function stopStreaming() {
+    if (state.abortController) {
+      state.abortController.abort();
+      state.abortController = null;
+    }
   }
 
   // Form submit handler — bound to the form via hx-on:submit. We use
@@ -325,6 +537,13 @@
     if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
     if (!beforeSend()) return;
     var t0 = window.performance ? performance.now() : Date.now();
+
+    if (state.stream) {
+      handleStreamingSend(t0);
+      return;
+    }
+
+    // Non-streaming path (unchanged behaviour)
     fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -338,6 +557,10 @@
       .then(function (result) { handleFetchResponse(result, t0); })
       .catch(function (err) {
         handleFetchResponse({ status: 0, body: 'network error: ' + (err && err.message ? err.message : String(err)) }, t0);
+      })
+      .then(function () {
+        // Post-request cleanup for non-streaming path
+        $('pg-stream').disabled = false;
       });
   }
 
@@ -427,6 +650,8 @@
     onModelsLoaded: onModelsLoaded,
     onSystemInput: onSystemInput,
     toggleSystem: toggleSystem,
+    onStreamToggle: onStreamToggle,
+    stopStreaming: stopStreaming,
     requestBody: requestBody,
     beforeSend: beforeSend,
     send: send,
