@@ -388,7 +388,6 @@
   // ----- Streaming state -----
   var streamStartTime = 0;
   var streamUsage = null;
-  var streamDone = false;
 
   function cleanupStreamUI() {
     state.abortController = null;
@@ -409,9 +408,7 @@
   }
 
   function onStreamEvent(evt) {
-    if (evt.type === 'done') {
-      streamDone = true;
-    } else if (evt.type === 'usage') {
+    if (evt.type === 'usage') {
       streamUsage = evt.usage;
     }
   }
@@ -435,7 +432,6 @@
   function handleStreamingSend(t0) {
     streamStartTime = t0 || (window.performance ? performance.now() : Date.now());
     streamUsage = null;
-    streamDone = false;
 
     var controller = new AbortController();
     state.abortController = controller;
@@ -468,6 +464,23 @@
             }
           } catch (e) { /* use raw body */ }
           finalizeStream(resp.status + ' ' + truncate(errorBody, 500));
+        });
+      }
+
+      // Feature-detect ReadableStream — fall back to non-streaming if unsupported
+      if (typeof ReadableStream === 'undefined' || !resp.body || !resp.body.getReader) {
+        return resp.text().then(function(text) {
+          handleFetchResponse({ status: resp.status, body: text }, streamStartTime);
+          cleanupStreamUI();
+        });
+      }
+
+      // Verify the response is actually an SSE stream — fall back otherwise
+      var ct = resp.headers.get('content-type');
+      if (!ct || ct.indexOf('text/event-stream') === -1) {
+        return resp.text().then(function(text) {
+          handleFetchResponse({ status: resp.status, body: text }, streamStartTime);
+          cleanupStreamUI();
         });
       }
 
