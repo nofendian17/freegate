@@ -109,6 +109,15 @@ func NormalizeRequestReasoning(body []byte) ([]byte, error) {
 	return prepost.NormalizeRequestReasoning(body)
 }
 
+// EnsureStreamOptions adds stream_options: {"include_usage": true} to requests
+// that have stream: true but no stream_options field. Some providers (e.g.
+// DeepSeek) require stream_options to be explicitly set alongside stream = true
+// and return a 400 error otherwise. This is a no-op when stream is false,
+// missing, or stream_options is already present.
+func EnsureStreamOptions(body []byte) ([]byte, error) {
+	return prepost.EnsureStreamOptions(body)
+}
+
 func sourceToOpenAI(body []byte, source Format) ([]byte, error) {
 	switch source {
 	case FormatClaude:
