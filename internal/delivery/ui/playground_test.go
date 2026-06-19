@@ -84,6 +84,7 @@ func TestPlaygroundModalTemplateLoads(t *testing.T) {
 		`id="pg-empty"`,
 		`id="pg-input"`,
 		`id="pg-send"`,
+		`id="pg-stop"`,
 		`id="pg-close"`,
 		`id="pg-clear"`,
 		`id="pg-system-toggle"`,
@@ -106,7 +107,7 @@ func TestPlaygroundJSExists(t *testing.T) {
 	}
 	js := string(data)
 
-	// Persistence + shim identity (must keep working across refactors)
+	// Persistence + shim identity + streaming functions (must keep working across refactors)
 	must := []string{
 		"freegate.playground.v1",      // localStorage key
 		"window.fgPlayground",         // public surface
@@ -119,13 +120,16 @@ func TestPlaygroundJSExists(t *testing.T) {
 		"function onModelsLoaded(",    // model select restore
 		"function onSystemInput(",     // system prompt input
 		"function toggleSystem(",      // collapse/expand
+		"function onStreamToggle(",    // stream checkbox handler
 		"function requestBody(",       // build OpenAI request body
 		"function beforeSend(",        // validation + optimistic UI
 		"function send(",              // form submit handler (hx-on:submit)
-		"function handleFetchResponse(", // fetch() response handler
+		"function handleFetchResponse(", // fetch() response handler (non-streaming)
 		"function appendUserMessage(", // optimistic user bubble
 		"function createAssistantPlaceholder(", // optimistic assistant bubble
 		"function finalizeAssistant(", // close out the assistant bubble
+		"function parseSSEChunks(",    // SSE streaming parser
+		"function stopStreaming(",     // abort/stop handler
 	}
 	for _, want := range must {
 		if !strings.Contains(js, want) {
@@ -133,19 +137,17 @@ func TestPlaygroundJSExists(t *testing.T) {
 		}
 	}
 
-	// The HTMX rewrite must NOT re-introduce manual SSE parsing or the old
-	// htmx:after-request handler (we use fetch() now).
+	// The streaming implementation uses native ReadableStream / TextDecoder /
+	// getReader() — these are now required, not banned. See spec.md Sprint 1.
+	// We still ban legacy function names and eval/document.write.
 	for _, banned := range []string{
-		"ReadableStream",  // streaming reader
-		"TextDecoder",     // SSE byte stream decoder
-		"getReader()",     // fetch streaming
 		"streamResponse(", // legacy streaming function
 		"nonStreamResponse(", // legacy non-streaming function
 		"loadModels(",     // legacy model fetcher
 		"function handleResponse(", // legacy htmx:after-request hook
 	} {
 		if strings.Contains(js, banned) {
-			t.Errorf("playground.js contains forbidden pattern %q (streaming code should be handled by HTMX, not the shim)", banned)
+			t.Errorf("playground.js contains legacy pattern %q", banned)
 		}
 	}
 
@@ -179,6 +181,8 @@ func TestPlaygroundModalUsesHTMX(t *testing.T) {
 		`window.fgPlayground.clear`,            // clear trigger
 		`window.fgPlayground.toggleSystem`,     // system prompt collapse
 		`window.fgPlayground.onInputKeydown`,   // Enter-to-send
+		`window.fgPlayground.onStreamToggle`,   // stream checkbox change
+		`window.fgPlayground.stopStreaming`,    // stop button click
 	}
 	for _, want := range must {
 		if !strings.Contains(body, want) {

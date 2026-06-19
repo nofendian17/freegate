@@ -10,8 +10,9 @@
                 hx-on:htmx:after-request="window.fgPlayground.onModelsLoaded()">
           <option value="" disabled selected>// pick a model</option>
         </select>
-        <label class="pg-stream-toggle" title="Streaming disabled in HTMX mode (toggle is preserved for state)">
-          <input id="pg-stream" type="checkbox" disabled> stream
+        <label class="pg-stream-toggle">
+          <input id="pg-stream" type="checkbox"
+                 hx-on:change="window.fgPlayground.onStreamToggle(event)"> stream
         </label>
         <button id="pg-clear" class="btn-tertiary" title="Clear thread" type="button"
                 hx-on:click="window.fgPlayground.clear()">clear</button>
@@ -35,6 +36,8 @@
                   placeholder="type a message... (Enter to send, Shift+Enter for new line)"
                   hx-on:keydown="window.fgPlayground.onInputKeydown(event)"></textarea>
         <button id="pg-send" class="btn-primary" type="submit">> send</button>
+        <button id="pg-stop" class="pg-stop" type="button" style="display:none"
+                hx-on:click="window.fgPlayground.stopStreaming()">> stop</button>
       </form>
     </footer>
   </div>
