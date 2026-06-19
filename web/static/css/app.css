@@ -1081,6 +1081,31 @@ body::after {
 .pg-input:focus-visible { border-color: var(--primary); outline: none; }
 .pg-input-row .btn-primary { align-self: flex-end; }
 
+button.pg-stop {
+  background: transparent;
+  color: var(--error);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--error);
+  padding: 8px 16px;
+  height: 36px;
+  cursor: pointer;
+  align-self: flex-end;
+  transition: color var(--duration-fast) var(--easing),
+              background var(--duration-fast) var(--easing);
+}
+button.pg-stop:hover {
+  background: var(--error);
+  color: var(--bg);
+}
+button.pg-stop:active {
+  background: var(--error);
+  color: var(--bg);
+}
+
 .pg-nav-btn { font-size: 13px; }
 
 .nav-left {
@@ -1120,6 +1145,7 @@ body::after {
   .pg-close,
   .pg-clear,
   .pg-send,
+  .pg-stop,
   .pg-system-toggle {
     min-height: 44px;
     min-width: 44px;
@@ -1175,6 +1201,10 @@ body::after {
     flex-direction: column;
   }
   .pg-input-row .btn-primary {
+    align-self: stretch;
+    width: 100%;
+  }
+  .pg-input-row .pg-stop {
     align-self: stretch;
     width: 100%;
   }
