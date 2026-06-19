@@ -76,6 +76,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ensure stream_options is set alongside stream=true. Some providers
+	// (e.g. DeepSeek) require stream_options to be explicitly included
+	// when streaming is enabled.
+	body, err = translate.EnsureStreamOptions(body)
+	if err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
 	// For non-OpenAI clients, wrap the response writer to translate
 	// the upstream's OpenAI response back to the source format
 	if format != translate.FormatOpenAI {
