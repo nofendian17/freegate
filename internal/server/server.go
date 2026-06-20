@@ -86,21 +86,27 @@ func New(cfg *config.Config) (*Server, error) {
 
 	tc := tor.NewController(cfg.TorHost, cfg.CtrlPort, cfg.CtrlPass, cfg.SOCKSAddr)
 
+	socks := cfg.SOCKSAddr
+	if cfg.BypassProxy {
+		socks = ""
+		slog.Info("proxy bypass enabled: direct connections, no IP rotation")
+	}
+
 	opencode := upstream.NewOpenCodeUpstream(
 		cfg.UpstreamURLOpenCode,
 		cfg.UpstreamKeyOpenCode,
-		cfg.SOCKSAddr,
+		socks,
 		cfg.UpstreamOpenCodeFreeAllowlist,
 	)
 	kilo := upstream.NewKiloUpstream(
 		cfg.UpstreamURLKilo,
 		cfg.UpstreamKeyKilo,
-		cfg.SOCKSAddr,
+		socks,
 	)
 
 	mimo := upstream.NewMimoFreeUpstream(
 		cfg.UpstreamURLMimo,
-		cfg.SOCKSAddr,
+		socks,
 	)
 
 	infraRouter := upstream.NewRouter(opencode, kilo, mimo)
@@ -109,11 +115,19 @@ func New(cfg *config.Config) (*Server, error) {
 	m := metrics.New()
 
 	cs := application.NewChatService(appRouter, tc, m, defaultMaxRetries, defaultRetryDelay)
+	if cfg.BypassProxy {
+		cs = application.NewChatService(appRouter, nil, m, defaultMaxRetries, defaultRetryDelay)
+	}
 	ms := application.NewModelService(infraRouter)
 
 	rec := recorder.NewRecorder(m.Snapshot)
 	rec.SetModelsFunc(ms.AllModels)
-	rec.SetTorIPFunc(tc.CurrentIP)
+	rec.SetTorIPFunc(func() string {
+		if cfg.BypassProxy {
+			return "direct"
+		}
+		return tc.CurrentIP()
+	})
 	cs.WithRequestLogger(rec.RecordRequestLog)
 
 	tpl, err := ui.LoadTemplates(web.Templates())
@@ -182,7 +196,11 @@ func (s *Server) Run(ctx context.Context) error {
 	s.rec.Start(bgCtx)
 
 	stopIP := make(chan struct{})
-	go s.tc.StartMonitor(torMonitorInterval, stopIP)
+	if !s.cfg.BypassProxy {
+		go s.tc.StartMonitor(torMonitorInterval, stopIP)
+	} else {
+		slog.Info("tor: IP monitor skipped (bypass enabled)")
+	}
 
 	s.logger.Info("starting server", "addr", s.httpSrv.Addr)
 	errCh := make(chan error, 1)

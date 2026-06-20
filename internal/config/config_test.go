@@ -98,6 +98,63 @@ func TestEnvSlice_EmptyItem(t *testing.T) {
 	}
 }
 
+func TestEnvBool_Default(t *testing.T) {
+	val := envBool("NONEXISTENT_BOOL", true)
+	if !val {
+		t.Fatalf("expected true (default), got false")
+	}
+}
+
+func TestEnvBool_Custom(t *testing.T) {
+	os.Setenv("TEST_ENV_BOOL", "true")
+	defer os.Unsetenv("TEST_ENV_BOOL")
+
+	val := envBool("TEST_ENV_BOOL", false)
+	if !val {
+		t.Fatalf("expected true, got false")
+	}
+}
+
+func TestEnvBool_CustomFalse(t *testing.T) {
+	os.Setenv("TEST_ENV_BOOL2", "false")
+	defer os.Unsetenv("TEST_ENV_BOOL2")
+
+	val := envBool("TEST_ENV_BOOL2", true)
+	if val {
+		t.Fatalf("expected false, got true")
+	}
+}
+
+func TestEnvBool_Invalid(t *testing.T) {
+	os.Setenv("TEST_ENV_BOOL3", "not-a-bool")
+	defer os.Unsetenv("TEST_ENV_BOOL3")
+
+	val := envBool("TEST_ENV_BOOL3", true)
+	if !val {
+		t.Fatalf("expected default true, got false")
+	}
+}
+
+func TestBypassProxy_Default(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.BypassProxy {
+		t.Fatal("expected BypassProxy to be false by default")
+	}
+}
+
+func TestBypassProxy_LoadedTrue(t *testing.T) {
+	os.Setenv("BYPASS_PROXY", "true")
+	defer os.Unsetenv("BYPASS_PROXY")
+
+	cfg := Load()
+	if !cfg.BypassProxy {
+		t.Fatal("expected BypassProxy to be true")
+	}
+	if cfg.SOCKSAddr != "127.0.0.1:9050" {
+		t.Fatalf("expected SOCKSAddr to be set regardless, got %q", cfg.SOCKSAddr)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:      1234,

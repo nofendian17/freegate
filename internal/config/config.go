@@ -17,6 +17,8 @@ type Config struct {
 	APIKey    string
 	RateLimit int
 
+	BypassProxy bool
+
 	UpstreamURLOpenCode           string
 	UpstreamKeyOpenCode           string
 	UpstreamOpenCodeFreeAllowlist []string
@@ -45,6 +47,8 @@ func Load() *Config {
 		LogLevel:  envStr("LOG_LEVEL", "info"),
 		APIKey:    envStr("API_KEY", ""),
 		RateLimit: envInt("RATE_LIMIT", 60),
+
+		BypassProxy: envBool("BYPASS_PROXY", false),
 
 		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
 		UpstreamKeyOpenCode:           envStr("UPSTREAM_KEY_OPENCODE", "public"),
@@ -105,6 +109,15 @@ func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return def
