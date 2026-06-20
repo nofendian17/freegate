@@ -229,7 +229,8 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		finalPromptTokens = usage.Prompt
 		finalComplTokens = usage.Completion
 		if s.metrics != nil && usage.Total > 0 {
-			s.metrics.TotalTokens.Add(int64(usage.Total))
+			s.metrics.InputTokens.Add(int64(usage.Prompt))
+			s.metrics.OutputTokens.Add(int64(usage.Completion))
 		}
 	}
 	return nil

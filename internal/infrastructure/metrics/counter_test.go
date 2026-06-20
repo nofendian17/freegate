@@ -25,8 +25,11 @@ func TestMetrics_New(t *testing.T) {
 	if snap["upstream_errors"].(int64) != 0 {
 		t.Errorf("expected upstream_errors=0, got %v", snap["upstream_errors"])
 	}
-	if snap["total_tokens"].(int64) != 0 {
-		t.Errorf("expected total_tokens=0, got %v", snap["total_tokens"])
+	if snap["input_tokens"].(int64) != 0 {
+		t.Errorf("expected input_tokens=0, got %v", snap["input_tokens"])
+	}
+	if snap["output_tokens"].(int64) != 0 {
+		t.Errorf("expected output_tokens=0, got %v", snap["output_tokens"])
 	}
 }
 
