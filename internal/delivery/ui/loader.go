@@ -12,7 +12,7 @@ import (
 // "partials/stats.html") so callers can address them without embedding paths.
 func LoadTemplates(fsys fs.FS) (*template.Template, error) {
 	funcs := template.FuncMap{
-		"fmtTime": func(t time.Time) string { return t.Format("15:04:05") },
+		"fmtTime": func(t time.Time) string { return t.UTC().Format("15:04:05") },
 		"shorten": func(s string, n int) string {
 			if len(s) <= n {
 				return s

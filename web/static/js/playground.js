@@ -51,7 +51,7 @@
     if (!ts) return '';
     var d = new Date(ts);
     function pad(n) { return n < 10 ? '0' + n : '' + n; }
-    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
   }
 
   // ----- Persistence -----
