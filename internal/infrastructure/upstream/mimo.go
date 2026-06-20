@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -44,6 +45,7 @@ type MimoFreeUpstream struct {
 	fingerprint   string
 	sessionID     string
 	jwt           mimoJWT
+	mu            sync.Mutex
 	chatURL       string
 	bootstrapURL  string
 }
@@ -188,7 +190,9 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		resp.Body.Close()
 		slog.Debug("mimo-free: auth failed, re-bootstrapping JWT")
+		m.mu.Lock()
 		m.jwt = mimoJWT{}
+		m.mu.Unlock()
 		jwt, err = m.bootstrapJWT(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("mimo-free: re-bootstrap: %w", err)
@@ -205,9 +209,13 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 }
 
 func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
+	m.mu.Lock()
 	if m.jwt.Token != "" && time.Now().Before(m.jwt.ExpiresAt.Add(-mimoJWTBuffer)) {
-		return m.jwt.Token, nil
+		token := m.jwt.Token
+		m.mu.Unlock()
+		return token, nil
 	}
+	m.mu.Unlock()
 
 	payload := map[string]string{"client": m.fingerprint}
 	body, _ := json.Marshal(payload)
@@ -239,7 +247,10 @@ func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
 	}
 
 	exp := parseMimoJWTExp(result.JWT)
+
+	m.mu.Lock()
 	m.jwt = mimoJWT{Token: result.JWT, ExpiresAt: exp}
+	m.mu.Unlock()
 
 	return result.JWT, nil
 }
