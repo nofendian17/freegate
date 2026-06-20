@@ -201,9 +201,9 @@
         if (!data || data.length < 2) return;
         const labels = data.map(d => {
           const dt = new Date(d.ts);
-          return dt.getHours().toString().padStart(2,'0') + ':' +
-                 dt.getMinutes().toString().padStart(2,'0') + ':' +
-                 dt.getSeconds().toString().padStart(2,'0');
+          return dt.getUTCHours().toString().padStart(2,'0') + ':' +
+                 dt.getUTCMinutes().toString().padStart(2,'0') + ':' +
+                 dt.getUTCSeconds().toString().padStart(2,'0');
         });
         const values = [];
         for (let i = 1; i < data.length; i++) {
