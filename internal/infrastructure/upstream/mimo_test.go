@@ -221,4 +221,20 @@ func TestMimoFree_GenerateSessionID(t *testing.T) {
 	}
 }
 
+func TestMimoFree_BootstrapLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live bootstrap test")
+	}
+
+	m := NewMimoFreeUpstream("https://api.xiaomimimo.com/api/free-ai/openai/chat", "")
+	jwt, err := m.bootstrapJWT(context.Background())
+	if err != nil {
+		t.Fatalf("bootstrapJWT failed: %v", err)
+	}
+	if jwt == "" {
+		t.Fatal("expected non-empty JWT")
+	}
+	t.Logf("bootstrap OK, JWT length=%d", len(jwt))
+}
+
 
