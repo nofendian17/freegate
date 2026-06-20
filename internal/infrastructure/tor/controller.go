@@ -67,6 +67,8 @@ func (c *Controller) newIPLocked() error {
 	if err != nil {
 		return fmt.Errorf("tor control connect: %w", err)
 	}
+
+	// Ensure connection is closed even on early returns
 	defer conn.Close()
 
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -80,6 +82,10 @@ func (c *Controller) newIPLocked() error {
 	for range 20 {
 		line, err := tp.ReadLine()
 		if err != nil {
+			// Connection closed unexpectedly, return the error
+			if err == io.EOF {
+				return fmt.Errorf("tor control connection closed unexpectedly")
+			}
 			return fmt.Errorf("tor control read: %w", err)
 		}
 		trimmed := strings.TrimSpace(line)
@@ -145,8 +151,8 @@ func (c *Controller) CurrentIP() string {
 
 func (c *Controller) cacheIP(ip string) string {
 	c.currentMu.Lock()
+	defer c.currentMu.Unlock()
 	c.currentIP = ip
-	c.currentMu.Unlock()
 	return ip
 }
 

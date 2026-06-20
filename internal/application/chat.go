@@ -133,13 +133,14 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 
 	u, err := s.router.Select(modelID)
 	if err != nil {
+		wrappedErr := fmt.Errorf("select upstream: %w", err)
 		if s.metrics != nil {
 			s.metrics.UpstreamErrors.Add(1)
 		}
 		finalStatus = http.StatusBadGateway
-		finalErr = err
+		finalErr = wrappedErr
 		slog.Error("upstream select failed", "request_id", requestID, "model", modelID, "error", err)
-		return fmt.Errorf("select upstream: %w", err)
+		return wrappedErr
 	}
 	if s.metrics != nil {
 		s.metrics.IncrUpstream(u.Name())
@@ -171,13 +172,14 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 
 		resp, err = u.ChatCompletion(ctx, domain.ChatRequest{Body: body, OriginalReq: r})
 		if err != nil {
+			wrappedErr := fmt.Errorf("upstream request: %w", err)
 			if s.metrics != nil {
 				s.metrics.UpstreamErrors.Add(1)
 			}
 			finalStatus = http.StatusBadGateway
-			finalErr = err
+			finalErr = wrappedErr
 			slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
-			return fmt.Errorf("upstream request: %w", err)
+			return wrappedErr
 		}
 
 		if resp.StatusCode != http.StatusTooManyRequests {

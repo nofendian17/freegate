@@ -125,6 +125,7 @@ type RateLimiter struct {
 	visitors map[string]*visitor
 	limit    int
 	stop     chan struct{}
+	wg       sync.WaitGroup
 }
 
 type visitor struct {
@@ -139,7 +140,9 @@ func NewRateLimiter(requestsPerMinute int) *RateLimiter {
 		stop:     make(chan struct{}),
 	}
 	// Cleanup stale entries every 5 minutes
+	rl.wg.Add(1)
 	go func() {
+		defer rl.wg.Done()
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {

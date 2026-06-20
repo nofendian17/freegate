@@ -80,9 +80,7 @@ func convertOpenAIMessage(msg map[string]any) []any {
 			})
 		}
 	case []any:
-		for _, part := range c {
-			content = append(content, part)
-		}
+		content = append(content, c...)
 	}
 
 	// Add tool calls as tool_use blocks
