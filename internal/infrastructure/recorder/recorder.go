@@ -132,6 +132,8 @@ func (r *Recorder) sampleLoop(ctx context.Context) {
 				Errors:        httputil.Int64(snap["upstream_errors"]),
 				Retries:       httputil.Int64(snap["retry_count"]),
 				RateLimitHits: httputil.Int64(snap["rate_limit_hits"]),
+				InputTokens:   httputil.Int64(snap["input_tokens"]),
+				OutputTokens:  httputil.Int64(snap["output_tokens"]),
 				PerUpstream:   perUp,
 			}
 			r.timeseries.Push(entry)
