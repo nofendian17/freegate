@@ -8,7 +8,7 @@ freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.
 
 - **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); MiMo serves the `mimo-auto` model; everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
-- **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP
+- **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP. Set `BYPASS_PROXY=true` to disable Tor and go direct
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
@@ -71,6 +71,7 @@ All settings are environment variables:
 | `TOR_PORT` | `9050` | Tor SOCKS port |
 | `TOR_CTRL_PORT` | `9051` | Tor control port |
 | `TOR_PASS` | (empty) | Tor control password |
+| `BYPASS_PROXY` | `false` | Set to `true` to bypass Tor entirely — direct connections, no IP rotation on 429 |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `API_KEY` | (empty) | Optional auth key; empty = no auth |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |

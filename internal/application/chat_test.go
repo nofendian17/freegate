@@ -133,6 +133,40 @@ func TestChatServiceProxyChatClosesBodyOn429(t *testing.T) {
 	}
 }
 
+// TestChatServiceProxyChatBypassProxy verifies that with a nil ipRotator
+// (bypass-proxy mode), 429 retries still occur but ForceNewIP is never called.
+func TestChatServiceProxyChatBypassProxy(t *testing.T) {
+	resp429 := &http.Response{
+		StatusCode: 429,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Header:     http.Header{},
+	}
+	resp200 := &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader("{}")),
+		Header:     http.Header{},
+	}
+	upstream := &mockUpstream{
+		name:      "test",
+		responses: []*http.Response{resp429, resp200},
+	}
+	router := &mockRouter{upstream: upstream}
+
+	// nil ipRotator = bypass proxy mode
+	cs := NewChatService(router, nil, nil, 1, 10*time.Millisecond)
+	w := &recordingResponseWriter{header: http.Header{}}
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+	err := cs.ProxyChat(context.Background(), w, r, "test-model", []byte("{}"))
+	if err != nil {
+		t.Fatalf("ProxyChat failed: %v", err)
+	}
+	// Retry on 429 should still work
+	if upstream.calls != 2 {
+		t.Errorf("expected 2 upstream calls (retry without IP rotation), got %d", upstream.calls)
+	}
+}
+
 type closeTracker struct {
 	io.ReadCloser
 	onClose func()
