@@ -277,7 +277,7 @@ func buildClaudeMessages(src oaiRequest) ([]claudeMessage, error) {
 		return nil, nil
 	}
 
-	var out []claudeMessage
+	out := make([]claudeMessage, 0, len(src.Messages))
 	var currentRole string
 	var currentBlocks []claudeContent
 

@@ -37,8 +37,14 @@ func (s *ModelService) AddRouter(r RouterRegistry) {
 func (s *ModelService) AllModels() []model.Model {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	seen := make(map[string]bool)
-	var out []model.Model
+
+	// Count total models across all routers to pre-allocate
+	total := 0
+	for _, r := range s.routers {
+		total += len(r.AllModels())
+	}
+	seen := make(map[string]bool, total)
+	out := make([]model.Model, 0, total)
 	for _, r := range s.routers {
 		for _, m := range r.AllModels() {
 			if !seen[m.ID] {

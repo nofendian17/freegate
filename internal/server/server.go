@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,7 @@ type Server struct {
 	mimo      *upstream.MimoFreeUpstream
 	rec       *recorder.Recorder
 	rateLimit *middleware.RateLimiter
+	wg        sync.WaitGroup // tracks background workers
 }
 
 // routerAdapter wraps *upstream.Router to satisfy application.Router,
@@ -190,14 +192,31 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancelBG()
 
 	// Background workers
-	s.opencode.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshOpenCode)*time.Second)
-	s.kilo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshKilo)*time.Second)
-	s.mimo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshMimo)*time.Second)
-	s.rec.Start(bgCtx)
+	s.wg.Add(4)
+	go func() {
+		defer s.wg.Done()
+		s.opencode.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshOpenCode)*time.Second)
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.kilo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshKilo)*time.Second)
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.mimo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshMimo)*time.Second)
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.rec.Start(bgCtx)
+	}()
 
 	stopIP := make(chan struct{})
 	if !s.cfg.BypassProxy {
-		go s.tc.StartMonitor(torMonitorInterval, stopIP)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.tc.StartMonitor(torMonitorInterval, stopIP)
+		}()
 	} else {
 		slog.Info("tor: IP monitor skipped (bypass enabled)")
 	}
@@ -218,6 +237,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			cancelBG()
 			close(stopIP)
+			s.wg.Wait()
 			s.tc.Close()
 			s.rateLimit.Stop()
 			return fmt.Errorf("server failed: %w", err)
@@ -227,17 +247,22 @@ func (s *Server) Run(ctx context.Context) error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
+	// Signal background workers to stop
+	cancelBG()
+	close(stopIP)
+
+	// Wait for all background workers to finish
+	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
-		cancelBG()
-		close(stopIP)
 		s.tc.Close()
 		s.rateLimit.Stop()
 		return err
 	}
 
-	cancelBG()
-	close(stopIP)
+	// Wait for background workers to complete
+	s.wg.Wait()
+
 	s.tc.Close()
 	s.rateLimit.Stop()
 
