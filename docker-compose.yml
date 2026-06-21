@@ -37,6 +37,8 @@ services:
       - UPSTREAM_URL_KILO=${UPSTREAM_URL_KILO:-https://api.kilo.ai/api/openrouter}
       - UPSTREAM_KEY_KILO=${UPSTREAM_KEY_KILO:-anonymous}
       - UPSTREAM_DEFAULT=${UPSTREAM_DEFAULT:-opencode}
+      - UPSTREAM_URL_MIMO=${UPSTREAM_URL_MIMO:-https://api.xiaomimimo.com/api/free-ai/openai/chat}
+      - UPSTREAM_REFRESH_MIMO=${UPSTREAM_REFRESH_MIMO:-300}
     depends_on:
       tor:
         condition: service_healthy
