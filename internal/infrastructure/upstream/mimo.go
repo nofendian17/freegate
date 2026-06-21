@@ -26,7 +26,7 @@ import (
 const (
 	mimoSessionPrefix  = "ses_"
 	mimoSessionLen     = 24
-	mimoSource         = "mimocode-cli"
+	mimoSource         = "mimocode-cli-free"
 	mimoMarker         = "You are MiMoCode, an interactive CLI tool that helps users with software engineering tasks."
 	mimoJWTBuffer      = 5 * time.Minute
 	mimoSessionChars   = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -233,7 +233,6 @@ func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("build bootstrap request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Mimo-Source", mimoSource)
 	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
 
 	resp, err := m.client.Do(req)
