@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -218,6 +219,34 @@ func TestMimoFree_GenerateSessionID(t *testing.T) {
 			t.Errorf("duplicate session ID: %s", id)
 		}
 		seen[id] = true
+	}
+}
+
+func TestMimoFree_UserAgents_NonEmpty(t *testing.T) {
+	if len(mimoUserAgents) == 0 {
+		t.Fatal("expected at least one User-Agent string")
+	}
+	for i, ua := range mimoUserAgents {
+		if !strings.Contains(ua, "Chrome/") {
+			t.Errorf("mimoUserAgents[%d] missing Chrome/: %q", i, ua)
+		}
+		if !strings.Contains(ua, "Mozilla/5.0") {
+			t.Errorf("mimoUserAgents[%d] missing Mozilla/5.0 prefix: %q", i, ua)
+		}
+	}
+}
+
+func TestMimoFree_UserAgents_RandomPick(t *testing.T) {
+	if len(mimoUserAgents) == 0 {
+		t.Skip("no user agents defined")
+	}
+	picked := make(map[string]int)
+	for range 100 {
+		ua := mimoUserAgents[rand.Intn(len(mimoUserAgents))]
+		picked[ua]++
+	}
+	if len(picked) < 2 {
+		t.Logf("warning: random pick not diverse over 100 tries (got %d/%d distinct)", len(picked), len(mimoUserAgents))
 	}
 }
 
