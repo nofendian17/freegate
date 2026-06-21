@@ -34,6 +34,13 @@ const (
 	mimoMaxRespBodyLen = 512
 )
 
+// Anti-abuse gate: upstream rejects requests without a Chrome-like User-Agent with 403 "Illegal access"
+var mimoUserAgents = []string{
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+}
+
 type mimoJWT struct {
 	Token     string
 	ExpiresAt time.Time
@@ -173,6 +180,7 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("X-Mimo-Source", mimoSource)
+	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
 	req.Header.Set("x-session-affinity", m.sessionID)
 
 	var probe struct {
@@ -226,6 +234,7 @@ func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Mimo-Source", mimoSource)
+	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
 
 	resp, err := m.client.Do(req)
 	if err != nil {
