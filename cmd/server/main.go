@@ -8,11 +8,19 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/joho/godotenv"
+
 	"freegate/internal/config"
 	"freegate/internal/server"
 )
 
 func main() {
+	// Load .env if present; silently skip if the file does not exist so that
+	// production deployments driven purely by real env vars are unaffected.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("warn: .env load: %v", err)
+	}
+
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid config:\n%s\n", err)
