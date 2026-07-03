@@ -34,8 +34,9 @@ const (
 	mimoMaxRespBodyLen = 512
 )
 
-// Anti-abuse gate: upstream rejects requests without a Chrome-like User-Agent with 403 "Illegal access"
-var mimoUserAgents = []string{
+// Anti-abuse gate: bootstrap endpoint requires mimocode UA, chat endpoint requires Chrome-like UA
+var mimoBootstrapUA = "mimocode/0.1.0"
+var mimoChatAgents = []string{
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -184,7 +185,7 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("X-Mimo-Source", mimoSource)
-	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
+	req.Header.Set("User-Agent", mimoChatAgents[rand.Intn(len(mimoChatAgents))])
 	req.Header.Set("x-session-affinity", m.sessionID)
 
 	req.Header.Set("Accept", "text/event-stream, application/json")
@@ -232,7 +233,7 @@ func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("build bootstrap request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
+	req.Header.Set("User-Agent", mimoBootstrapUA)
 
 	resp, err := m.client.Do(req)
 	if err != nil {
