@@ -166,6 +166,10 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	if err != nil {
 		return nil, fmt.Errorf("mimo-free: inject marker: %w", err)
 	}
+	modified, err = forceMimoModel(modified)
+	if err != nil {
+		return nil, fmt.Errorf("mimo-free: force model: %w", err)
+	}
 
 	jwt, err := m.bootstrapJWT(ctx)
 	if err != nil {
@@ -183,12 +187,7 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
 	req.Header.Set("x-session-affinity", m.sessionID)
 
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &probe); err == nil && probe.Stream {
-		req.Header.Set("Accept", "text/event-stream")
-	}
+	req.Header.Set("Accept", "text/event-stream, application/json")
 
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -269,9 +268,9 @@ func parseMimoJWTExp(jwt string) time.Time {
 		return time.Now().Add(mimoDefaultJWTExp)
 	}
 
-	payload, err := base64.RawStdEncoding.DecodeString(parts[1])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		payload, err = base64.RawURLEncoding.DecodeString(parts[1])
+		payload, err = base64.RawStdEncoding.DecodeString(parts[1])
 		if err != nil {
 			return time.Now().Add(mimoDefaultJWTExp)
 		}
@@ -285,6 +284,19 @@ func parseMimoJWTExp(jwt string) time.Time {
 	}
 
 	return time.Unix(*claims.Exp, 0)
+}
+
+func forceMimoModel(body []byte) ([]byte, error) {
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return body, nil
+	}
+	data["model"] = "mimo-auto"
+	out, err := json.Marshal(data)
+	if err != nil {
+		return body, nil
+	}
+	return out, nil
 }
 
 func injectMimoSystemMarker(body []byte) ([]byte, error) {
