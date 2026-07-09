@@ -15,6 +15,12 @@ import (
 
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// HTMX poll/partial requests (dashboard refresh every 5-10s) are
+		// not user-initiated navigations; skip their access-log noise.
+		if r.Header.Get("HX-Request") == "true" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		ww := &wrapWriter{ResponseWriter: w, code: 200}
 		next.ServeHTTP(ww, r)
