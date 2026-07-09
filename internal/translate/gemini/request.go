@@ -32,6 +32,12 @@ func ToOpenAI(body []byte) ([]byte, error) {
 		openai["model"] = m
 	}
 
+	// Forward stream so Gemini-format streaming requests stay streaming
+	// when proxied to the OpenAI upstream (Claude's ToOpenAI does the same).
+	if s, ok := gemini["stream"].(bool); ok {
+		openai["stream"] = s
+	}
+
 	// Convert systemInstruction → system message
 	var messages []any
 	if sys, ok := gemini["systemInstruction"].(map[string]any); ok {

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"freegate/internal/httputil"
 	"freegate/internal/translate/claude"
 	"freegate/internal/translate/gemini"
 )
@@ -68,7 +67,6 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	// Only pass through non-200 headers immediately; for 200 we may
 	// modify Content-Type and delay headers until first write.
 	if statusCode != http.StatusOK {
-		httputil.CopyHeaders(rw.inner.Header(), rw.inner.Header())
 		rw.inner.WriteHeader(statusCode)
 	}
 }
