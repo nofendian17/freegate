@@ -252,7 +252,7 @@ a:hover {
 .metric-value.tone-red    { color: var(--error); }
 .metric-value.tone-purple { color: var(--info); }
 .metric-value.tone-gray   { color: var(--text-faint); }
-.metric-value.tone-orange { color: var(--primary); }
+.metric-value.tone-orange { color: var(--warning); }
 
 /* ----- Charts Grid ----- */
 .grid-charts {
@@ -296,6 +296,10 @@ a:hover {
 }
 
 /* ----- Upstream bar chart (inline in card) ----- */
+.upstream-list {
+  padding: var(--space-2) 0;
+}
+
 .upstream-row {
   display: flex;
   justify-content: space-between;
@@ -419,7 +423,7 @@ td.mono-faint {
 .tone-red    { color: var(--error); }
 .tone-purple { color: var(--info); }
 .tone-gray   { color: var(--text-faint); }
-.tone-orange { color: var(--primary); }
+.tone-orange { color: var(--warning); }
 .tone-dim    { color: var(--text-dim); }
 
 /* ----- Buttons (TerminalUI spec) ----- */

@@ -16,7 +16,7 @@
   <td class="dim">{{.Duration}}</td>
   <td class="dim">{{.Tokens}}</td>
   <td class="mono-faint">{{.IP}}</td>
-  <td>{{if .HasError}}<span class="error-link" data-full-error="{{.FullError}}">>&nbsp;{{.Error}}</span>{{end}}</td>
+  <td>{{if .HasError}}<span class="error-link" role="button" tabindex="0" data-full-error="{{.FullError}}" aria-label="Show full error: {{.Error}}">>&nbsp;{{.Error}}</span>{{end}}</td>
 </tr>
 {{end}}
 {{else}}

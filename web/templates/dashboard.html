@@ -59,7 +59,7 @@
         <div class="card-header">
           <span class="card-title"># Upstreams</span>
         </div>
-        <div style="padding:8px 0">
+        <div class="upstream-list">
           <div class="upstream-row">
             <span class="upstream-label">opencode</span>
             <span class="upstream-count tone-blue">{{.OpenCodeCount}}</span>
@@ -79,7 +79,7 @@
             <span class="upstream-count tone-orange">{{.MimoCount}}</span>
           </div>
           <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.UpstreamPct.Mimo}}%"></div>
+            <div class="upstream-fill" style="background:var(--warning);width:{{.UpstreamPct.Mimo}}%"></div>
           </div>
         </div>
       </div>
@@ -120,6 +120,7 @@
         <span class="card-title"># Free Models</span>
         <div class="filter-bar">
           <select id="model-filter"
+                  aria-label="Filter models by provider"
                   hx-get="/partials/models"
                   hx-trigger="change, every 10s"
                   hx-target="#models-body"
@@ -192,7 +193,7 @@
     <div class="modal-panel">
       <div class="modal-header">
         <span class="modal-title" id="modal-title">// error</span>
-        <span class="modal-close" aria-label="Close error modal">&times;</span>
+        <span class="modal-close" role="button" tabindex="0" aria-label="Close error modal">x</span>
       </div>
       <pre id="error-detail" class="modal-body"></pre>
     </div>
@@ -293,26 +294,56 @@
     document.addEventListener('DOMContentLoaded', refreshHealth);
 
     // ----- Error Modal (HTMX-safe delegation) -----
+    let lastFocused = null;
+    function openErrorModal(fullError, trigger) {
+      document.getElementById('error-detail').textContent = fullError;
+      const modal = document.getElementById('error-modal');
+      modal.style.display = 'flex';
+      document.body.classList.add('modal-open');
+      lastFocused = trigger || document.activeElement;
+      const closeBtn = modal.querySelector('.modal-close');
+      if (closeBtn) closeBtn.focus();
+    }
+    function closeErrorModal() {
+      const modal = document.getElementById('error-modal');
+      modal.style.display = 'none';
+      document.body.classList.remove('modal-open');
+      if (lastFocused && typeof lastFocused.focus === 'function') {
+        lastFocused.focus();
+        lastFocused = null;
+      }
+    }
     document.addEventListener('click', function(e) {
       const link = e.target.closest('.error-link');
       if (link) {
-        document.getElementById('error-detail').textContent = link.dataset.fullError;
-        document.getElementById('error-modal').style.display = 'flex';
-        document.body.classList.add('modal-open');
+        openErrorModal(link.dataset.fullError, link);
+      }
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        const link = e.target.closest('.error-link');
+        if (link) {
+          e.preventDefault();
+          openErrorModal(link.dataset.fullError, link);
+          return;
+        }
+        const closeBtn = e.target.closest('.modal-close');
+        if (closeBtn) {
+          e.preventDefault();
+          closeErrorModal();
+        }
       }
     });
     document.getElementById('error-modal').addEventListener('click', function(e) {
       if (e.target === this || e.target.closest('.modal-close')) {
-        this.style.display = 'none';
-        document.body.classList.remove('modal-open');
+        closeErrorModal();
       }
     });
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
         const modal = document.getElementById('error-modal');
         if (modal.style.display === 'flex') {
-          modal.style.display = 'none';
-          document.body.classList.remove('modal-open');
+          closeErrorModal();
         }
       }
     });
