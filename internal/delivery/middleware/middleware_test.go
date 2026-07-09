@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +168,58 @@ func TestRequestID_PreservesExisting(t *testing.T) {
 
 	if rec.Header().Get("X-Request-ID") != "client-provided-id" {
 		t.Fatalf("expected client-provided-id, got %s", rec.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestLogger_LogsNormalRequest(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	Logger(handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(buf.String(), "request") {
+		t.Fatalf("expected a request log line, got: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "status=200") {
+		t.Fatalf("expected logged status 200, got: %q", buf.String())
+	}
+}
+
+func TestLogger_SkipsHXRequest(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+
+	ran := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	Logger(handler).ServeHTTP(rec, req)
+
+	if !ran {
+		t.Fatal("expected the handler to run for HX request")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if strings.Contains(buf.String(), "request") {
+		t.Fatalf("expected no request log line for HX request, got: %q", buf.String())
 	}
 }
