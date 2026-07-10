@@ -175,7 +175,6 @@ func (rw *ResponseWriter) streamOpenAIToClaude(p []byte) (int, error) {
 
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "data: ") {
-			rw.writeLine(line + "\n")
 			continue
 		}
 
@@ -216,7 +215,6 @@ func (rw *ResponseWriter) streamClaudeToOpenAI(p []byte) (int, error) {
 
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "data: ") {
-			rw.writeLine(line + "\n")
 			continue
 		}
 
@@ -256,9 +254,9 @@ func (rw *ResponseWriter) streamOpenAIToGemini(p []byte) (int, error) {
 
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "data: ") {
-			rw.writeLine(line + "\n")
 			continue
 		}
+
 		data := strings.TrimPrefix(line, "data: ")
 		data = strings.TrimRight(data, "\r\n ")
 		if data == "[DONE]" {
