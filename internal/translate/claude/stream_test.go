@@ -220,6 +220,49 @@ func TestProcessChunkFinishToolCalls(t *testing.T) {
 	}
 }
 
+// TestProcessChunkTextAfterToolCall verifies that a text delta arriving
+// while a tool_use block is still open closes that block before opening the
+// text block. Anthropic requires content blocks to be strictly sequential,
+// so overlapping open blocks would make the client SDK reject the stream
+// with "Received content_block_delta without a current message".
+func TestProcessChunkTextAfterToolCall(t *testing.T) {
+	state := NewStreamState()
+
+	feed := func(s string) []string {
+		var chunk map[string]any
+		json.Unmarshal([]byte(s), &chunk)
+		return ProcessChunk(chunk, state)
+	}
+
+	var events []string
+	events = append(events, feed(`{"choices":[{"index":0,"delta":{"content":"Let me look"}}]}`)...)
+	events = append(events, feed(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"q\""}}]}}]}`)...)
+	events = append(events, feed(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"x\"}"}}]}}]}`)...)
+	// Text after the tool call: the tool_use block is still open here.
+	events = append(events, feed(`{"choices":[{"index":0,"delta":{"content":"Here is the result"}}]}`)...)
+	events = append(events, feed(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)...)
+
+	// Walk events and assert no two content blocks are open at once.
+	open := 0
+	for _, e := range events {
+		switch {
+		case strings.Contains(e, "event: content_block_start"):
+			open++
+			if open != 1 {
+				t.Fatalf("overlapping content blocks: a new block opened while one was already open near:\n%s", e)
+			}
+		case strings.Contains(e, "event: content_block_stop"):
+			open--
+			if open < 0 {
+				t.Fatalf("content_block_stop with no open block near:\n%s", e)
+			}
+		}
+	}
+	if open != 0 {
+		t.Fatalf("expected all content blocks closed, %d still open", open)
+	}
+}
+
 func TestProcessChunkStreamEndToEnd(t *testing.T) {
 	state := NewStreamState()
 
