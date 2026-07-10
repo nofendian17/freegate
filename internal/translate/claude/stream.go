@@ -175,6 +175,22 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 
 // --- Event generators ---
 
+// closeOpenToolBlocks emits content_block_stop for every tool_use block
+// still open and resets the tool-call tracking so a later tool call starts
+// fresh. Anthropic requires content blocks to be strictly sequential, so
+// before opening a text or thinking block we must close any open tool_use
+// block first.
+func (s *StreamState) closeOpenToolBlocks() []string {
+	var events []string
+	for _, blockIdx := range s.openToolBlocks {
+		events = append(events, contentBlockStop(blockIdx)...)
+	}
+	s.openToolBlocks = nil
+	s.toolCalls = make(map[int]*toolCallInfo)
+	s.toolArgBufs = make(map[int]*bytes.Buffer)
+	return events
+}
+
 func handleReasoningContent(text string, state *StreamState) []string {
 	var events []string
 
@@ -182,6 +198,11 @@ func handleReasoningContent(text string, state *StreamState) []string {
 	if state.textOpen {
 		events = append(events, contentBlockStop(state.textBlockIdx)...)
 		state.textOpen = false
+	}
+
+	// Close any open tool_use block before opening thinking
+	if len(state.openToolBlocks) > 0 {
+		events = append(events, state.closeOpenToolBlocks()...)
 	}
 
 	// Open thinking block if not open
@@ -219,6 +240,11 @@ func handleTextContent(text string, state *StreamState) []string {
 	if state.thinkingOpen {
 		events = append(events, contentBlockStop(state.thinkingIdx)...)
 		state.thinkingOpen = false
+	}
+
+	// Close any open tool_use block before opening text
+	if len(state.openToolBlocks) > 0 {
+		events = append(events, state.closeOpenToolBlocks()...)
 	}
 
 	// Open text block if not open
@@ -334,10 +360,9 @@ func handleFinish(state *StreamState) []string {
 	}
 
 	// Close any open tool_use blocks
-	for _, blockIdx := range state.openToolBlocks {
-		events = append(events, contentBlockStop(blockIdx)...)
+	if len(state.openToolBlocks) > 0 {
+		events = append(events, state.closeOpenToolBlocks()...)
 	}
-	state.openToolBlocks = nil
 
 	// Map finish_reason
 	stopReason := mapFinishReason(state.finishReason)
