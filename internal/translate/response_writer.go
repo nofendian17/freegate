@@ -183,7 +183,7 @@ func (rw *ResponseWriter) streamOpenAIToClaude(p []byte) (int, error) {
 
 		if data == "[DONE]" {
 			state.MarkClosed()
-			continue
+			break
 		}
 
 		var chunk map[string]any

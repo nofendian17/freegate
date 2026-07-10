@@ -131,8 +131,8 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 		delta = map[string]any{}
 	}
 
-	// Emit message_start on first relevant delta
-	if !state.messageStartSent {
+	// Emit message_start on first relevant delta (only before finish)
+	if !state.messageStartSent && !state.finishSent {
 		events = append(events, formatSSE("message_start", map[string]any{
 			"type":    "message_start",
 			"message": buildClaudeMessage(state),
@@ -142,20 +142,22 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 
 	// Handle reasoning_content (Claude thinking) — prefer reasoning_content;
 	// fall back to reasoning only when reasoning_content is absent.
-	if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
-		events = append(events, handleReasoningContent(rc, state)...)
-	} else if r, ok := delta["reasoning"].(string); ok && r != "" {
-		events = append(events, handleReasoningContent(r, state)...)
-	}
+	if !state.finishSent {
+		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+			events = append(events, handleReasoningContent(rc, state)...)
+		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
+			events = append(events, handleReasoningContent(r, state)...)
+		}
 
-	// Handle text content
-	if txt, ok := delta["content"].(string); ok && txt != "" {
-		events = append(events, handleTextContent(txt, state)...)
-	}
+		// Handle text content
+		if txt, ok := delta["content"].(string); ok && txt != "" {
+			events = append(events, handleTextContent(txt, state)...)
+		}
 
-	// Handle tool calls
-	if tcList, ok := delta["tool_calls"].([]any); ok && len(tcList) > 0 {
-		events = append(events, handleToolCalls(tcList, state)...)
+		// Handle tool calls
+		if tcList, ok := delta["tool_calls"].([]any); ok && len(tcList) > 0 {
+			events = append(events, handleToolCalls(tcList, state)...)
+		}
 	}
 
 	// Handle usage
@@ -168,6 +170,7 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 		state.finishReason = fr
 		events = append(events, handleFinish(state)...)
 		state.finishSent = true
+		state.closed = true
 	}
 
 	return events

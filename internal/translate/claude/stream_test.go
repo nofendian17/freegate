@@ -392,6 +392,66 @@ func TestProcessChunkReasoning_NoDuplicateWhenBothFields(t *testing.T) {
 	}
 }
 
+// TestProcessChunk_AfterFinish_NoEvents verifies that no content events are
+// produced after a finish_reason has been processed. This guards against a
+// bug where data arriving after message_stop was still translated into
+// content_block_delta / content_block_start / content_block_stop events.
+func TestProcessChunk_AfterFinish_NoEvents(t *testing.T) {
+	state := NewStreamState()
+
+	// Send a normal content chunk
+	ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0.0,
+			"delta": map[string]any{"content": "Hello"},
+		}},
+	}, state)
+
+	// Send the finish chunk
+	ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0.0, "delta": map[string]any{}, "finish_reason": "stop",
+		}},
+	}, state)
+
+	// Now send events after finish — they should produce NO events
+	events := ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0.0,
+			"delta": map[string]any{"content": "Should not appear"},
+		}},
+	}, state)
+	if len(events) > 0 {
+		t.Errorf("expected no events after finish, got %d: %v", len(events), events)
+	}
+
+	// Also verify reasoning and tool_calls are suppressed after finish
+	events = ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0.0,
+			"delta": map[string]any{"reasoning_content": "should not appear"},
+		}},
+	}, state)
+	if len(events) > 0 {
+		t.Errorf("expected no reasoning events after finish, got %d: %v", len(events), events)
+	}
+
+	events = ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{
+			"index": 0.0,
+			"delta": map[string]any{
+				"tool_calls": []any{map[string]any{
+					"index": 0.0, "id": "call_x", "type": "function",
+					"function": map[string]any{"name": "x", "arguments": "{}"},
+				}},
+			},
+		}},
+	}, state)
+	if len(events) > 0 {
+		t.Errorf("expected no tool_call events after finish, got %d: %v", len(events), events)
+	}
+}
+
 // Ensure no data races by running in parallel
 func TestProcessChunkConcurrent(t *testing.T) {
 	t.Parallel()

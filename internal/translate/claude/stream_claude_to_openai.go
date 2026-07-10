@@ -81,6 +81,13 @@ func (s *ClaudeToOpenAIState) Feed(p []byte) []string {
 // Each emitted line is a complete SSE record: "data: <json>\n\n".
 func (s *ClaudeToOpenAIState) ProcessChunk(chunk map[string]any) []string {
 	event, _ := chunk["type"].(string)
+
+	// Once finish has been sent, ignore all subsequent events.
+	// message_stop is already idempotent via its own finishSent guard.
+	if s.finishSent && event != "message_stop" {
+		return nil
+	}
+
 	switch event {
 	case "message_start":
 		return s.onMessageStart(chunk)
@@ -198,6 +205,9 @@ func (s *ClaudeToOpenAIState) onContentBlockStop(chunk map[string]any) []string 
 }
 
 func (s *ClaudeToOpenAIState) onMessageDelta(chunk map[string]any) []string {
+	if s.finishSent {
+		return nil
+	}
 	var results []string
 	if usage, ok := chunk["usage"].(map[string]any); ok {
 		s.usage = parseClaudeUsage(usage)
