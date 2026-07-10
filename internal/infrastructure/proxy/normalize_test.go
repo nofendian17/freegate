@@ -89,12 +89,81 @@ func TestNormalizeSSELine_MalformedJSON(t *testing.T) {
 	}
 }
 
-func TestNormalizeSSELine_NonDataLine(t *testing.T) {
-	line := "event: message\n"
-	result := normalizeSSELine(line)
-	if result != line {
-		t.Error("expected non-data line to pass through unchanged")
+func TestNormalizeStream_DropsCommentsAndEventLines(t *testing.T) {
+	// OpenRouter-style comment and event: lines must not reach the client;
+	// only data: lines (including [DONE]) are forwarded.
+	input := ": OPENROUTER PROCESSING\nevent: message\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\ndata: [DONE]\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if strings.Contains(output, "OPENROUTER PROCESSING") {
+		t.Error("expected upstream comment line to be dropped")
 	}
+	if strings.Contains(output, "event: message") {
+		t.Error("expected upstream event: line to be dropped")
+	}
+	if !strings.Contains(output, `"content":"hi"`) {
+		t.Error("expected data payload to be preserved")
+	}
+	if !strings.Contains(output, "data: [DONE]") {
+		t.Error("expected [DONE] marker to be preserved")
+	}
+}
+
+// TestNormalizeStream_NDJSONNoNewlines covers upstreams (e.g. OpenRouter→
+// Novita for tencent/hy3) that concatenate data: events with no newline
+// separator. The reader must still split them into individual events.
+func TestNormalizeStream_NDJSONNoNewlines(t *testing.T) {
+	input := "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}data: [DONE]"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	count := strings.Count(output, "data: {\"choices\"")
+	if count != 2 {
+		t.Errorf("expected 2 data events, got %d: %s", count, output)
+	}
+	if !strings.Contains(output, `"content":"Hello"`) {
+		t.Error("expected first event payload preserved")
+	}
+	if !strings.Contains(output, `"content":" world"`) {
+		t.Error("expected second event payload preserved")
+	}
+	if !strings.Contains(output, "data: [DONE]") {
+		t.Error("expected [DONE] marker preserved")
+	}
+}
+
+// TestNormalizeStream_ChunkedNDJSON ensures events arriving split across
+// reads (mid-JSON) are reassembled correctly.
+func TestNormalizeStream_ChunkedNDJSON(t *testing.T) {
+	// A reader that yields one byte at a time.
+	r := &byteReader{s: "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}data: [DONE]"}
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(r))
+	output := buf.String()
+
+	if got := strings.Count(output, "data: {\"choices\""); got != 2 {
+		t.Errorf("expected 2 data events, got %d: %s", got, output)
+	}
+	if !strings.Contains(output, "data: [DONE]") {
+		t.Error("expected [DONE] marker preserved")
+	}
+}
+
+type byteReader struct {
+	s string
+	i int
+}
+
+func (b *byteReader) Read(p []byte) (int, error) {
+	if b.i >= len(b.s) {
+		return 0, io.EOF
+	}
+	p[0] = b.s[b.i]
+	b.i++
+	return 1, nil
 }
 
 func TestNormalizeSSELine_EmptyData(t *testing.T) {

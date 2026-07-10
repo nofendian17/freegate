@@ -48,30 +48,87 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	var usage TokenUsage
 
+	// Some upstreams (e.g. OpenRouter→Novita for tencent/hy3) emit NDJSON
+	// with no newline between events: "data: {...}data: {...}". Reading
+	// line-by-line would treat the whole stream as one line, so instead we
+	// accumulate bytes and split on "data: " boundaries. This also handles
+	// classic SSE framing (events terminated by \n or \n\n) since each
+	// event still begins with "data: ".
+	var buf bytes.Buffer
 	for {
-		line, err := rd.ReadString('\n')
+		chunk, err := rd.ReadBytes('\n')
 		if err != nil && err != io.EOF {
 			slog.Warn("stream read error", "error", err)
 			break
 		}
-
-		if len(line) > 0 {
-			usage = extractUsageFromSSE(line, usage)
-			normalized := normalizeSSELine(line)
-			if _, werr := io.WriteString(dst, normalized); werr != nil {
-				slog.Warn("stream write error", "error", werr)
-				break
-			}
-			if fl != nil {
-				fl.Flush()
-			}
-		}
-
-		if err == io.EOF {
+		buf.Write(chunk)
+		if err == io.EOF && len(chunk) == 0 {
 			break
 		}
+
+		// Emit every complete data: event currently buffered. An event is
+		// complete once we can see the start of the next "data: " marker or
+		// we've hit EOF.
+		for {
+			data := buf.String()
+			start := strings.Index(data, "data: ")
+			if start < 0 {
+				// No event in buffer; drop non-data prefix (e.g. a stray
+				// ":" comment line or blank bytes) and wait for more.
+				if err == io.EOF {
+					break
+				}
+				buf.Reset()
+				break
+			}
+			next := strings.Index(data[start+len("data: "):], "data: ")
+			if next < 0 {
+				// Only one (possibly partial) event buffered.
+				if err == io.EOF {
+					// Last event: process whatever remains, then stop.
+					event := data[start:]
+					emitOpenAIEvent(dst, &usage, event, fl)
+					buf.Reset()
+					break
+				}
+				// Keep the unprocessed tail (including the leading data:
+				// event) for the next iteration; discard anything before it.
+				buf.Reset()
+				buf.WriteString(data[start:])
+				break
+			}
+			eventEnd := start + len("data: ") + next
+			event := data[start:eventEnd]
+			emitOpenAIEvent(dst, &usage, event, fl)
+			buf.Reset()
+			buf.WriteString(data[eventEnd:])
+		}
+	}
+	// Flush any trailing event left in the buffer (the final read returns
+	// io.EOF on an empty read, after the last event was already buffered).
+	if rest := strings.TrimSpace(buf.String()); strings.HasPrefix(rest, "data:") {
+		emitOpenAIEvent(dst, &usage, rest, fl)
 	}
 	return usage
+}
+
+// emitOpenAIEvent normalizes and forwards a single buffered OpenAI SSE
+// event (a "data: ..." string, possibly with a trailing newline). It
+// updates usage and flushes after writing.
+func emitOpenAIEvent(dst io.Writer, usage *TokenUsage, event string, fl http.Flusher) {
+	event = strings.TrimSpace(event)
+	if event == "" {
+		return
+	}
+	*usage = extractUsageFromSSE(event, *usage)
+	normalized := normalizeSSELine(event)
+	if _, werr := io.WriteString(dst, normalized); werr != nil {
+		slog.Warn("stream write error", "error", werr)
+		return
+	}
+	if fl != nil {
+		fl.Flush()
+	}
 }
 
 // normalizeClaudeStream translates Anthropic/Claude SSE events into
@@ -203,11 +260,10 @@ func extractUsageFromSSE(line string, current TokenUsage) TokenUsage {
 	return current
 }
 
+// normalizeSSELine rewrites a data: SSE line, syncing the reasoning fields
+// for downstream compatibility. It is only called with data: lines (the
+// stream loop skips all other lines), so the prefix check is an invariant.
 func normalizeSSELine(line string) string {
-	if !strings.HasPrefix(line, "data: ") {
-		return line
-	}
-
 	data := strings.TrimPrefix(line, "data: ")
 	data = strings.TrimRight(data, "\r\n")
 
