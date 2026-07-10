@@ -244,6 +244,33 @@ func TestResponseWriter_StreamingPassthrough(t *testing.T) {
 	}
 }
 
+func TestResponseWriter_StreamingDropsUpstreamSSEEventNames(t *testing.T) {
+	inner := httptest.NewRecorder()
+	rw := NewResponseWriter(inner, FormatClaude)
+	rw.Header().Set("Content-Type", "text/event-stream")
+
+	streamData := []string{
+		"event: content_block_delta\n",
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+		"event: content_block_delta\n",
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n",
+	}
+	for _, chunk := range streamData {
+		rw.Write([]byte(chunk))
+	}
+	rw.Close()
+
+	body := inner.Body.String()
+	firstMessageStart := strings.Index(body, "event: message_start")
+	firstContentDelta := strings.Index(body, "event: content_block_delta")
+	if firstMessageStart < 0 {
+		t.Fatalf("expected message_start event, got: %s", body)
+	}
+	if firstContentDelta >= 0 && firstContentDelta < firstMessageStart {
+		t.Fatalf("content_block_delta appeared before message_start: %s", body)
+	}
+}
+
 func TestResponseWriter_CloseEmpty(t *testing.T) {
 	inner := httptest.NewRecorder()
 	rw := NewResponseWriter(inner, FormatClaude)
