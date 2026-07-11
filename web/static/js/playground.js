@@ -15,6 +15,7 @@
   };
   var inFlight = false;
   var activeAssistantBubble = null; // reference to the live assistant <pre> being filled
+  var lastFocused = null; // element that opened the modal, for focus restoration
 
   // Pre-populate window.fgPlayground with no-op stubs so that any htmx
   // hx-on expression that fires before the rest of the IIFE completes
@@ -213,6 +214,7 @@
 
   function open() {
     load();
+    lastFocused = document.activeElement;
     $('pg-overlay').style.display = 'flex';
     document.body.classList.add('modal-open');
     $('pg-system').value = state.system;
@@ -226,6 +228,10 @@
   function close() {
     $('pg-overlay').style.display = 'none';
     document.body.classList.remove('modal-open');
+    if (lastFocused && typeof lastFocused.focus === 'function') {
+      lastFocused.focus();
+    }
+    lastFocused = null;
   }
 
   function clear() {
@@ -622,6 +628,21 @@
     });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && $('pg-overlay').style.display === 'flex') close();
+      if (e.key === 'Tab' && $('pg-overlay').style.display === 'flex') {
+        var focusable = $('pg-panel').querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     });
 
     // Restore system-prompt collapse state
