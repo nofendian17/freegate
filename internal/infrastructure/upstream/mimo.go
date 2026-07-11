@@ -41,21 +41,20 @@ var mimoUserAgents = []string{
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 }
 
-type mimoJWT struct {
-	Token     string
-	ExpiresAt time.Time
-}
-
 type MimoFreeUpstream struct {
 	client        *http.Client
 	cache         *ModelCache
 	fingerprint   string
 	sessionID     string
-	jwt           mimoJWT
-	mu            sync.Mutex
 	chatURL       string
 	bootstrapURL  string
 }
+
+var (
+	mimoJWTToken     string
+	mimoJWTExpiresAt time.Time
+	mimoJWTMu        sync.Mutex
+)
 
 func NewMimoFreeUpstream(chatURL, socksAddr string) *MimoFreeUpstream {
 	bootstrapURL := deriveMimoBootstrapURL(chatURL)
@@ -171,12 +170,30 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 		return nil, fmt.Errorf("mimo-free: force model: %w", err)
 	}
 
+	resp, err := m.doChatRequest(ctx, modified)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		resp.Body.Close()
+		slog.Debug("mimo-free: auth failed, re-bootstrapping JWT")
+		mimoJWTMu.Lock()
+		mimoJWTToken = ""
+		mimoJWTMu.Unlock()
+		return m.doChatRequest(ctx, modified)
+	}
+
+	return resp, nil
+}
+
+func (m *MimoFreeUpstream) doChatRequest(ctx context.Context, body []byte) (*http.Response, error) {
 	jwt, err := m.bootstrapJWT(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mimo-free: jwt bootstrap: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", m.chatURL, bytes.NewReader(modified))
+	req, err := http.NewRequestWithContext(ctx, "POST", m.chatURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("mimo-free: build request: %w", err)
 	}
@@ -186,44 +203,29 @@ func (m *MimoFreeUpstream) ChatCompletion(ctx context.Context, body []byte) (*ht
 	req.Header.Set("X-Mimo-Source", mimoSource)
 	req.Header.Set("User-Agent", mimoUserAgents[rand.Intn(len(mimoUserAgents))])
 	req.Header.Set("x-session-affinity", m.sessionID)
-
 	req.Header.Set("Accept", "text/event-stream, application/json")
+
+	slog.Debug("mimo-free: chat request", "body_size", len(body))
 
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mimo-free: request: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		resp.Body.Close()
-		slog.Debug("mimo-free: auth failed, re-bootstrapping JWT")
-		m.mu.Lock()
-		m.jwt = mimoJWT{}
-		m.mu.Unlock()
-		jwt, err = m.bootstrapJWT(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("mimo-free: re-bootstrap: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+jwt)
-		retryResp, err := m.client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("mimo-free: retry request: %w", err)
-		}
-		return retryResp, nil
-	}
-
 	return resp, nil
 }
 
 func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	if m.jwt.Token != "" && time.Now().Before(m.jwt.ExpiresAt.Add(-mimoJWTBuffer)) {
-		token := m.jwt.Token
-		m.mu.Unlock()
+	mimoJWTMu.Lock()
+	if mimoJWTToken != "" && time.Now().Before(mimoJWTExpiresAt.Add(-mimoJWTBuffer)) {
+		token := mimoJWTToken
+		mimoJWTMu.Unlock()
+		slog.Debug("mimo-free: jwt cache hit")
 		return token, nil
 	}
-	m.mu.Unlock()
+	mimoJWTMu.Unlock()
 
+	slog.Debug("mimo-free: bootstrapping jwt")
 	payload := map[string]string{"client": m.fingerprint}
 	body, _ := json.Marshal(payload)
 
@@ -255,10 +257,12 @@ func (m *MimoFreeUpstream) bootstrapJWT(ctx context.Context) (string, error) {
 
 	exp := parseMimoJWTExp(result.JWT)
 
-	m.mu.Lock()
-	m.jwt = mimoJWT{Token: result.JWT, ExpiresAt: exp}
-	m.mu.Unlock()
+	mimoJWTMu.Lock()
+	mimoJWTToken = result.JWT
+	mimoJWTExpiresAt = exp
+	mimoJWTMu.Unlock()
 
+	slog.Debug("mimo-free: jwt cached", "expires_at", exp.Format(time.RFC3339))
 	return result.JWT, nil
 }
 
