@@ -14,6 +14,13 @@ import (
 	"freegate/internal/server"
 )
 
+// Build-time metadata, injected via -ldflags by GoReleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	// Load .env if present; silently skip if the file does not exist so that
 	// production deployments driven purely by real env vars are unaffected.

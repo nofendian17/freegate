@@ -1,0 +1,62 @@
+version: 2
+
+project_name: freegate
+
+builds:
+  - id: freegate
+    main: ./cmd/server
+    binary: freegate
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: freegate
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - .env.example
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: nofendian17
+    name: freegate
+  footer: |
+    ## Running without Tor
+
+    freegate routes all upstream traffic through a Tor SOCKS5 proxy by default.
+    If you are **not** running a Tor proxy, set:
+
+    ```bash
+    BYPASS_PROXY=true
+    ```
+
+    (in your environment or `.env`) so freegate connects directly to the
+    upstreams. When `BYPASS_PROXY=true`, IP rotation on `429` is also disabled.
