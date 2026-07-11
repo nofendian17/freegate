@@ -10,4 +10,4 @@
 *.swp
 
 # Claude
-.claude/
+.claude/dist/
