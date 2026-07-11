@@ -2,7 +2,7 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
 
-freegate proxies `/v1/chat/completions` and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **Xiaomi MiMo Free**, routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **Xiaomi MiMo Free**, routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
@@ -48,7 +48,13 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 # Health check
 curl http://localhost:1234/ready
-```
+
+# Anthropic-native (Claude format) — auto-translated to the upstream
+curl -X POST http://localhost:1234/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-sonnet-4","max_tokens":50,"messages":[{"role":"user","content":"hello"}]}'
+
 
 ## Routing Rules
 
