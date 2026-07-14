@@ -98,12 +98,19 @@ func convertOpenAIMessage(msg map[string]any) []any {
 				continue
 			}
 			name, _ := fn["name"].(string)
-			argsStr, _ := fn["arguments"].(string)
+			// Some models (e.g. tencent/hy3) emit `arguments` as a JSON object
+			// inline rather than as a string. Handle both forms.
 			var input any
-			dec := json.NewDecoder(strings.NewReader(argsStr))
-			_ = dec.Decode(&input)
+			if argsStr, ok := fn["arguments"].(string); ok && argsStr != "" {
+				dec := json.NewDecoder(strings.NewReader(argsStr))
+				_ = dec.Decode(&input)
+			}
 			if input == nil {
-				input = map[string]any{}
+				if argsObj, ok := fn["arguments"].(map[string]any); ok {
+					input = argsObj
+				} else {
+					input = map[string]any{}
+				}
 			}
 
 			id, _ := tc["id"].(string)
