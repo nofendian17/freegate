@@ -472,17 +472,42 @@ func assistantContentToBlocks(m oaiMessage) ([]claudeContent, error) {
 	}
 
 	// OpenAI tool_calls → Claude tool_use blocks
+	// Some models (e.g. tencent/hy3-free) concatenate multiple tool-call
+	// arguments into one entry: {"cmd":"a"}{"cmd":"b"}. Split them apart.
+	sepCount := make(map[string]int) // per-ID suffix counter
 	for _, tc := range m.ToolCalls {
-		input, err := parseToolArgs(tc.Function.Arguments)
-		if err != nil {
-			return nil, err
+		parts := splitToolArgs(tc.Function.Arguments)
+		for i, part := range parts {
+			id := tc.ID
+			if len(parts) > 1 {
+				sepCount[tc.ID]++
+				id = fmt.Sprintf("%s_%d", tc.ID, sepCount[tc.ID])
+			}
+			var input json.RawMessage
+			if part != "" {
+				input = json.RawMessage(part)
+			}
+			if i == 0 {
+				// For the first part, fall through parseToolArgs for normal
+				// validation ("" → {}, "null" → {}, non-object → {}).
+				var err error
+				input, err = parseToolArgs(tc.Function.Arguments)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				// Extra split parts are already valid JSON from splitToolArgs.
+				if len(part) == 0 || part == "null" || (len(part) > 0 && part[0] != '{') {
+					input = json.RawMessage(`{}`)
+				}
+			}
+			blocks = append(blocks, claudeContent{
+				Type:  "tool_use",
+				ID:    id,
+				Name:  tc.Function.Name,
+				Input: input,
+			})
 		}
-		blocks = append(blocks, claudeContent{
-			Type:  "tool_use",
-			ID:    tc.ID,
-			Name:  tc.Function.Name,
-			Input: input,
-		})
 	}
 	return blocks, nil
 }

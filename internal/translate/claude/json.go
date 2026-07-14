@@ -3,7 +3,6 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // --- Non-streaming JSON response translation ---
@@ -85,7 +84,9 @@ func convertOpenAIMessage(msg map[string]any) []any {
 		content = append(content, c...)
 	}
 
-	// Add tool calls as tool_use blocks
+	// Add tool calls as tool_use blocks.
+	// Some models (e.g. tencent/hy3-free) concatenate multiple tool-call
+	// arguments into one entry: {"cmd":"a"}{"cmd":"b"}. Split them apart.
 	if tcList, ok := msg["tool_calls"].([]any); ok {
 		seenIDs := make(map[string]int)
 		for _, tcAny := range tcList {
@@ -98,39 +99,47 @@ func convertOpenAIMessage(msg map[string]any) []any {
 				continue
 			}
 			name, _ := fn["name"].(string)
+
 			// Some models (e.g. tencent/hy3) emit `arguments` as a JSON object
-			// inline rather than as a string. Handle both forms.
-			var input any
+			// inline rather than as a string. Split concatenated strings.
+			var parts []string
 			if argsStr, ok := fn["arguments"].(string); ok && argsStr != "" {
-				dec := json.NewDecoder(strings.NewReader(argsStr))
-				_ = dec.Decode(&input)
-			}
-			if input == nil {
-				if argsObj, ok := fn["arguments"].(map[string]any); ok {
-					input = argsObj
-				} else {
-					input = map[string]any{}
-				}
+				parts = splitToolArgs(argsStr)
+			} else if _, ok := fn["arguments"].(map[string]any); ok {
+				parts = []string{""} // object → single block, no split needed
 			}
 
-			id, _ := tc["id"].(string)
-			if id == "" {
-				id = "toolu_" + randID(8)
-			} else {
+			baseID, _ := tc["id"].(string)
+			if baseID == "" {
+				baseID = "toolu_" + randID(8)
+			}
+			for i, part := range parts {
+				id := baseID
 				if count, seen := seenIDs[id]; seen {
 					seenIDs[id] = count + 1
 					id = fmt.Sprintf("%s_%d", id, count)
 				} else {
-					seenIDs[id] = 1
+					if i > 0 {
+						seenIDs[baseID] = 1
+						id = fmt.Sprintf("%s_%d", baseID, i+1)
+					} else {
+						seenIDs[baseID] = 1
+					}
 				}
+				var input any
+				if part != "" {
+					json.Unmarshal([]byte(part), &input)
+				}
+				if input == nil {
+					input = map[string]any{}
+				}
+				content = append(content, map[string]any{
+					"type":  "tool_use",
+					"id":    id,
+					"name":  name,
+					"input": input,
+				})
 			}
-
-			content = append(content, map[string]any{
-				"type":  "tool_use",
-				"id":    id,
-				"name":  name,
-				"input": input,
-			})
 		}
 	}
 

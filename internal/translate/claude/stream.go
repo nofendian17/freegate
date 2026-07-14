@@ -382,6 +382,70 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 
 
 
+// splitToolArgs splits a concatenated tool-arguments string (e.g.
+// {"a":1}{"b":2}) into individual JSON objects by walking the raw string
+// and finding top-level '}{' boundaries. Each fragment is run through
+// repairToolArgs individually. Returns at least one object (the first valid
+// object if no split is possible).
+func splitToolArgs(s string) []string {
+	if s == "" {
+		return []string{`{}`}
+	}
+	depth := 0
+	start := 0
+	inStr := false
+	escaped := false
+	var parts []string
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		switch ch {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			depth--
+			if depth == 0 && i+1 < len(s) && s[i+1] == '{' {
+				// Top-level }{ boundary — splice here.
+				part := repairToolArgs(s[start : i+1])
+				if part != "" {
+					parts = append(parts, part)
+				}
+				depth = 0
+				i++ // skip past the '{' after '}'
+				start = i
+			}
+		}
+	}
+	// Collect the last (or only) segment.
+	if start < len(s) {
+		part := repairToolArgs(s[start:])
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		parts = []string{repairToolArgs(s)}
+	}
+	return parts
+}
+
 // repairToolArgs attempts to return valid JSON from an accumulated tool-call
 // argument buffer. It handles three failure modes:
 //
