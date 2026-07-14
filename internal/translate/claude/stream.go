@@ -349,7 +349,9 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		// Accumulate arguments
 		if fn, ok := tc["function"].(map[string]any); ok {
 			if args, ok := fn["arguments"].(string); ok && args != "" {
-				state.toolArgBufs[intIdx].WriteString(args)
+				if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
+					buf.WriteString(args)
+				}
 				state.outputContent.WriteString(args)
 				ti := state.toolCalls[intIdx]
 				if ti != nil {
