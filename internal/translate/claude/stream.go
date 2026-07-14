@@ -34,9 +34,14 @@ type StreamState struct {
 }
 
 type toolCallInfo struct {
-	ID    string
-	Name  string
-	Index int
+	ID            string
+	Name          string
+	Index         int
+	depth         int
+	inString      bool
+	escaped       bool
+	objectStarted bool
+	finished      bool
 }
 
 type usageInfo struct {
@@ -349,26 +354,75 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		// Accumulate arguments
 		if fn, ok := tc["function"].(map[string]any); ok {
 			if args, ok := fn["arguments"].(string); ok && args != "" {
-				if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
-					buf.WriteString(args)
-				}
-				state.outputContent.WriteString(args)
 				ti := state.toolCalls[intIdx]
 				if ti != nil {
-					events = append(events, formatSSE("content_block_delta", map[string]any{
-						"type":  "content_block_delta",
-						"index": ti.Index,
-						"delta": map[string]any{
-							"type":         "input_json_delta",
-							"partial_json": args,
-						},
-					})...)
+					args = parseDeltaArgs(ti, args)
+				}
+				if args != "" {
+					if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
+						buf.WriteString(args)
+					}
+					state.outputContent.WriteString(args)
+					if ti != nil {
+						events = append(events, formatSSE("content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": ti.Index,
+							"delta": map[string]any{
+								"type":         "input_json_delta",
+								"partial_json": args,
+							},
+						})...)
+					}
 				}
 			}
 		}
 	}
 
 	return events
+}
+
+func parseDeltaArgs(ti *toolCallInfo, args string) string {
+	if ti.finished {
+		return ""
+	}
+	var sb strings.Builder
+	for i := 0; i < len(args); i++ {
+		if ti.finished {
+			break
+		}
+		ch := args[i]
+		sb.WriteByte(ch)
+
+		if ti.escaped {
+			ti.escaped = false
+			continue
+		}
+
+		if ch == '\\' {
+			ti.escaped = true
+			continue
+		}
+
+		if ch == '"' {
+			ti.inString = !ti.inString
+			continue
+		}
+
+		if !ti.inString {
+			if ch == '{' || ch == '[' {
+				ti.objectStarted = true
+				ti.depth++
+			} else if ch == '}' || ch == ']' {
+				if ti.depth > 0 {
+					ti.depth--
+					if ti.depth == 0 && ti.objectStarted {
+						ti.finished = true
+					}
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 func handleFinish(state *StreamState) []string {
