@@ -20,10 +20,25 @@ func TestRepairToolArgs_AllValid(t *testing.T) {
 		"trailing-comma-nested": `{"a":1,"b":[2,3,]}`,
 		"unclosed-brace":       `{"a":1`,
 		"unclosed-nested":      `{"a":{"b":1`,
+		// Truncated string value: must close the string before the object,
+		// else the client rejects it with "input JSON failed to parse".
+		"truncated-string": `{"command":"rm -rf /tmp/foo`,
+		// Empty value: unrecoverable, but output must still be valid JSON.
+		"empty-value": `{"a":}`,
 	}
 	for label, in := range cases {
 		t.Run(label, func(t *testing.T) {
 			assertValid(t, in, repairToolArgs(in))
 		})
+	}
+}
+
+// TestRepairToolArgs_NeverReturnsInvalidJSON guards the contract that
+// repairToolArgs always yields parseable JSON: a malformed buffer that cannot
+// be salvaged degrades to "{}" rather than being forwarded verbatim (which
+// Claude Code surfaces as "Bash(input JSON failed to parse — N bytes)").
+func TestRepairToolArgs_NeverReturnsInvalidJSON(t *testing.T) {
+	if out := repairToolArgs(`{"a":}`); out != "{}" {
+		t.Errorf("expected give-up to return %q, got %q", "{}", out)
 	}
 }

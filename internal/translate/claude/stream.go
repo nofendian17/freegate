@@ -406,8 +406,10 @@ func repairToolArgs(s string) string {
 		}
 	}
 
-	// Give up — return original and let the client handle it.
-	return s
+	// Give up — but never hand the client unparseable JSON, which Claude Code
+	// rejects with "input JSON failed to parse". An empty object parses
+	// cleanly; the args are lost but the tool call survives (matches mustJSON).
+	return "{}"
 }
 
 // repairUnescapedQuotes scans a JSON string byte-by-byte and escapes any '"'
@@ -501,9 +503,12 @@ func repairTrailingCommas(s string) string {
 	return out.String()
 }
 
-// repairUnterminated appends the closing '}' / ']' needed to balance any
-// unclosed containers, respecting string literals. Returns "" when already
-// balanced (nothing to fix).
+// repairUnterminated appends the closing '"' (for an unterminated string
+// literal), then the '}' / ']' needed to balance any unclosed containers,
+// respecting string literals. Returns "" when already balanced (nothing to
+// fix). Closing an open string first matters: a truncated argument like
+// {"command":"rm -rf /tmp/foo would otherwise be balanced to the invalid
+// {"command":"rm -rf /tmp/foo} (string never closed) and rejected downstream.
 func repairUnterminated(s string) string {
 	depth := 0
 	var closers []byte
@@ -537,11 +542,17 @@ func repairUnterminated(s string) string {
 			}
 		}
 	}
-	if depth == 0 {
+	if depth == 0 && !inStr {
 		return ""
 	}
+	// Don't emit a closing quote right after a trailing backslash: it would be
+	// escaped by the parser and fail to terminate the string.
+	trailingEscape := len(s) > 0 && s[len(s)-1] == '\\'
 	var sb strings.Builder
 	sb.WriteString(s)
+	if inStr && !trailingEscape {
+		sb.WriteByte('"')
+	}
 	for i := len(closers) - 1; i >= 0; i-- {
 		if closers[i] == '{' {
 			sb.WriteByte('}')
