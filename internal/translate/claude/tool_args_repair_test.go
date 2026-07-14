@@ -15,11 +15,11 @@ func assertValid(t *testing.T, in, out string) {
 
 func TestRepairToolArgs_AllValid(t *testing.T) {
 	cases := map[string]string{
-		"historical-dup":        `{"file_path":"/Users/beninofendianwar/.mcp.json","content":"{\n  \"mcpServers\": {}\n}\n"}{"file_path":"/Users/beninofendianwar/.mcp.json","content":"{\n  \"mcpServers\": {}\n}\n"}`,
+		"historical-dup":        `{"file_path":"/Users/xxx/.mcp.json","content":"{\n  \"mcpServers\": {}\n}\n"}{"file_path":"/Users/beninofendianwar/.mcp.json","content":"{\n  \"mcpServers\": {}\n}\n"}`,
 		"trailing-comma":        `{"a":1,}`,
 		"trailing-comma-nested": `{"a":1,"b":[2,3,]}`,
-		"unclosed-brace":       `{"a":1`,
-		"unclosed-nested":      `{"a":{"b":1`,
+		"unclosed-brace":        `{"a":1`,
+		"unclosed-nested":       `{"a":{"b":1`,
 		// Truncated string value: must close the string before the object,
 		// else the client rejects it with "input JSON failed to parse".
 		"truncated-string": `{"command":"rm -rf /tmp/foo`,

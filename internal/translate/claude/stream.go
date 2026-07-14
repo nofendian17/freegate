@@ -351,9 +351,19 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 			}
 		}
 
-		// Accumulate arguments
+		// Accumulate arguments.
+		// Some models (e.g. tencent/hy3) emit `arguments` as a JSON object
+		// inline rather than as a string. Handle both forms.
 		if fn, ok := tc["function"].(map[string]any); ok {
-			if args, ok := fn["arguments"].(string); ok && args != "" {
+			var args string
+			if argsStr, ok := fn["arguments"].(string); ok {
+				args = argsStr
+			} else if argsObj, ok := fn["arguments"].(map[string]any); ok {
+				if b, err := json.Marshal(argsObj); err == nil {
+					args = string(b)
+				}
+			}
+			if args != "" {
 				ti := state.toolCalls[intIdx]
 				if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
 					buf.WriteString(args)
