@@ -355,25 +355,14 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		if fn, ok := tc["function"].(map[string]any); ok {
 			if args, ok := fn["arguments"].(string); ok && args != "" {
 				ti := state.toolCalls[intIdx]
-				if ti != nil {
-					args = parseDeltaArgs(ti, args)
+				if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
+					buf.WriteString(args)
 				}
-				if args != "" {
-					if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil {
-						buf.WriteString(args)
-					}
-					state.outputContent.WriteString(args)
-					if ti != nil {
-						events = append(events, formatSSE("content_block_delta", map[string]any{
-							"type":  "content_block_delta",
-							"index": ti.Index,
-							"delta": map[string]any{
-								"type":         "input_json_delta",
-								"partial_json": args,
-							},
-						})...)
-					}
-				}
+				state.outputContent.WriteString(args)
+				// We no longer emit input_json_delta here. Instead, we buffer
+				// the raw string and emit a single repaired delta in handleFinish.
+				// This avoids premature truncation and streaming syntax errors.
+				_ = ti
 			}
 		}
 	}
@@ -381,62 +370,15 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 	return events
 }
 
-// parseDeltaArgs filters argument delta chunks. It tracks whether we've seen
-// a complete top-level JSON object/array, and drops anything after that point
-// to prevent duplicated concatenated objects (e.g. {"a":1}{"a":1} → {"a":1}).
-// Unescaped-quote repair is done later on the completed buffer by repairToolArgs.
-func parseDeltaArgs(ti *toolCallInfo, args string) string {
-	if ti.finished {
-		return ""
-	}
-	var sb strings.Builder
-	for i := 0; i < len(args); i++ {
-		if ti.finished {
-			break
-		}
-		ch := args[i]
 
-		if ti.escaped {
-			ti.escaped = false
-			sb.WriteByte(ch)
-			continue
-		}
-		if ch == '\\' {
-			ti.escaped = true
-			sb.WriteByte(ch)
-			continue
-		}
-		if ch == '"' {
-			ti.inString = !ti.inString
-			sb.WriteByte(ch)
-			continue
-		}
-		if !ti.inString {
-			if ch == '{' || ch == '[' {
-				ti.objectStarted = true
-				ti.depth++
-			} else if ch == '}' || ch == ']' {
-				if ti.depth > 0 {
-					ti.depth--
-					if ti.depth == 0 && ti.objectStarted {
-						sb.WriteByte(ch)
-						ti.finished = true
-						continue
-					}
-				}
-			}
-		}
-		sb.WriteByte(ch)
-	}
-	return sb.String()
-}
 
 // repairToolArgs attempts to return valid JSON from an accumulated tool-call
-// argument buffer. It handles two failure modes:
+// argument buffer. It handles three failure modes:
 //
 //  1. Concatenated duplicate objects: {"a":1}{"a":1} → decodes only the first.
 //  2. Unescaped inner quotes in string values: {"cmd":"echo "$F""} →
 //     escapes the inner quotes so the result is valid JSON.
+//  3. Literal newlines and control characters inside strings.
 func repairToolArgs(s string) string {
 	if s == "" {
 		return "{}"
@@ -446,18 +388,15 @@ func repairToolArgs(s string) string {
 	if json.Unmarshal([]byte(s), &dummy) == nil {
 		return s
 	}
-	// Case 1: try reading just the first JSON value (handles concatenation).
-	dec := json.NewDecoder(strings.NewReader(s))
+	// Always repair quotes and control characters first!
+	fixed := repairUnescapedQuotes(s)
+	
+	// Try parsing exactly one object (handles concatenation) from the repaired string!
+	dec := json.NewDecoder(strings.NewReader(fixed))
 	if dec.Decode(&dummy) == nil {
-		b, err := json.Marshal(dummy)
-		if err == nil {
+		if b, err := json.Marshal(dummy); err == nil {
 			return string(b)
 		}
-	}
-	// Case 2: repair unescaped inner quotes.
-	fixed := repairUnescapedQuotes(s)
-	if json.Unmarshal([]byte(fixed), &dummy) == nil {
-		return fixed
 	}
 	// Give up — return original and let the client handle it.
 	return s
@@ -507,6 +446,26 @@ func repairUnescapedQuotes(s string) string {
 			}
 			continue
 		}
+
+		if inStr {
+			if ch == '\n' {
+				out.WriteByte('\\')
+				out.WriteByte('n')
+				continue
+			} else if ch == '\r' {
+				out.WriteByte('\\')
+				out.WriteByte('r')
+				continue
+			} else if ch == '\t' {
+				out.WriteByte('\\')
+				out.WriteByte('t')
+				continue
+			} else if ch < 0x20 {
+				out.WriteString(fmt.Sprintf("\\u%04x", ch))
+				continue
+			}
+		}
+
 		out.WriteByte(ch)
 	}
 	return out.String()
@@ -531,17 +490,16 @@ func handleFinish(state *StreamState) []string {
 			if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil && buf.Len() > 0 {
 				accumulated := buf.String()
 				repaired := repairToolArgs(accumulated)
-				if repaired != accumulated {
-					// Emit a corrective delta replacing all previously streamed args
-					events = append(events, formatSSE("content_block_delta", map[string]any{
-						"type":  "content_block_delta",
-						"index": ti.Index,
-						"delta": map[string]any{
-							"type": "clear_input_json",
-							"json": repaired,
-						},
-					})...)
-				}
+				
+				// Emit a single delta containing the fully repaired arguments JSON
+				events = append(events, formatSSE("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": ti.Index,
+					"delta": map[string]any{
+						"type":         "input_json_delta",
+						"partial_json": repaired,
+					},
+				})...)
 			}
 		}
 		events = append(events, state.closeOpenToolBlocks()...)

@@ -437,6 +437,29 @@ func mustJSON(v any) string {
 	if v == nil {
 		return "{}"
 	}
+
+	// Intercept Claude's __unparsedToolInput to prevent history pollution.
+	// When the harness fails to parse a tool argument (e.g. due to duplication on --resume),
+	// it wraps the raw string in __unparsedToolInput. We try to salvage the first valid JSON
+	// object from the raw string. If we can't, we drop it ("{}").
+	if m, ok := v.(map[string]any); ok {
+		if unparsed, hasUnparsed := m["__unparsedToolInput"]; hasUnparsed {
+			if unparsedMap, ok := unparsed.(map[string]any); ok {
+				if raw, ok := unparsedMap["raw"].(string); ok {
+					var dummy any
+					dec := json.NewDecoder(strings.NewReader(raw))
+					if dec.Decode(&dummy) == nil {
+						if b, err := json.Marshal(dummy); err == nil {
+							return string(b)
+						}
+					}
+					return "{}"
+				}
+			}
+			return "{}"
+		}
+	}
+
 	// If v is already a JSON-encoded string, return it directly.
 	// This handles the round-trip case where tool_use input was stored as
 	// a pre-marshaled string (e.g. from json.RawMessage → string).
