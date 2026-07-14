@@ -417,3 +417,48 @@ func TestClaudeToOpenAI_ToolUseNilInputNotNull(t *testing.T) {
 		t.Errorf("tool_call arguments must be a JSON object; got: %q", args)
 	}
 }
+
+// TestClaudeToOpenAI_ToolUseUnparsedRawQuote ensures the __unparsedToolInput
+// salvage branch repairs an unescaped-quote raw string instead of dropping to "{}".
+func TestClaudeToOpenAI_ToolUseUnparsedRawQuote(t *testing.T) {
+	body := `{
+		"model":"claude",
+		"max_tokens":100,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tu_1","name":"Bash","input":{"__unparsedToolInput":{"raw":"{\"cmd\":\"echo \"hi\"\"}"}}}
+			]}
+		]
+	}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON result: %v", err)
+	}
+	msgs := openai["messages"].([]any)
+	asstMsg := msgs[0].(map[string]any)
+	tcs := asstMsg["tool_calls"].([]any)
+	fn := tcs[0].(map[string]any)["function"].(map[string]any)
+	args := fn["arguments"].(string)
+	if args == "{}" {
+		t.Fatalf("expected repaired arguments, got %q (raw was dropped)", args)
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		t.Fatalf("salvaged arguments must re-parse as JSON, got %q: %v", args, err)
+	}
+}
+
+// TestMustJSON_UnescapedQuote directly exercises mustJSON with a map whose value
+// contains an unescaped inner quote + literal newline; the result must be valid JSON.
+func TestMustJSON_UnescapedQuote(t *testing.T) {
+	in := map[string]any{"cmd": "echo \"hi\"\nbye"}
+	out := mustJSON(in)
+	var parsed any
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("mustJSON output must be valid JSON, got %q: %v", out, err)
+	}
+}
