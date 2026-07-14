@@ -725,3 +725,110 @@ func TestProcessChunk_DuplicatedJSONArguments(t *testing.T) {
 		t.Errorf("expected no arguments in chunk 2 (discarded duplicate), got %v", events2)
 	}
 }
+
+// --- parseDeltaArgs unit tests ---
+
+func TestParseDeltaArgs_NormalObject(t *testing.T) {
+	ti := &toolCallInfo{}
+	got := parseDeltaArgs(ti, `{"file_path":"/x","content":"ok"}`)
+	want := `{"file_path":"/x","content":"ok"}`
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if !ti.finished {
+		t.Error("expected ti.finished=true after complete object")
+	}
+}
+
+func TestParseDeltaArgs_DuplicatedObject(t *testing.T) {
+	ti := &toolCallInfo{}
+	// Two identical concatenated objects — only the first should be returned
+	input := `{"file_path":"/x"}{"file_path":"/x"}`
+	got := parseDeltaArgs(ti, input)
+	want := `{"file_path":"/x"}`
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if !ti.finished {
+		t.Error("expected ti.finished=true")
+	}
+}
+
+func TestParseDeltaArgs_UnescapedInnerQuote(t *testing.T) {
+	// parseDeltaArgs streams as-is; unescaped-quote repair happens at handleFinish
+	// via repairToolArgs. Test repairToolArgs directly here.
+	input := `{"command":"echo "$F""}`
+	got := repairToolArgs(input)
+	// Result must be valid JSON
+	var out any
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Errorf("output is not valid JSON: %v — got %q", err, got)
+	}
+	// The repaired value should contain $F
+	b, _ := json.Marshal(out)
+	if !strings.Contains(string(b), "$F") {
+		t.Errorf("expected $F to be preserved, got %q", string(b))
+	}
+}
+
+func TestParseDeltaArgs_FinishedDropsSubsequent(t *testing.T) {
+	ti := &toolCallInfo{}
+	first := parseDeltaArgs(ti, `{"a":1}`)
+	if !ti.finished {
+		t.Fatal("expected finished after first object")
+	}
+	second := parseDeltaArgs(ti, `{"b":2}`)
+	if second != "" {
+		t.Errorf("expected empty string after finished, got %q", second)
+	}
+	_ = first
+}
+
+func TestParseDeltaArgs_StreamedInChunks(t *testing.T) {
+	ti := &toolCallInfo{}
+	chunks := []string{`{"command":"`, `ls -la"}`}
+	var combined strings.Builder
+	for _, c := range chunks {
+		combined.WriteString(parseDeltaArgs(ti, c))
+	}
+	got := combined.String()
+	var out any
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Errorf("streamed result is not valid JSON: %v — got %q", err, got)
+	}
+}
+
+func TestRepairToolArgs_NormalJSON(t *testing.T) {
+	input := `{"file_path":"/x","content":"ok"}`
+	got := repairToolArgs(input)
+	if got != input {
+		t.Errorf("normal JSON should pass through, got %q", got)
+	}
+}
+
+func TestRepairToolArgs_DuplicatedObject(t *testing.T) {
+	input := `{"file_path":"/x"}{"file_path":"/x"}`
+	got := repairToolArgs(input)
+	var out any
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Errorf("result not valid JSON: %v — got %q", err, got)
+	}
+	m, _ := out.(map[string]any)
+	if m["file_path"] != "/x" {
+		t.Errorf("expected file_path=/x, got %+v", m)
+	}
+}
+
+func TestRepairToolArgs_UnescapedInnerQuote(t *testing.T) {
+	input := `{"command":"echo "$F""}`
+	got := repairToolArgs(input)
+	var out any
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Errorf("result not valid JSON: %v — got %q", err, got)
+	}
+	m, _ := out.(map[string]any)
+	v, _ := m["command"].(string)
+	if !strings.Contains(v, "$F") {
+		t.Errorf("expected $F preserved in command value, got %q", v)
+	}
+}
