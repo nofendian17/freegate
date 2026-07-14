@@ -295,49 +295,55 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		intIdx := int(idx)
 
 		if id, ok := tc["id"].(string); ok && id != "" {
-			// Ensure tool use ID is unique in this response stream
-			if count, seen := state.seenIDs[id]; seen {
-				state.seenIDs[id] = count + 1
-				id = fmt.Sprintf("%s_%d", id, count)
+			// If we have already seen/initialized this tool call index,
+			// do NOT start a new block or generate a new ID. Just use the existing one.
+			if existing, exists := state.toolCalls[intIdx]; exists {
+				id = existing.ID
 			} else {
-				if state.seenIDs == nil {
-					state.seenIDs = make(map[string]int)
+				// Ensure tool use ID is unique in this response stream
+				if count, seen := state.seenIDs[id]; seen {
+					state.seenIDs[id] = count + 1
+					id = fmt.Sprintf("%s_%d", id, count)
+				} else {
+					if state.seenIDs == nil {
+						state.seenIDs = make(map[string]int)
+					}
+					state.seenIDs[id] = 1
 				}
-				state.seenIDs[id] = 1
-			}
 
-			// New tool call — close text/thinking, open tool_use block
-			if state.textOpen {
-				events = append(events, contentBlockStop(state.textBlockIdx)...)
-				state.textOpen = false
-			}
-			if state.thinkingOpen {
-				events = append(events, contentBlockStop(state.thinkingIdx)...)
-				state.thinkingOpen = false
-			}
+				// New tool call — close text/thinking, open tool_use block
+				if state.textOpen {
+					events = append(events, contentBlockStop(state.textBlockIdx)...)
+					state.textOpen = false
+				}
+				if state.thinkingOpen {
+					events = append(events, contentBlockStop(state.thinkingIdx)...)
+					state.thinkingOpen = false
+				}
 
-			fn, _ := tc["function"].(map[string]any)
-			name, _ := fn["name"].(string)
+				fn, _ := tc["function"].(map[string]any)
+				name, _ := fn["name"].(string)
 
-			blockIdx := state.nextBlockIdx
-			state.nextBlockIdx++
-			state.toolCalls[intIdx] = &toolCallInfo{
-				ID:    id,
-				Name:  name,
-				Index: blockIdx,
+				blockIdx := state.nextBlockIdx
+				state.nextBlockIdx++
+				state.toolCalls[intIdx] = &toolCallInfo{
+					ID:    id,
+					Name:  name,
+					Index: blockIdx,
+				}
+				state.toolArgBufs[intIdx] = &bytes.Buffer{}
+				state.openToolBlocks = append(state.openToolBlocks, blockIdx)
+
+				events = append(events, formatSSE("content_block_start", map[string]any{
+					"type":  "content_block_start",
+					"index": blockIdx,
+					"content_block": map[string]any{
+						"type": "tool_use",
+						"id":   id,
+						"name": name,
+					},
+				})...)
 			}
-			state.toolArgBufs[intIdx] = &bytes.Buffer{}
-			state.openToolBlocks = append(state.openToolBlocks, blockIdx)
-
-			events = append(events, formatSSE("content_block_start", map[string]any{
-				"type":  "content_block_start",
-				"index": blockIdx,
-				"content_block": map[string]any{
-					"type": "tool_use",
-					"id":   id,
-					"name": name,
-				},
-			})...)
 		}
 
 		// Accumulate arguments

@@ -579,3 +579,79 @@ func TestProcessChunk_DuplicateToolCalls(t *testing.T) {
 		t.Errorf("expected second tool call to have id = dup_id_1, events: %v", events2)
 	}
 }
+
+func TestProcessChunk_RepeatedIDOnSameIndex(t *testing.T) {
+	state := NewStreamState()
+
+	// Chunk 1: Tool call index 0 starts
+	chunk1 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 0.0,
+							"id":    "call_id",
+							"type":  "function",
+							"function": map[string]any{
+								"name": "run_command",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events1 := ProcessChunk(chunk1, state)
+
+	// Chunk 2: Tool call index 0 continues, sending id again
+	chunk2 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 0.0,
+							"id":    "call_id",
+							"function": map[string]any{
+								"arguments": `{"cmd": "ls"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events2 := ProcessChunk(chunk2, state)
+
+	// Verify Chunk 1 emitted content_block_start
+	hasStart := false
+	for _, e := range events1 {
+		if strings.Contains(e, "content_block_start") && strings.Contains(e, `"id":"call_id"`) {
+			hasStart = true
+		}
+	}
+	if !hasStart {
+		t.Errorf("expected content_block_start in chunk 1, got %v", events1)
+	}
+
+	// Verify Chunk 2 did NOT emit content_block_start and accumulated args
+	hasSecondStart := false
+	hasDelta := false
+	for _, e := range events2 {
+		if strings.Contains(e, "content_block_start") {
+			hasSecondStart = true
+		}
+		if strings.Contains(e, "content_block_delta") && strings.Contains(e, `\"cmd\": \"ls\"`) {
+			hasDelta = true
+		}
+	}
+	if hasSecondStart {
+		t.Errorf("did not expect a second content_block_start in chunk 2, got %v", events2)
+	}
+	if !hasDelta {
+		t.Errorf("expected content_block_delta in chunk 2, got %v", events2)
+	}
+}
