@@ -371,3 +371,49 @@ func BenchmarkClaudeToOpenAI(b *testing.B) {
 		ToOpenAI(body)
 	}
 }
+
+// TestClaudeToOpenAI_ToolUseNilInputNotNull tests that a tool_use block
+// without an input field (or with null input) translates to arguments="{}"
+// not arguments="null". Claude Code's Bash tool and others that don't require
+// input can produce null input; the OpenAI arguments field must never be "null"
+// because downstream Claude Code rejects it with "input JSON failed to parse".
+func TestClaudeToOpenAI_ToolUseNilInputNotNull(t *testing.T) {
+	body := `{
+		"model":"claude",
+		"max_tokens":100,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tu_1","name":"Bash"}
+			]}
+		]
+	}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON result: %v", err)
+	}
+	msgs, ok := openai["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages, got: %v", msgs)
+	}
+	asstMsg, _ := msgs[0].(map[string]any)
+	if asstMsg == nil || asstMsg["role"] != "assistant" {
+		t.Fatalf("expected assistant message, got: %v", msgs[0])
+	}
+	tcs, ok := asstMsg["tool_calls"].([]any)
+	if !ok || len(tcs) == 0 {
+		t.Fatalf("expected tool_calls in assistant message, got: %v", asstMsg)
+	}
+	tc, _ := tcs[0].(map[string]any)
+	fn, _ := tc["function"].(map[string]any)
+	args, _ := fn["arguments"].(string)
+	if args == "null" {
+		t.Errorf("tool_call arguments must not be \"null\"; Claude Code fails to parse it. Got: %q", args)
+	}
+	if len(args) == 0 || args[0] != '{' {
+		t.Errorf("tool_call arguments must be a JSON object; got: %q", args)
+	}
+}

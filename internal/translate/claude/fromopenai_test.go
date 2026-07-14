@@ -565,6 +565,144 @@ func TestFromOpenAI_ToolArgsInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestFromOpenAI_ToolArgsNullNormalized tests that tool_call arguments
+// of "null" are normalized to "{}" instead of being passed through as
+// "null". Claude Code's Bash tool (and other no-input tools) can produce
+// null arguments when the upstream serializes the empty input as JSON null.
+// Claude and Claude Code reject "null" as tool_use input — the error is
+// "input JSON failed to parse".
+func TestFromOpenAI_ToolArgsNullNormalized(t *testing.T) {
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"Bash","arguments":"null"}}
+		]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type  string          `json:"type"`
+				Input json.RawMessage `json:"input"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Find assistant message
+	var asstMsg *struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Type  string          `json:"type"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+	}
+	for i := range got.Messages {
+		if got.Messages[i].Role == "assistant" {
+			asstMsg = &got.Messages[i]
+			break
+		}
+	}
+	if asstMsg == nil {
+		t.Fatal("no assistant message found")
+	}
+	if len(asstMsg.Content) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(asstMsg.Content))
+	}
+	block := asstMsg.Content[0]
+	if block.Type != "tool_use" {
+		t.Fatalf("expected tool_use block, got type=%q", block.Type)
+	}
+	// input must be a JSON object ({}), not "null"
+	inputStr := strings.TrimSpace(string(block.Input))
+	if inputStr == "null" {
+		t.Errorf("tool_use input must not be null; Claude Code fails to parse it: got %q", inputStr)
+	}
+	if len(inputStr) == 0 || inputStr[0] != '{' {
+		t.Errorf("tool_use input must be a JSON object; got %q", inputStr)
+	}
+}
+
+// TestFromOpenAI_ToolArgsEmptyStringNormalized tests that empty string arguments
+// are normalized to "{}".
+func TestFromOpenAI_ToolArgsEmptyStringNormalized(t *testing.T) {
+	in := `{"messages":[
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"Bash","arguments":""}}
+		]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(out)
+	if strings.Contains(s, `"input":null`) {
+		t.Errorf("tool_use input must not be null: %s", s)
+	}
+}
+
+// TestFromOpenAI_ToolResultSingleObjectContent tests that a tool role message
+// whose content is a single JSON object (not a string or array) is handled
+// gracefully. Without the fix, contentToStringRaw returns the raw JSON bytes
+// as a string, which becomes the tool_result Content field and causes
+// "input JSON failed to parse" in Claude Code.
+func TestFromOpenAI_ToolResultSingleObjectContent(t *testing.T) {
+	// Claude Code can sometimes send tool result content as an array with
+	// a single {type:text, text:...} element. This tests that we extract
+	// the text correctly.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"ls\"}"}}
+		]},
+		{"role":"tool","tool_call_id":"c1","content":[{"type":"text","text":"file1.txt\nfile2.txt"}]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				ToolUseID string `json:"tool_use_id"`
+				Content   string `json:"content"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON output: %v\noutput: %s", err, out)
+	}
+	// Find user message with tool_result
+	var toolResultContent string
+	for _, m := range got.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == "tool_result" && b.ToolUseID == "c1" {
+				toolResultContent = b.Content
+			}
+		}
+	}
+	if toolResultContent == "" {
+		t.Fatal("expected tool_result content, got empty string")
+	}
+	// Content must be a plain string, not a JSON array
+	if strings.HasPrefix(toolResultContent, "[") {
+		t.Errorf("tool_result content must be plain text, not JSON array: %q", toolResultContent)
+	}
+	if !strings.Contains(toolResultContent, "file1.txt") {
+		t.Errorf("expected file listing in content, got: %q", toolResultContent)
+	}
+}
+
 func TestFromOpenAI_MaxCompletionTokens(t *testing.T) {
 	// OpenAI's `max_completion_tokens` (the newer o1-era field) maps
 	// to Claude's `max_tokens`. When both are set, the newer field
