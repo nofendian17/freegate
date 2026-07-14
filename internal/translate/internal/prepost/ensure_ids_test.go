@@ -77,6 +77,32 @@ func TestEnsureToolCallIds(t *testing.T) {
 			]}`,
 			wantIDs: []string{"foobar"},
 		},
+		{
+			name: "duplicate tool call IDs are de-duplicated and paired",
+			in: `{"messages":[
+				{"role":"assistant","tool_calls":[
+					{"id":"dup-id","type":"function","function":{"name":"f","arguments":"{}"}},
+					{"id":"dup-id","type":"function","function":{"name":"g","arguments":"{}"}}
+				]},
+				{"role":"tool","tool_call_id":"dup-id","content":"r1"},
+				{"role":"tool","tool_call_id":"dup-id","content":"r2"}
+			]}`,
+			wantIDs: []string{"dup-id", "dup-id_1", "dup-id", "dup-id_1"},
+		},
+		{
+			name: "duplicate claude tool call IDs are de-duplicated and paired",
+			in: `{"messages":[
+				{"role":"assistant","content":[
+					{"type":"tool_use","id":"dup-id","name":"f","input":{}},
+					{"type":"tool_use","id":"dup-id","name":"g","input":{}}
+				]},
+				{"role":"user","content":[
+					{"type":"tool_result","tool_use_id":"dup-id","content":"r1"},
+					{"type":"tool_result","tool_use_id":"dup-id","content":"r2"}
+				]}
+			]}`,
+			wantIDs: []string{"dup-id", "dup-id_1", "dup-id", "dup-id_1"},
+		},
 	}
 
 	for _, tc := range tests {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"strings"
 )
@@ -29,6 +30,7 @@ type StreamState struct {
 	closed           bool
 	sseBuf           bytes.Buffer
 	outputContent    strings.Builder
+	seenIDs          map[string]int
 }
 
 type toolCallInfo struct {
@@ -51,6 +53,7 @@ func NewStreamState() *StreamState {
 		nextBlockIdx: 0,
 		toolCalls:    make(map[int]*toolCallInfo),
 		toolArgBufs:  make(map[int]*bytes.Buffer),
+		seenIDs:      make(map[string]int),
 	}
 }
 
@@ -292,6 +295,17 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		intIdx := int(idx)
 
 		if id, ok := tc["id"].(string); ok && id != "" {
+			// Ensure tool use ID is unique in this response stream
+			if count, seen := state.seenIDs[id]; seen {
+				state.seenIDs[id] = count + 1
+				id = fmt.Sprintf("%s_%d", id, count)
+			} else {
+				if state.seenIDs == nil {
+					state.seenIDs = make(map[string]int)
+				}
+				state.seenIDs[id] = 1
+			}
+
 			// New tool call — close text/thinking, open tool_use block
 			if state.textOpen {
 				events = append(events, contentBlockStop(state.textBlockIdx)...)

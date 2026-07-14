@@ -151,3 +151,35 @@ func TestExtractUsageWithCache(t *testing.T) {
 		t.Errorf("expected cache_create=3, got %d", u.CacheCreateTokens)
 	}
 }
+
+func TestJSONToClaude_DuplicateTools(t *testing.T) {
+	body := `{
+		"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[
+			{"id":"dup_id","type":"function","function":{"name":"f","arguments":"{}"}},
+			{"id":"dup_id","type":"function","function":{"name":"g","arguments":"{}"}}
+		]},"finish_reason":"tool_calls"}]
+	}`
+
+	result, err := JSONToClaude([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var claude map[string]any
+	json.Unmarshal(result, &claude)
+
+	content := claude["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(content))
+	}
+
+	b1 := content[0].(map[string]any)
+	b2 := content[1].(map[string]any)
+
+	if b1["id"] != "dup_id" {
+		t.Errorf("expected b1.id = dup_id, got %v", b1["id"])
+	}
+	if b2["id"] != "dup_id_1" {
+		t.Errorf("expected b2.id = dup_id_1, got %v", b2["id"])
+	}
+}
