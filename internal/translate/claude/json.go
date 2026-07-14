@@ -105,8 +105,12 @@ func convertOpenAIMessage(msg map[string]any) []any {
 			var parts []string
 			if argsStr, ok := fn["arguments"].(string); ok && argsStr != "" {
 				parts = splitToolArgs(argsStr)
-			} else if _, ok := fn["arguments"].(map[string]any); ok {
-				parts = []string{""} // object → single block, no split needed
+			} else if argsObj, ok := fn["arguments"].(map[string]any); ok {
+				b, err := json.Marshal(argsObj)
+				if err != nil {
+					b = []byte("{}")
+				}
+				parts = []string{string(b)}
 			}
 
 			baseID, _ := tc["id"].(string)

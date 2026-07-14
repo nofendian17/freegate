@@ -183,3 +183,35 @@ func TestJSONToClaude_DuplicateTools(t *testing.T) {
 		t.Errorf("expected b2.id = dup_id_1, got %v", b2["id"])
 	}
 }
+
+func TestJSONToClaude_InlineObjectArguments(t *testing.T) {
+	body := `{
+		"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[
+			{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":{"city":"NYC","days":3}}}
+		]},"finish_reason":"tool_calls"}]
+	}`
+
+	result, err := JSONToClaude([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var claude map[string]any
+	json.Unmarshal(result, &claude)
+
+	content := claude["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["type"] != "tool_use" {
+		t.Fatalf("expected tool_use block, got %v", block["type"])
+	}
+	input, ok := block["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected input to be a map, got %v", block["input"])
+	}
+	if input["city"] != "NYC" {
+		t.Errorf("expected input.city=NYC, got %v", input["city"])
+	}
+	if input["days"] != float64(3) {
+		t.Errorf("expected input.days=3, got %v", input["days"])
+	}
+}

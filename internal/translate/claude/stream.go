@@ -34,14 +34,9 @@ type StreamState struct {
 }
 
 type toolCallInfo struct {
-	ID            string
-	Name          string
-	Index         int
-	depth         int
-	inString      bool
-	escaped       bool
-	objectStarted bool
-	finished      bool
+	ID    string
+	Name  string
+	Index int
 }
 
 type usageInfo struct {
@@ -309,12 +304,9 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 				if count, seen := state.seenIDs[id]; seen {
 					state.seenIDs[id] = count + 1
 					id = fmt.Sprintf("%s_%d", id, count)
-				} else {
-					if state.seenIDs == nil {
-						state.seenIDs = make(map[string]int)
-					}
-					state.seenIDs[id] = 1
-				}
+			} else {
+				state.seenIDs[id] = 1
+			}
 
 				// New tool call — close text/thinking, open tool_use block
 				if state.textOpen {
@@ -453,6 +445,12 @@ func splitToolArgs(s string) []string {
 //  2. Unescaped inner quotes in string values: {"cmd":"echo "$F""} →
 //     escapes the inner quotes so the result is valid JSON.
 //  3. Literal newlines and control characters inside strings.
+//
+// The result is ALWAYS a JSON object (or "{}"). Models such as tencent/hy3-free
+// sometimes emit the arguments as a bare JSON string, an array, or a string that
+// itself encodes an object ("{\"cmd\":\"ls\"}"); emitting those verbatim makes
+// the client reject the tool_use with "input JSON failed to parse", so they are
+// normalized to "{}".
 func repairToolArgs(s string) string {
 	if s == "" {
 		return "{}"
@@ -460,7 +458,7 @@ func repairToolArgs(s string) string {
 	// Fast path: already valid JSON.
 	var dummy any
 	if json.Unmarshal([]byte(s), &dummy) == nil {
-		return s
+		return ensureObjectJSON(dummy)
 	}
 	// Always repair quotes and control characters first!
 	fixed := repairUnescapedQuotes(s)
@@ -473,16 +471,39 @@ func repairToolArgs(s string) string {
 	fixed = repairTrailingCommas(fixed)
 
 	// Try parsing exactly one object (handles concatenation) from the repaired string!
+	// UseNumber keeps integer precision (no float64 round-trip corruption).
 	dec := json.NewDecoder(strings.NewReader(fixed))
+	dec.UseNumber()
 	if dec.Decode(&dummy) == nil {
-		if b, err := json.Marshal(dummy); err == nil {
-			return string(b)
-		}
+		return ensureObjectJSON(dummy)
 	}
 
 	// Give up — but never hand the client unparseable JSON, which Claude Code
 	// rejects with "input JSON failed to parse". An empty object parses
 	// cleanly; the args are lost but the tool call survives (matches mustJSON).
+	return "{}"
+}
+
+// ensureObjectJSON returns the JSON encoding of v when v is a JSON object.
+// If v is a string, it is treated as a possibly double-encoded value and
+// parsed once more, so a model that emits "{\"cmd\":\"ls\"}" (a JSON string
+// wrapping an object) is unwrapped to {"cmd":"ls"}. Any other shape
+// (bare string, array, number, bool, null) is normalized to "{}" because
+// tool_use input must be a JSON object.
+func ensureObjectJSON(v any) string {
+	switch val := v.(type) {
+	case map[string]any:
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
+	case string:
+		var inner any
+		if json.Unmarshal([]byte(val), &inner) == nil {
+			if b, err := json.Marshal(inner); err == nil {
+				return string(b)
+			}
+		}
+	}
 	return "{}"
 }
 
