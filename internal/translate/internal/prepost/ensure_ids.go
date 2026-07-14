@@ -36,6 +36,10 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
+	toolCallSeenCount := make(map[string]int)
+	toolCallMap := make(map[string][]string)
+	toolResultSeenCount := make(map[string]int)
+
 	for i, mAny := range msgs {
 		m, _ := mAny.(map[string]any)
 		if m == nil {
@@ -54,14 +58,41 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 					name, _ = fn["name"].(string)
 				}
 				id, _ := tc["id"].(string)
-				tc["id"] = ensureID(id, name, i, j)
+				
+				defID := ensureID(id, name, i, j)
+				count := toolCallSeenCount[defID]
+				toolCallSeenCount[defID] = count + 1
+				
+				var finalID string
+				if count == 0 {
+					finalID = defID
+				} else {
+					finalID = fmt.Sprintf("%s_%d", defID, count)
+				}
+				toolCallMap[defID] = append(toolCallMap[defID], finalID)
+				tc["id"] = finalID
 			}
 		}
 
 		// OpenAI: tool message tool_call_id
 		if role, _ := m["role"].(string); role == "tool" {
 			if id, _ := m["tool_call_id"].(string); id != "" {
-				m["tool_call_id"] = ensureID(id, "", i, 0)
+				resID := ensureID(id, "", i, 0)
+				count := toolResultSeenCount[resID]
+				toolResultSeenCount[resID] = count + 1
+				
+				var finalID string
+				mappedList := toolCallMap[resID]
+				if count < len(mappedList) {
+					finalID = mappedList[count]
+				} else {
+					if count == 0 {
+						finalID = resID
+					} else {
+						finalID = fmt.Sprintf("%s_%d", resID, count)
+					}
+				}
+				m["tool_call_id"] = finalID
 			}
 		}
 
@@ -77,10 +108,37 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 				case "tool_use":
 					name, _ := part["name"].(string)
 					id, _ := part["id"].(string)
-					part["id"] = ensureID(id, name, i, k)
+					
+					defID := ensureID(id, name, i, k)
+					count := toolCallSeenCount[defID]
+					toolCallSeenCount[defID] = count + 1
+					
+					var finalID string
+					if count == 0 {
+						finalID = defID
+					} else {
+						finalID = fmt.Sprintf("%s_%d", defID, count)
+					}
+					toolCallMap[defID] = append(toolCallMap[defID], finalID)
+					part["id"] = finalID
 				case "tool_result":
 					if id, _ := part["tool_use_id"].(string); id != "" {
-						part["tool_use_id"] = ensureID(id, "", i, k)
+						resID := ensureID(id, "", i, k)
+						count := toolResultSeenCount[resID]
+						toolResultSeenCount[resID] = count + 1
+						
+						var finalID string
+						mappedList := toolCallMap[resID]
+						if count < len(mappedList) {
+							finalID = mappedList[count]
+						} else {
+							if count == 0 {
+								finalID = resID
+							} else {
+								finalID = fmt.Sprintf("%s_%d", resID, count)
+							}
+						}
+						part["tool_use_id"] = finalID
 					}
 				}
 			}

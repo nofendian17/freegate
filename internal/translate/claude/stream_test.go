@@ -509,3 +509,73 @@ func BenchmarkProcessChunk(b *testing.B) {
 		ProcessChunk(chunk, state)
 	}
 }
+
+func TestProcessChunk_DuplicateToolCalls(t *testing.T) {
+	state := NewStreamState()
+
+	// Tool call 1
+	chunk1 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 0.0,
+							"id":    "dup_id",
+							"type":  "function",
+							"function": map[string]any{
+								"name":      "f",
+								"arguments": `{"a": 1}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events1 := ProcessChunk(chunk1, state)
+
+	// Tool call 2 with same ID but different index
+	chunk2 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 1.0,
+							"id":    "dup_id",
+							"type":  "function",
+							"function": map[string]any{
+								"name":      "g",
+								"arguments": `{"b": 2}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events2 := ProcessChunk(chunk2, state)
+
+	hasFirstID := false
+	for _, e := range events1 {
+		if strings.Contains(e, `"id":"dup_id"`) {
+			hasFirstID = true
+		}
+	}
+	if !hasFirstID {
+		t.Errorf("expected first tool call to have id = dup_id, events: %v", events1)
+	}
+
+	hasSecondID := false
+	for _, e := range events2 {
+		if strings.Contains(e, `"id":"dup_id_1"`) {
+			hasSecondID = true
+		}
+	}
+	if !hasSecondID {
+		t.Errorf("expected second tool call to have id = dup_id_1, events: %v", events2)
+	}
+}

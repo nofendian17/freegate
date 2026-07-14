@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 // --- Non-streaming JSON response translation ---
@@ -85,6 +86,7 @@ func convertOpenAIMessage(msg map[string]any) []any {
 
 	// Add tool calls as tool_use blocks
 	if tcList, ok := msg["tool_calls"].([]any); ok {
+		seenIDs := make(map[string]int)
 		for _, tcAny := range tcList {
 			tc, _ := tcAny.(map[string]any)
 			if tc == nil {
@@ -105,6 +107,13 @@ func convertOpenAIMessage(msg map[string]any) []any {
 			id, _ := tc["id"].(string)
 			if id == "" {
 				id = "toolu_" + randID(8)
+			} else {
+				if count, seen := seenIDs[id]; seen {
+					seenIDs[id] = count + 1
+					id = fmt.Sprintf("%s_%d", id, count)
+				} else {
+					seenIDs[id] = 1
+				}
 			}
 
 			content = append(content, map[string]any{
