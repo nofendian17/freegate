@@ -381,6 +381,10 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 	return events
 }
 
+// parseDeltaArgs filters argument delta chunks. It tracks whether we've seen
+// a complete top-level JSON object/array, and drops anything after that point
+// to prevent duplicated concatenated objects (e.g. {"a":1}{"a":1} → {"a":1}).
+// Unescaped-quote repair is done later on the completed buffer by repairToolArgs.
 func parseDeltaArgs(ti *toolCallInfo, args string) string {
 	if ti.finished {
 		return ""
@@ -391,23 +395,22 @@ func parseDeltaArgs(ti *toolCallInfo, args string) string {
 			break
 		}
 		ch := args[i]
-		sb.WriteByte(ch)
 
 		if ti.escaped {
 			ti.escaped = false
+			sb.WriteByte(ch)
 			continue
 		}
-
 		if ch == '\\' {
 			ti.escaped = true
+			sb.WriteByte(ch)
 			continue
 		}
-
 		if ch == '"' {
 			ti.inString = !ti.inString
+			sb.WriteByte(ch)
 			continue
 		}
-
 		if !ti.inString {
 			if ch == '{' || ch == '[' {
 				ti.objectStarted = true
@@ -416,13 +419,97 @@ func parseDeltaArgs(ti *toolCallInfo, args string) string {
 				if ti.depth > 0 {
 					ti.depth--
 					if ti.depth == 0 && ti.objectStarted {
+						sb.WriteByte(ch)
 						ti.finished = true
+						continue
 					}
 				}
 			}
 		}
+		sb.WriteByte(ch)
 	}
 	return sb.String()
+}
+
+// repairToolArgs attempts to return valid JSON from an accumulated tool-call
+// argument buffer. It handles two failure modes:
+//
+//  1. Concatenated duplicate objects: {"a":1}{"a":1} → decodes only the first.
+//  2. Unescaped inner quotes in string values: {"cmd":"echo "$F""} →
+//     escapes the inner quotes so the result is valid JSON.
+func repairToolArgs(s string) string {
+	if s == "" {
+		return "{}"
+	}
+	// Fast path: already valid JSON.
+	var dummy any
+	if json.Unmarshal([]byte(s), &dummy) == nil {
+		return s
+	}
+	// Case 1: try reading just the first JSON value (handles concatenation).
+	dec := json.NewDecoder(strings.NewReader(s))
+	if dec.Decode(&dummy) == nil {
+		b, err := json.Marshal(dummy)
+		if err == nil {
+			return string(b)
+		}
+	}
+	// Case 2: repair unescaped inner quotes.
+	fixed := repairUnescapedQuotes(s)
+	if json.Unmarshal([]byte(fixed), &dummy) == nil {
+		return fixed
+	}
+	// Give up — return original and let the client handle it.
+	return s
+}
+
+// repairUnescapedQuotes scans a JSON string byte-by-byte and escapes any '"'
+// inside a string value that is not followed by a valid JSON structural character.
+func repairUnescapedQuotes(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	inStr := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			out.WriteByte(ch)
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			out.WriteByte(ch)
+			continue
+		}
+		if ch == '"' {
+			if !inStr {
+				inStr = true
+				out.WriteByte(ch)
+			} else {
+				// Look ahead for a valid structural character.
+				j := i + 1
+				for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\r' || s[j] == '\n') {
+					j++
+				}
+				validClose := j >= len(s)
+				if !validClose {
+					next := s[j]
+					validClose = next == ':' || next == ',' || next == '}' || next == ']'
+				}
+				if validClose {
+					inStr = false
+					out.WriteByte(ch)
+				} else {
+					out.WriteByte('\\')
+					out.WriteByte('"')
+				}
+			}
+			continue
+		}
+		out.WriteByte(ch)
+	}
+	return out.String()
 }
 
 func handleFinish(state *StreamState) []string {
@@ -438,8 +525,25 @@ func handleFinish(state *StreamState) []string {
 		state.thinkingOpen = false
 	}
 
-	// Close any open tool_use blocks
+	// Close any open tool_use blocks, repairing each accumulated arg buffer before stop.
 	if len(state.openToolBlocks) > 0 {
+		for intIdx, ti := range state.toolCalls {
+			if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil && buf.Len() > 0 {
+				accumulated := buf.String()
+				repaired := repairToolArgs(accumulated)
+				if repaired != accumulated {
+					// Emit a corrective delta replacing all previously streamed args
+					events = append(events, formatSSE("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": ti.Index,
+						"delta": map[string]any{
+							"type": "clear_input_json",
+							"json": repaired,
+						},
+					})...)
+				}
+			}
+		}
 		events = append(events, state.closeOpenToolBlocks()...)
 	}
 
