@@ -446,14 +446,7 @@ func mustJSON(v any) string {
 		if unparsed, hasUnparsed := m["__unparsedToolInput"]; hasUnparsed {
 			if unparsedMap, ok := unparsed.(map[string]any); ok {
 				if raw, ok := unparsedMap["raw"].(string); ok {
-					var dummy any
-					dec := json.NewDecoder(strings.NewReader(raw))
-					if dec.Decode(&dummy) == nil {
-						if b, err := json.Marshal(dummy); err == nil {
-							return string(b)
-						}
-					}
-					return "{}"
+					return repairToolArgs(raw)
 				}
 			}
 			return "{}"
@@ -486,7 +479,10 @@ func mustJSON(v any) string {
 	if s == "null" || len(s) == 0 || s[0] != '{' {
 		return "{}"
 	}
-	return s
+	// Repair unescaped inner quotes / control chars so the non-stream path
+	// matches handleFinish (stream.go), preventing downstream
+	// "could not be parsed as JSON" on malformed tool arguments.
+	return repairToolArgs(s)
 }
 
 // contentToString converts raw content (string, array, or map) to a string.

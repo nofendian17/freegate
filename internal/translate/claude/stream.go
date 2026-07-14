@@ -390,7 +390,14 @@ func repairToolArgs(s string) string {
 	}
 	// Always repair quotes and control characters first!
 	fixed := repairUnescapedQuotes(s)
-	
+
+	// Close any unterminated containers ({"a":1 or {"a":{"b":1), then strip
+	// any trailing commas the closure may have exposed ({"a":1,}).
+	if closed := repairUnterminated(fixed); closed != "" {
+		fixed = closed
+	}
+	fixed = repairTrailingCommas(fixed)
+
 	// Try parsing exactly one object (handles concatenation) from the repaired string!
 	dec := json.NewDecoder(strings.NewReader(fixed))
 	if dec.Decode(&dummy) == nil {
@@ -398,6 +405,7 @@ func repairToolArgs(s string) string {
 			return string(b)
 		}
 	}
+
 	// Give up — return original and let the client handle it.
 	return s
 }
@@ -469,6 +477,79 @@ func repairUnescapedQuotes(s string) string {
 		out.WriteByte(ch)
 	}
 	return out.String()
+}
+
+// repairTrailingCommas drops a comma that immediately precedes a closing
+// '}' or ']' (with optional whitespace), e.g. {"a":1,} or [2,3,].
+func repairTrailingCommas(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != ',' {
+			out.WriteByte(s[i])
+			continue
+		}
+		j := i + 1
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+			j++
+		}
+		if j < len(s) && (s[j] == '}' || s[j] == ']') {
+			continue // drop the trailing comma
+		}
+		out.WriteByte(',')
+	}
+	return out.String()
+}
+
+// repairUnterminated appends the closing '}' / ']' needed to balance any
+// unclosed containers, respecting string literals. Returns "" when already
+// balanced (nothing to fix).
+func repairUnterminated(s string) string {
+	depth := 0
+	var closers []byte
+	inStr := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		switch ch {
+		case '{', '[':
+			depth++
+			closers = append(closers, ch)
+		case '}', ']':
+			if depth > 0 {
+				depth--
+				closers = closers[:len(closers)-1]
+			}
+		}
+	}
+	if depth == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(s)
+	for i := len(closers) - 1; i >= 0; i-- {
+		if closers[i] == '{' {
+			sb.WriteByte('}')
+		} else {
+			sb.WriteByte(']')
+		}
+	}
+	return sb.String()
 }
 
 func handleFinish(state *StreamState) []string {

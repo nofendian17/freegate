@@ -255,6 +255,88 @@ func TestProcessClaudeChunk_CacheTokensUsage(t *testing.T) {
 	}
 }
 
+// TestProcessClaudeChunk_ToolUseConcatenatedArgs verifies the streaming
+// Claude→OpenAI path repairs a duplicated/concatenated tool argument the way
+// the transcript bug produced it: two input_json_delta fragments, each a full
+// object, which a downstream client would otherwise join into X}{Y and reject
+// with "could not be parsed as JSON". The repaired single object must be
+// emitted once, on content_block_stop — not verbatim per fragment.
+func TestProcessClaudeChunk_ToolUseConcatenatedArgs(t *testing.T) {
+	s := NewClaudeToOpenAIState()
+	_ = s.ProcessChunk(map[string]any{
+		"type":  "content_block_start",
+		"index": float64(0),
+		"content_block": map[string]any{
+			"type":  "tool_use",
+			"id":    "toolu_dup",
+			"name":  "Read",
+			"input": map[string]any{},
+		},
+	})
+	// Fragment 1: first full object.
+	out1 := s.ProcessChunk(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"file_path":"/a"}`},
+	})
+	// Fragment 2: a second full object for the SAME tool block → concat.
+	out2 := s.ProcessChunk(map[string]any{
+		"type":  "content_block_delta",
+		"index": float64(0),
+		"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"file_path":"/b"}`},
+	})
+
+	// Per-fragment deltas must NOT emit arguments verbatim (that's what lets
+	// the client join two objects into unparseable X}{Y).
+	for label, out := range map[string][]string{"frag1": out1, "frag2": out2} {
+		parsed := parseSSELines(t, strings.Join(out, "\n\n"))
+		for _, ch := range parsed {
+			d, _ := ch["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
+			tcs, _ := d["tool_calls"].([]any)
+			for _, tc := range tcs {
+				fn, _ := tc.(map[string]any)["function"].(map[string]any)
+				args, _ := fn["arguments"].(string)
+				if args != "" {
+					t.Errorf("%s emitted verbatim arguments %q before block stop", label, args)
+				}
+			}
+		}
+	}
+
+	// On block stop the buffered args are repaired and emitted once.
+	stopOut := s.ProcessChunk(map[string]any{
+		"type":  "content_block_stop",
+		"index": float64(0),
+	})
+	if len(stopOut) != 1 {
+		t.Fatalf("expected 1 stop line, got %d", len(stopOut))
+	}
+	parsed := parseSSELines(t, stopOut[0])
+	// The single emitted arguments must be valid JSON and must NOT be the
+	// concatenated X}{Y form.
+	var gotArgs string
+	for _, ch := range parsed {
+		d, _ := ch["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
+		tcs, _ := d["tool_calls"].([]any)
+		for _, tc := range tcs {
+			fn, _ := tc.(map[string]any)["function"].(map[string]any)
+			if a, _ := fn["arguments"].(string); a != "" {
+				gotArgs = a
+			}
+		}
+	}
+	if gotArgs == "" {
+		t.Fatalf("no repaired arguments emitted on block stop")
+	}
+	var v any
+	if err := json.Unmarshal([]byte(gotArgs), &v); err != nil {
+		t.Fatalf("repaired arguments are not valid JSON %q: %v", gotArgs, err)
+	}
+	if strings.Contains(gotArgs, "}{") {
+		t.Errorf("repaired arguments still contain concatenated X}{Y: %q", gotArgs)
+	}
+}
+
 func TestFeedBuffersPartialLines(t *testing.T) {
 	s := NewClaudeToOpenAIState()
 	// First call: no complete lines (the trailing \n has not been seen).

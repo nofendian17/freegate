@@ -179,18 +179,30 @@ func (s *ClaudeToOpenAIState) onContentBlockDelta(chunk map[string]any) []string
 		if !ok {
 			return nil
 		}
+		// Buffer only; the repaired arguments are emitted as a single delta
+		// on content_block_stop. Emitting fragments verbatim lets the client
+		// join a duplicated/concatenated object (X}{Y), which fails with
+		// "could not be parsed as JSON".
 		tc.Args.WriteString(pj)
-		return []string{s.chunkLine(map[string]any{
-			"tool_calls": []any{map[string]any{
-				"index":    tc.Index,
-				"function": map[string]any{"arguments": pj},
-			}},
-		}, nil)}
+		return nil
 	}
 	return nil
 }
 
 func (s *ClaudeToOpenAIState) onContentBlockStop(chunk map[string]any) []string {
+	blockIdx := asInt(chunk["index"])
+	// Flush buffered + repaired tool arguments as a single delta so the
+	// client receives one valid JSON object (no duplicated/concatenated X}{Y).
+	if tc, ok := s.toolCalls[blockIdx]; ok && tc.Args.Len() > 0 {
+		repaired := repairToolArgs(tc.Args.String())
+		tc.Args.Reset()
+		return []string{s.chunkLine(map[string]any{
+			"tool_calls": []any{map[string]any{
+				"index":    tc.Index,
+				"function": map[string]any{"arguments": repaired},
+			}},
+		}, nil)}
+	}
 	if s.inThinking {
 		idx := asInt(chunk["index"])
 		if s.thinkingBlock != nil && *s.thinkingBlock == idx {
