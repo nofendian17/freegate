@@ -129,11 +129,21 @@ func extractToolCallsFromBlocks(blocks []any) []any {
 			id = "toolu_" + randID(8)
 		}
 		name, _ := b["name"].(string)
-		input, _ := b["input"].(map[string]any)
-		if input == nil {
-			input = map[string]any{}
+
+		// b["input"] can be map[string]any, json.RawMessage, or nil depending
+		// on the parse path. Re-marshal generically to get the JSON bytes.
+		var argsBytes []byte
+		if inp := b["input"]; inp != nil {
+			var err error
+			argsBytes, err = json.Marshal(inp)
+			if err != nil || string(argsBytes) == "null" {
+				argsBytes = []byte("{}")
+			}
 		}
-		argsBytes, _ := json.Marshal(input)
+		if len(argsBytes) == 0 || argsBytes[0] != '{' {
+			argsBytes = []byte("{}")
+		}
+
 		out = append(out, map[string]any{
 			"id":    id,
 			"type":  "function",

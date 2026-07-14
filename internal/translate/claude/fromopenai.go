@@ -682,7 +682,7 @@ func imageURLToImageBlock(url string) (claudeContent, bool) {
 }
 
 func parseToolArgs(s string) (json.RawMessage, error) {
-	if s == "" {
+	if s == "" || s == "null" {
 		return json.RawMessage(`{}`), nil
 	}
 	// Validate the JSON, then pass it through verbatim. s is a Go
@@ -691,6 +691,13 @@ func parseToolArgs(s string) (json.RawMessage, error) {
 	// boundary instead of silently calling the tool with `{}`.
 	if !json.Valid([]byte(s)) {
 		return nil, fmt.Errorf("parse tool arguments: invalid JSON")
+	}
+	// Tool input must be a JSON object. If the upstream produced a non-object
+	// value (null, a number, a string, an array), normalize it to {} so
+	// Claude Code and the Anthropic API don't reject it with a parse error.
+	trimmed := strings.TrimSpace(s)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return json.RawMessage(`{}`), nil
 	}
 	return json.RawMessage(s), nil
 }
@@ -716,6 +723,18 @@ func contentToStringRaw(raw json.RawMessage) string {
 		}
 		return strings.Join(parts, "\n")
 	}
+	// Try to decode as a single content part object before falling back
+	// to the raw bytes. Without this, a single {"type":"text","text":"..."},
+	// which is valid tool content but not a string or array, would be
+	// returned as a raw JSON string — causing Claude Code to fail to parse
+	// the tool_result content ("input JSON failed to parse").
+	var single oaiContentPart
+	if err := json.Unmarshal(raw, &single); err == nil && single.Text != "" {
+		return single.Text
+	}
+	// Last resort: return the raw bytes as a string. This is a lossy fallback
+	// but prevents a hard error. The caller (tool_result block) expects a
+	// plain string; Claude Code will display whatever we send.
 	return string(raw)
 }
 

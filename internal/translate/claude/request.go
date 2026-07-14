@@ -423,13 +423,47 @@ func cloneMap(m map[string]any) map[string]any {
 	return result
 }
 
-// mustJSON marshals v to JSON string, returning "{}" on error.
+// mustJSON marshals v to JSON string, returning "{}" on error or nil.
+// nil input returns "{}" rather than "null" because tool_use input must
+// always be a JSON object; "null" is technically valid JSON but Claude
+// and other clients (e.g. Claude Code) reject it as tool arguments.
+//
+// Special case: if v is a string that is itself valid JSON (e.g. a
+// pre-encoded JSON string from a round-trip through the proxy), it is
+// returned verbatim to avoid double-encoding. This prevents the
+// concatenated-JSON bug ("...}{..." arguments) that triggers
+// "Edit was called with input that could not be parsed as JSON".
 func mustJSON(v any) string {
+	if v == nil {
+		return "{}"
+	}
+	// If v is already a JSON-encoded string, return it directly.
+	// This handles the round-trip case where tool_use input was stored as
+	// a pre-marshaled string (e.g. from json.RawMessage → string).
+	if s, ok := v.(string); ok {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" || trimmed == "null" {
+			return "{}"
+		}
+		if json.Valid([]byte(trimmed)) && len(trimmed) > 0 && trimmed[0] == '{' {
+			return trimmed
+		}
+		// Non-object JSON string (array, number, boolean) → wrap as {}
+		if json.Valid([]byte(trimmed)) {
+			return "{}"
+		}
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		return "{}"
 	}
-	return string(b)
+	s := string(b)
+	// Safeguard: if the result is not a JSON object, return "{}".
+	// This guards against null, numbers, strings, or arrays as tool input.
+	if s == "null" || len(s) == 0 || s[0] != '{' {
+		return "{}"
+	}
+	return s
 }
 
 // contentToString converts raw content (string, array, or map) to a string.
