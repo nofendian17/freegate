@@ -655,3 +655,73 @@ func TestProcessChunk_RepeatedIDOnSameIndex(t *testing.T) {
 		t.Errorf("expected content_block_delta in chunk 2, got %v", events2)
 	}
 }
+
+func TestProcessChunk_DuplicatedJSONArguments(t *testing.T) {
+	state := NewStreamState()
+
+	// Chunk 1: Tool call starts, sends first part of arguments
+	chunk1 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 0.0,
+							"id":    "call_id",
+							"type":  "function",
+							"function": map[string]any{
+								"name":      "Write",
+								"arguments": `{"file_path":"test.txt","content":"ok"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events1 := ProcessChunk(chunk1, state)
+
+	// Chunk 2: Sends duplicate arguments
+	chunk2 := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"index": 0.0,
+				"delta": map[string]any{
+					"tool_calls": []any{
+						map[string]any{
+							"index": 0.0,
+							"id":    "call_id",
+							"function": map[string]any{
+								"arguments": `{"file_path":"test.txt","content":"ok"}`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	events2 := ProcessChunk(chunk2, state)
+
+	// Verify Chunk 1 arguments were sent
+	hasDelta1 := false
+	for _, e := range events1 {
+		if strings.Contains(e, "content_block_delta") && strings.Contains(e, `test.txt`) {
+			hasDelta1 = true
+		}
+	}
+	if !hasDelta1 {
+		t.Errorf("expected arguments in chunk 1, got %v", events1)
+	}
+
+	// Verify Chunk 2 arguments (duplicates) were discarded
+	hasDelta2 := false
+	for _, e := range events2 {
+		if strings.Contains(e, "content_block_delta") {
+			hasDelta2 = true
+		}
+	}
+	if hasDelta2 {
+		t.Errorf("expected no arguments in chunk 2 (discarded duplicate), got %v", events2)
+	}
+}

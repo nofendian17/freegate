@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // --- Non-streaming JSON response translation ---
@@ -99,7 +100,8 @@ func convertOpenAIMessage(msg map[string]any) []any {
 			name, _ := fn["name"].(string)
 			argsStr, _ := fn["arguments"].(string)
 			var input any
-			json.Unmarshal([]byte(argsStr), &input)
+			dec := json.NewDecoder(strings.NewReader(argsStr))
+			_ = dec.Decode(&input)
 			if input == nil {
 				input = map[string]any{}
 			}
