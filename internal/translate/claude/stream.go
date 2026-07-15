@@ -304,9 +304,9 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 				if count, seen := state.seenIDs[id]; seen {
 					state.seenIDs[id] = count + 1
 					id = fmt.Sprintf("%s_%d", id, count)
-			} else {
-				state.seenIDs[id] = 1
-			}
+				} else {
+					state.seenIDs[id] = 1
+				}
 
 				// New tool call — close text/thinking, open tool_use block
 				if state.textOpen {
@@ -371,8 +371,6 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 
 	return events
 }
-
-
 
 // splitToolArgs splits a concatenated tool-arguments string (e.g.
 // {"a":1}{"b":2}) into individual JSON objects by walking the raw string
@@ -451,6 +449,13 @@ func splitToolArgs(s string) []string {
 // itself encodes an object ("{\"cmd\":\"ls\"}"); emitting those verbatim makes
 // the client reject the tool_use with "input JSON failed to parse", so they are
 // normalized to "{}".
+// RepairToolArgs is the exported entry point used by the OpenAI→OpenAI
+// response normalizer (normalize.go) to salvage malformed tool-call
+// arguments. It always returns a valid JSON object (or "{}").
+func RepairToolArgs(s string) string {
+	return repairToolArgs(s)
+}
+
 func repairToolArgs(s string) string {
 	if s == "" {
 		return "{}"
@@ -677,7 +682,7 @@ func handleFinish(state *StreamState) []string {
 			if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil && buf.Len() > 0 {
 				accumulated := buf.String()
 				repaired := repairToolArgs(accumulated)
-				
+
 				// Emit a single delta containing the fully repaired arguments JSON
 				events = append(events, formatSSE("content_block_delta", map[string]any{
 					"type":  "content_block_delta",
