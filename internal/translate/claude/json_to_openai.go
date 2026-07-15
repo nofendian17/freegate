@@ -130,19 +130,13 @@ func extractToolCallsFromBlocks(blocks []any) []any {
 		}
 		name, _ := b["name"].(string)
 
-		// b["input"] can be map[string]any, json.RawMessage, or nil depending
-		// on the parse path. Re-marshal generically to get the JSON bytes.
-		var argsBytes []byte
-		if inp := b["input"]; inp != nil {
-			var err error
-			argsBytes, err = json.Marshal(inp)
-			if err != nil || string(argsBytes) == "null" {
-				argsBytes = []byte("{}")
-			}
-		}
-		if len(argsBytes) == 0 || argsBytes[0] != '{' {
-			argsBytes = []byte("{}")
-		}
+		// b["input"] can be map[string]any, json.RawMessage, a bare
+		// string/array, or an __unparsedToolInput wrapper depending on the
+		// parse path. Route through mustJSON so every shape is normalized to a
+		// valid JSON object (mirroring the OpenAI->Claude repair: salvage
+		// __unparsedToolInput, unwrap stringified objects, collapse
+		// non-objects to "{}"). tool_use input must always be a JSON object.
+		argsBytes := []byte(mustJSON(b["input"]))
 
 		out = append(out, map[string]any{
 			"id":    id,

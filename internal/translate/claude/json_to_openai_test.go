@@ -145,3 +145,55 @@ func TestJSONToOpenAI_CacheTokens(t *testing.T) {
 		t.Errorf("cache_creation_tokens=%v want 1", details["cache_creation_tokens"])
 	}
 }
+
+// TestJSONToOpenAI_ToolUseInputNormalized verifies the Claude->OpenAI
+// response path normalizes malformed tool_use input to a valid JSON object,
+// matching the OpenAI->Claude repair. Models/clients may emit a bare string,
+// array, or an __unparsedToolInput wrapper; the tool arguments must still be a
+// JSON object so the downstream OpenAI client can parse it.
+func TestJSONToOpenAI_ToolUseInputNormalized(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"bare-string", `{"type":"tool_use","id":"t1","name":"Bash","input":"ls -la"}`},
+		{"array", `{"type":"tool_use","id":"t1","name":"Bash","input":["ls","-la"]}`},
+		{"stringified-object", `{"type":"tool_use","id":"t1","name":"Bash","input":"{\"cmd\":\"ls -la\"}"}`},
+		{"unparsed-wrapper", `{"type":"tool_use","id":"t1","name":"Bash","input":{"__unparsedToolInput":{"raw":"{\"cmd\":\"echo \"hi\"\"}"}}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := `{
+				"id":"msg_abc",
+				"type":"message",
+				"role":"assistant",
+				"content":[` + tc.input + `],
+				"stop_reason":"tool_use"
+			}`
+			out, err := JSONToOpenAI([]byte(in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatalf("invalid JSON output: %v", err)
+			}
+			choices, _ := got["choices"].([]any)
+			c0, _ := choices[0].(map[string]any)
+			msg, _ := c0["message"].(map[string]any)
+			tcs, _ := msg["tool_calls"].([]any)
+			if len(tcs) != 1 {
+				t.Fatalf("expected 1 tool_call, got %d", len(tcs))
+			}
+			fn, _ := tcs[0].(map[string]any)["function"].(map[string]any)
+			args := fn["arguments"].(string)
+			var v any
+			if err := json.Unmarshal([]byte(args), &v); err != nil {
+				t.Fatalf("arguments not valid JSON: %q err=%v", args, err)
+			}
+			if _, ok := v.(map[string]any); !ok {
+				t.Fatalf("arguments not a JSON object: %q (got %T)", args, v)
+			}
+		})
+	}
+}
