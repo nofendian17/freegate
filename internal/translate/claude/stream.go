@@ -433,7 +433,17 @@ func splitToolArgs(s string) []string {
 	if len(parts) == 0 {
 		parts = []string{repairToolArgs(s)}
 	}
-	return parts
+	// Drop consecutive identical parts: hy3 often emits the same tool call
+	// twice (e.g. {"command":"ls"}{"command":"ls"}). Running a duplicate
+	// would re-execute the command needlessly.
+	deduped := parts[:0]
+	for _, p := range parts {
+		if len(deduped) > 0 && deduped[len(deduped)-1] == p {
+			continue
+		}
+		deduped = append(deduped, p)
+	}
+	return deduped
 }
 
 // repairToolArgs attempts to return valid JSON from an accumulated tool-call
