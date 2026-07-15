@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -228,5 +229,84 @@ func TestNormalizeJSON_DeepSeekDoubleResponse(t *testing.T) {
 	}
 	if !strings.Contains(output, `"reasoning":"step"`) {
 		t.Errorf("expected reasoning to be preserved, got %s", output)
+	}
+}
+
+// TestNormalizeStream_RepairsToolArgs verifies that malformed tool-call
+// arguments streamed as incremental fragments are buffered and emitted as a
+// single valid JSON object at stream end (regression for the
+// "input JSON failed to parse" error with models like tencent/hy3-free).
+func TestNormalizeStream_RepairsToolArgs(t *testing.T) {
+	// Build valid SSE chunks (json.Marshal handles escaping). The upstream
+	// streams `{"cmd":"echo hello` split across three deltas; the joined
+	// string is missing its closing quote and must be repaired.
+	mk := func(delta map[string]any, finish string) string {
+		chunk := map[string]any{"id": "c1", "model": "hy3", "choices": []any{map[string]any{"index": 0, "delta": delta}}}
+		if finish != "" {
+			chunk["choices"].([]any)[0].(map[string]any)["finish_reason"] = finish
+		}
+		b, _ := json.Marshal(chunk)
+		return "data: " + string(b) + "\n"
+	}
+	input := mk(map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1", "type": "function",
+			"function": map[string]any{"name": "Bash", "arguments": `{"cmd":"echo `},
+		}},
+	}, "") +
+		mk(map[string]any{
+			"tool_calls": []any{map[string]any{
+				"index": 0,
+				"function": map[string]any{"arguments": `hello`},
+			}},
+		}, "") +
+		mk(map[string]any{}, "tool_calls") +
+		"data: [DONE]\n"
+
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	// The incremental fragments must NOT be emitted verbatim — exactly one
+	// arguments field should appear, and it must be the repaired object.
+	if n := strings.Count(output, `"arguments":`); n != 1 {
+		t.Errorf("expected exactly one arguments field, got %d: %s", n, output)
+	}
+	// The repaired, fully-valid object must appear.
+	if !strings.Contains(output, `"arguments":"{\"cmd\":\"echo hello\"}"`) {
+		t.Errorf("expected repaired arguments to be emitted, got %s", output)
+	}
+	// id/name must still reach the client.
+	if !strings.Contains(output, `"id":"call_1"`) || !strings.Contains(output, `"name":"Bash"`) {
+		t.Errorf("expected tool id/name preserved, got %s", output)
+	}
+	// finish_reason must still be present.
+	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected finish_reason preserved, got %s", output)
+	}
+}
+
+// TestNormalizeJSON_RepairsToolArgs is the non-streaming counterpart: a
+// malformed arguments string in a complete response is normalized to a
+// valid JSON object.
+func TestNormalizeJSON_RepairsToolArgs(t *testing.T) {
+	resp := map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []any{map[string]any{
+					"id": "call_1", "type": "function",
+					"function": map[string]any{"name": "Bash", "arguments": `{"cmd":"echo hello`},
+				}},
+			},
+		}},
+	}
+	b, _ := json.Marshal(resp)
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(string(b)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"arguments":"{\"cmd\":\"echo hello\"}"`) {
+		t.Errorf("expected repaired arguments in JSON output, got %s", output)
 	}
 }

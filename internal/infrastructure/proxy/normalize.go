@@ -48,6 +48,46 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	var usage TokenUsage
 
+	// Buffer per-index tool-call arguments so malformed JSON emitted across
+	// incremental deltas can be repaired into a single valid object before
+	// the client parses it. Models such as tencent/hy3-free stream tool args
+	// as fragments that, joined, are not valid JSON, causing the client to
+	// fail with "input JSON failed to parse". The repaired arguments are
+	// emitted as one delta when the stream finishes (finish_reason or [DONE]).
+	toolArgs := make(map[int]*strings.Builder)
+	toolSeen := make(map[int]bool)
+	var metaID, metaModel string
+	var metaCreated int64
+	metaCaptured := false
+	finished := false
+
+	emitRepaired := func() {
+		if finished {
+			return
+		}
+		finished = true
+		for i := range toolSeen {
+			b := toolArgs[i]
+			if b == nil || b.Len() == 0 {
+				continue
+			}
+			repaired := claude.RepairToolArgs(b.String())
+			chunk := buildOpenAIChunk(metaID, metaModel, metaCreated, map[string]any{
+				"tool_calls": []any{map[string]any{
+					"index":    i,
+					"function": map[string]any{"arguments": repaired},
+				}},
+			})
+			if _, werr := io.WriteString(dst, chunk); werr != nil {
+				slog.Warn("stream write error", "error", werr)
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+	}
+
 	for {
 		line, err := rd.ReadString('\n')
 		if err != nil && err != io.EOF {
@@ -55,16 +95,106 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			break
 		}
 
-		if len(line) > 0 {
-			usage = extractUsageFromSSE(line, usage)
-			normalized := normalizeSSELine(line)
-			if _, werr := io.WriteString(dst, normalized); werr != nil {
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "" {
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
+		usage = extractUsageFromSSE(line, usage)
+
+		if !strings.HasPrefix(trimmed, "data: ") {
+			// Non-data line (blank, comments, event: markers) — pass through.
+			if _, werr := io.WriteString(dst, line); werr != nil {
 				slog.Warn("stream write error", "error", werr)
 				break
 			}
 			if fl != nil {
 				fl.Flush()
 			}
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
+		data := strings.TrimPrefix(trimmed, "data: ")
+		data = strings.TrimRight(data, "\r\n ")
+		if data == "[DONE]" {
+			emitRepaired()
+			if _, werr := io.WriteString(dst, "data: [DONE]\n\n"); werr != nil {
+				slog.Warn("stream write error", "error", werr)
+				break
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
+		var chunk map[string]any
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			// Unparseable data line — pass through unchanged.
+			if _, werr := io.WriteString(dst, "data: "+data+"\n\n"); werr != nil {
+				slog.Warn("stream write error", "error", werr)
+				break
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
+
+		if !metaCaptured {
+			if v, ok := chunk["id"].(string); ok {
+				metaID = v
+			}
+			if v, ok := chunk["model"].(string); ok {
+				metaModel = v
+			}
+			if v, ok := chunk["created"].(float64); ok {
+				metaCreated = int64(v)
+			}
+			metaCaptured = true
+		}
+
+		finishReason := ""
+		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
+			if c, ok := choices[0].(map[string]any); ok {
+				if fr, ok := c["finish_reason"].(string); ok {
+					finishReason = fr
+				}
+				if delta, ok := c["delta"].(map[string]any); ok {
+					bufferToolArgs(delta, toolArgs, toolSeen)
+					syncDeltaReasoning(chunk)
+				}
+			}
+		}
+
+		// Flush repaired arguments BEFORE the finish chunk so the client
+		// sees the full tool-call arguments before stop_reason.
+		if finishReason != "" {
+			emitRepaired()
+		}
+
+		transformed, merr := json.Marshal(chunk)
+		if merr != nil {
+			transformed = []byte(data)
+		}
+		if _, werr := io.WriteString(dst, "data: "+string(transformed)+"\n\n"); werr != nil {
+			slog.Warn("stream write error", "error", werr)
+			break
+		}
+		if fl != nil {
+			fl.Flush()
 		}
 
 		if err == io.EOF {
@@ -72,6 +202,62 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 		}
 	}
 	return usage
+}
+
+// bufferToolArgs accumulates tool-call arguments from a delta into per-index
+// buffers, and removes the (still-incremental) arguments from the delta so
+// they are not written to the client until repaired and flushed at finish.
+// The id and name are left in place so the client still sees them.
+func bufferToolArgs(delta map[string]any, toolArgs map[int]*strings.Builder, toolSeen map[int]bool) {
+	tcs, ok := delta["tool_calls"].([]any)
+	if !ok {
+		return
+	}
+	for _, tcAny := range tcs {
+		tc, ok := tcAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		idx, _ := tc["index"].(float64)
+		i := int(idx)
+		toolSeen[i] = true
+		fn, ok := tc["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if args, ok := fn["arguments"].(string); ok && args != "" {
+			b := toolArgs[i]
+			if b == nil {
+				b = &strings.Builder{}
+				toolArgs[i] = b
+			}
+			b.WriteString(args)
+		}
+		// Strip arguments from the line we emit now; the repaired full
+		// arguments are emitted later via emitRepaired.
+		delete(fn, "arguments")
+	}
+}
+
+// buildOpenAIChunk renders a single OpenAI chat.completion.chunk SSE record
+// carrying the given delta (used to emit repaired tool-call arguments).
+func buildOpenAIChunk(id, model string, created int64, delta map[string]any) string {
+	chunk := map[string]any{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         delta,
+			"finish_reason": nil,
+		}},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		return ""
+	}
+	return "data: " + string(b) + "\n\n"
 }
 
 // normalizeClaudeStream translates Anthropic/Claude SSE events into
@@ -278,6 +464,7 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 	}
 
 	syncMessageReasoning(resp)
+	repairToolCallsJSON(resp)
 
 	transformed, err := json.Marshal(resp)
 	if err != nil {
@@ -287,6 +474,47 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	dst.Write(transformed)
 	return usage
+}
+
+// repairToolCallsJSON normalizes malformed tool-call arguments in a
+// non-streaming OpenAI response. Models such as tencent/hy3-free sometimes
+// emit arguments that are not valid JSON objects; the client rejects those
+// with "input JSON failed to parse". Each argument string is run through
+// claude.RepairToolArgs, which always yields a valid JSON object (or "{}").
+func repairToolCallsJSON(resp map[string]interface{}) {
+	choices, ok := resp["choices"].([]interface{})
+	if !ok {
+		return
+	}
+	for _, c := range choices {
+		choice, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		msg, ok := choice["message"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tcs, ok := msg["tool_calls"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, tcAny := range tcs {
+			tc, ok := tcAny.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			fn, ok := tc["function"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			args, ok := fn["arguments"].(string)
+			if !ok || args == "" {
+				continue
+			}
+			fn["arguments"] = claude.RepairToolArgs(args)
+		}
+	}
 }
 
 func syncMessageReasoning(resp map[string]interface{}) {
