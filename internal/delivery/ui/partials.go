@@ -204,8 +204,6 @@ func toneForProvider(p string) string {
 		return "blue"
 	case "kilo":
 		return "amber"
-	case "mimo-free":
-		return "orange"
 	default:
 		return "gray"
 	}

@@ -19,7 +19,6 @@ type pageData struct {
 	Models        template.HTML
 	OpenCodeCount int64
 	KiloCount     int64
-	MimoCount     int64
 	UpstreamPct   upstreamPercents
 	TorIP         string
 }
@@ -27,7 +26,6 @@ type pageData struct {
 type upstreamPercents struct {
 	OpenCode int
 	Kilo     int
-	Mimo     int
 }
 
 // dashboard renders the main dashboard page with initial data inline.
@@ -41,9 +39,8 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	opencode := perUp["opencode"]
 	kilo := perUp["kilo"]
-	mimo := perUp["mimo-free"]
-	total := opencode + kilo + mimo
-	pct := upstreamPercents{OpenCode: pctOf(opencode, total), Kilo: pctOf(kilo, total), Mimo: pctOf(mimo, total)}
+	total := opencode + kilo
+	pct := upstreamPercents{OpenCode: pctOf(opencode, total), Kilo: pctOf(kilo, total)}
 
 	uptime := time.Duration(h.data.UptimeSeconds()) * time.Second
 	models := h.data.Models()
@@ -59,7 +56,6 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		Models:        h.renderToString("partials/models.html", h.buildModelRows("")),
 		OpenCodeCount: opencode,
 		KiloCount:     kilo,
-		MimoCount:     mimo,
 		UpstreamPct:   pct,
 		TorIP:         h.data.TorIP(),
 	}
