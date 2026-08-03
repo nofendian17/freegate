@@ -2,11 +2,11 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
 
-freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **Xiaomi MiMo Free**, routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
-- **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); MiMo serves the `mimo-auto` model; everything else falls through to OpenCode
+- **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP. Set `BYPASS_PROXY=true` to disable Tor and go direct
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
@@ -60,7 +60,6 @@ curl -X POST http://localhost:1234/v1/messages \
 
 A model ID is served by:
 - **Kilo** — if Kilo's free catalog contains it (`isFree == true`)
-- **MiMo** — if the model ID is `mimo-auto`
 - **OpenCode** — everything else (default upstream)
 
 The catalog is refreshed periodically from each upstream, so routing is driven
@@ -89,8 +88,6 @@ All settings are environment variables:
 | `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models |
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
-| `UPSTREAM_URL_MIMO` | `https://api.xiaomimimo.com/api/free-ai/openai/chat` | MiMo Free upstream URL |
-| `UPSTREAM_REFRESH_MIMO` | `300` | Model refresh interval for MiMo (seconds; JWT expiry-based) |
 
 ## API Endpoints
 
@@ -157,7 +154,7 @@ The dashboard follows the **TerminalUI** design system:
 
 - **Stat blocks** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
-- **Upstream split** — opencode, kilo, and mimo-free counts with proportional bars
+- **Upstream split** — opencode and kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
 - **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
 - **Tor exit IP** — current Tor circuit IP displayed in header, refreshed every 3s
@@ -172,7 +169,7 @@ The dashboard follows the **TerminalUI** design system:
 | `GET /` | HTML dashboard (server-rendered initial state) |
 | `GET /partials/stats` | HTMX partial: 5 metric cards (requests, retries, errors, rate-limit hits, tokens) |
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
-| `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo\|mimo-free` |
+| `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo` |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
 | `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
@@ -208,7 +205,7 @@ flowchart TB
     end
 
     subgraph Freegate["freegate (:1234)"]
-        Router["Router<br/>Kilo cache hit → Kilo<br/>model mimo-auto → MiMo<br/>default → OpenCode"]
+        Router["Router<br/>Kilo cache hit → Kilo<br/>default → OpenCode"]
         Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
         Dashboard["Dashboard /*<br/>HTMX + Chart.js<br/>TerminalUI design"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
@@ -222,7 +219,6 @@ flowchart TB
     subgraph Upstreams["Upstreams"]
         OC["opencode.ai<br/>/zen/v1<br/>key: public"]
         Kilo["api.kilo.ai<br/>/api/openrouter<br/>key: anonymous"]
-        MiMo["api.xiaomimimo.com<br/>/api/free-ai/openai/chat<br/>JWT bootstrap"]
     end
 
     CLI --> Router
@@ -231,8 +227,6 @@ flowchart TB
     Proxy --> Tor2
     Tor1 --> OC
     Tor2 --> Kilo
-    Proxy -->|"mimo-auto"| Tor1
-    Tor1 --> MiMo
     Proxy -.->|"log entry"| Recorder
     Recorder -.->|"reads"| Dashboard
     Browser --> Dashboard
@@ -260,7 +254,7 @@ freegate
 │   │   ├── recorder/         # Request log + timeseries sampler
 │   │   ├── ringbuffer/       # Generic typed ring buffer
 │   │   ├── tor/              # Tor controller for IP rotation + monitoring
-│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo, mimo)
+│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo)
 │   ├── model/                # Shared data types (request log entries, timeseries entries)
 │   ├── server/               # HTTP server bootstrap (wiring + lifecycle)
 │   └── translate/            # Format translation: Claude, Gemini detect + request/response

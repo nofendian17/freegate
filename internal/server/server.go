@@ -46,7 +46,6 @@ type Server struct {
 	tc        *tor.Controller
 	opencode  *upstream.OpenCodeUpstream
 	kilo      *upstream.KiloUpstream
-	mimo      *upstream.MimoFreeUpstream
 	rec       *recorder.Recorder
 	rateLimit *middleware.RateLimiter
 	wg        sync.WaitGroup // tracks background workers
@@ -106,12 +105,7 @@ func New(cfg *config.Config) (*Server, error) {
 		socks,
 	)
 
-	mimo := upstream.NewMimoFreeUpstream(
-		cfg.UpstreamURLMimo,
-		socks,
-	)
-
-	infraRouter := upstream.NewRouter(opencode, kilo, mimo)
+	infraRouter := upstream.NewRouter(opencode, kilo)
 	appRouter := &routerAdapter{Router: infraRouter}
 
 	m := metrics.New()
@@ -178,7 +172,6 @@ func New(cfg *config.Config) (*Server, error) {
 		tc:        tc,
 		opencode:  opencode,
 		kilo:      kilo,
-		mimo:      mimo,
 		rec:       rec,
 		rateLimit: rl,
 	}, nil
@@ -192,7 +185,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancelBG()
 
 	// Background workers
-	s.wg.Add(4)
+	s.wg.Add(3)
 	go func() {
 		defer s.wg.Done()
 		s.opencode.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshOpenCode)*time.Second)
@@ -200,10 +193,6 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		s.kilo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshKilo)*time.Second)
-	}()
-	go func() {
-		defer s.wg.Done()
-		s.mimo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshMimo)*time.Second)
 	}()
 	go func() {
 		defer s.wg.Done()
