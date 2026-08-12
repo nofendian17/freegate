@@ -51,6 +51,14 @@ var errRotationInProgress = errors.New("rotation already in progress")
 // hostname is not in the (filtered) server list.
 var errServerNotFound = errors.New("server not found in list")
 
+// pingProbeTargets are the hosts/URLs the /ping connectivity check probes
+// through the tunnel. They are package-level vars so tests can point them
+// at local servers instead of the live internet.
+var (
+	pingDNSHost   = "opencode.ai"
+	pingEgressURL = []string{"https://api.ipify.org", "https://ifconfig.me/ip"}
+)
+
 const (
 	// Server-selection weighting. Score is the primary reliability signal;
 	// ping is secondary (many relays report 0 or no ping at all).
@@ -658,6 +666,95 @@ func (s *supervisor) ipRefresher() {
 	}
 }
 
+// pingResult is the outcome of a live connectivity check through the
+// tunnel (POST /ping).
+type pingResult struct {
+	Connected bool   `json:"connected"`
+	Server    string `json:"server"`
+	Country   string `json:"country"`
+	IP        string `json:"ip"`
+
+	DNSOK    bool   `json:"dns_ok"`
+	DNSMS    int64  `json:"dns_ms"`
+	DNSError string `json:"dns_error,omitempty"`
+
+	EgressOK bool   `json:"egress_ok"`
+	EgressIP string `json:"egress_ip,omitempty"`
+	HTTPMS   int64  `json:"http_ms"`
+	HTTPCode int    `json:"http_code"`
+	EgressErr string `json:"egress_error,omitempty"`
+}
+
+// ping performs a live connectivity check through the tunnel: it resolves
+// a hostname, then does an HTTPS GET to a public IP echo service measuring
+// round-trip latency. This answers "is the VPN actually routing traffic?"
+// beyond the tunnel being up — a tunnel can be connected while the relay
+// or the route is dead.
+func (s *supervisor) ping() pingResult {
+	res := pingResult{}
+	s.mu.Lock()
+	res.Connected = s.connected && s.cmd != nil
+	if s.current != nil {
+		res.Server = s.current.HostName
+		res.Country = s.current.CountryLong
+	}
+	res.IP = s.ip
+	s.mu.Unlock()
+
+	if !res.Connected {
+		res.DNSError = "tunnel not connected"
+		res.EgressErr = "tunnel not connected"
+		return res
+	}
+
+	// DNS resolution through the tunnel (Docker DNS + relay routing).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	dnsStart := time.Now()
+	_, err := net.DefaultResolver.LookupHost(ctx, pingDNSHost)
+	dnsMS := time.Since(dnsStart).Milliseconds()
+	cancel()
+	res.DNSMS = dnsMS
+	if err != nil {
+		res.DNSError = err.Error()
+	} else {
+		res.DNSOK = true
+	}
+
+	// HTTPS egress probe through the tunnel with latency measurement.
+	// Tries the endpoint list in order so a single slow/down service
+	// (common through flaky free relays) does not report the tunnel as
+	// broken.
+	client := &http.Client{Timeout: 12 * time.Second}
+	var lastErr string
+	for _, u := range pingEgressURL {
+		httpStart := time.Now()
+		resp, err := client.Get(u)
+		httpMS := time.Since(httpStart).Milliseconds()
+		res.HTTPMS = httpMS
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		res.HTTPCode = resp.StatusCode
+		if resp.StatusCode == http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 128))
+			resp.Body.Close()
+			if ip := strings.TrimSpace(string(body)); ip != "" {
+				res.EgressOK = true
+				res.EgressIP = ip
+				return res
+			}
+		}
+		resp.Body.Close()
+		lastErr = fmt.Sprintf("status %d", resp.StatusCode)
+	}
+	res.EgressErr = lastErr
+	if res.EgressErr == "" {
+		res.EgressErr = "no egress endpoint reachable"
+	}
+	return res
+}
+
 // fetchPublicIP returns the public IP as seen through the tunnel, trying a
 // second endpoint if the first fails. Free VPN relays are slow, so the
 // client timeout gives the TLS round-trip room to breathe.
@@ -720,6 +817,14 @@ func (s *supervisor) serveSOCKS() error {
 // routes wires the control API used by the freegate proxy.
 func (s *supervisor) routes() http.Handler {
 	mux := http.NewServeMux()
+
+	// POST /ping runs a live connectivity check through the tunnel: DNS
+	// resolution, an HTTPS egress probe (with latency), and the current
+	// tunnel state. Used by the dashboard's "ping" button.
+	mux.HandleFunc("POST /ping", func(w http.ResponseWriter, r *http.Request) {
+		res := s.ping()
+		writeJSON(w, http.StatusOK, res)
+	})
 
 	mux.HandleFunc("POST /rotate", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.rotate(); err != nil {

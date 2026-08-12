@@ -49,6 +49,26 @@ type StatusInfo struct {
 	ConnectedAt int64  `json:"connected_at"`
 }
 
+// PingResult is the outcome of the supervisor's live connectivity check
+// (POST /ping): DNS resolution, an HTTPS egress probe with latency, and
+// the current tunnel state.
+type PingResult struct {
+	Connected bool   `json:"connected"`
+	Server    string `json:"server"`
+	Country   string `json:"country"`
+	IP        string `json:"ip"`
+
+	DNSOK     bool   `json:"dns_ok"`
+	DNSMS     int64  `json:"dns_ms"`
+	DNSError  string `json:"dns_error,omitempty"`
+
+	EgressOK  bool   `json:"egress_ok"`
+	EgressIP  string `json:"egress_ip,omitempty"`
+	HTTPMS    int64  `json:"http_ms"`
+	HTTPCode  int    `json:"http_code"`
+	EgressErr string `json:"egress_error,omitempty"`
+}
+
 // Controller rotates the apparent exit IP by asking the supervisor to
 // reconnect its OpenVPN tunnel to a different VPNGate server.
 type Controller struct {
@@ -217,6 +237,28 @@ func (c *Controller) Status() (StatusInfo, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return StatusInfo{}, fmt.Errorf("vpngate control status: decode: %w", err)
+	}
+	if out.IP != "" {
+		c.setIP(out.IP)
+	}
+	return out, nil
+}
+
+// Ping asks the supervisor to run a live connectivity check through the
+// tunnel and returns the result.
+func (c *Controller) Ping() (PingResult, error) {
+	resp, err := c.client.Post(c.ctrlURL+"/ping", "application/json", nil)
+	if err != nil {
+		return PingResult{}, fmt.Errorf("vpngate control ping: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out PingResult
+	if resp.StatusCode != http.StatusOK {
+		return PingResult{}, fmt.Errorf("vpngate control ping: unexpected status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return PingResult{}, fmt.Errorf("vpngate control ping: decode: %w", err)
 	}
 	if out.IP != "" {
 		c.setIP(out.IP)

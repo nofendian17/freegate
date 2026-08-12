@@ -226,6 +226,51 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+func TestPing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ping" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, PingResult{
+			Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4",
+			DNSOK: true, DNSMS: 11, EgressOK: true, EgressIP: "1.2.3.4", HTTPMS: 180, HTTPCode: 200,
+		})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	res, err := c.Ping()
+	if err != nil {
+		t.Fatalf("Ping failed: %v", err)
+	}
+	if !res.Connected || !res.DNSOK || !res.EgressOK {
+		t.Errorf("unexpected ping result: %+v", res)
+	}
+	if res.EgressIP != "1.2.3.4" {
+		t.Errorf("EgressIP = %q, want %q", res.EgressIP, "1.2.3.4")
+	}
+	if got := c.CurrentIP(); got != "1.2.3.4" {
+		t.Errorf("CurrentIP = %q, want %q (ping should refresh cached IP)", got, "1.2.3.4")
+	}
+}
+
+func TestPingPropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"boom"}`, http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	if _, err := c.Ping(); err == nil {
+		t.Fatal("expected error when supervisor returns 503")
+	}
+}
+
 func TestStatusPropagatesError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"boom"}`, http.StatusServiceUnavailable)

@@ -23,12 +23,13 @@ type DataSource interface {
 }
 
 // VPNClient is the subset of the VPN controller the dashboard needs to
-// render the server picker and drive manual connects.
+// render the server picker, drive manual connects, and check connectivity.
 type VPNClient interface {
 	ListServers() ([]vpngate.ServerInfo, error)
 	ConnectTo(hostname string) error
 	ForceNewIP() error
 	Status() (vpngate.StatusInfo, error)
+	Ping() (vpngate.PingResult, error)
 	CurrentIP() string
 }
 
@@ -75,6 +76,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/api/vpn/status", h.apiVPNStatus)
 	r.Post("/api/vpn/connect", h.apiVPNConnect)
 	r.Post("/api/vpn/rotate", h.apiVPNRotate)
+	r.Post("/api/vpn/ping", h.apiVPNPing)
 
 	r.Get("/static/*", func(w http.ResponseWriter, req *http.Request) {
 		req.URL.Path = "/" + chi.URLParam(req, "*")

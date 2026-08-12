@@ -60,6 +60,7 @@ func newTestHandler(t *testing.T) *Handler {
 type fakeVPN struct {
 	servers   []vpngate.ServerInfo
 	status    vpngate.StatusInfo
+	ping      vpngate.PingResult
 	connectTo string
 	rotateErr error
 }
@@ -68,6 +69,7 @@ func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error) { return f.servers
 func (f *fakeVPN) ConnectTo(h string) error                   { f.connectTo = h; return nil }
 func (f *fakeVPN) ForceNewIP() error                          { return f.rotateErr }
 func (f *fakeVPN) Status() (vpngate.StatusInfo, error)        { return f.status, nil }
+func (f *fakeVPN) Ping() (vpngate.PingResult, error)          { return f.ping, nil }
 func (f *fakeVPN) CurrentIP() string                          { return f.status.IP }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
@@ -240,6 +242,44 @@ func TestAPIVPNRotate(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "vpn-korea-2") {
 		t.Errorf("rotate response missing server, got: %s", rr.Body.String())
+	}
+}
+
+func TestAPIVPNPing(t *testing.T) {
+	h := newTestHandler(t)
+	h.vpn.(*fakeVPN).ping = vpngate.PingResult{
+		Connected: true,
+		Server:    "vpn-korea-1",
+		DNSOK:     true, DNSMS: 12,
+		EgressOK: true, EgressIP: "1.2.3.4", HTTPMS: 210, HTTPCode: 200,
+	}
+	rr := serveViaRoutes(h, "POST", "/api/vpn/ping")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"dns_ok":true`) {
+		t.Errorf("ping missing dns_ok, got: %s", body)
+	}
+	if !strings.Contains(body, `"egress_ok":true`) {
+		t.Errorf("ping missing egress_ok, got: %s", body)
+	}
+	if !strings.Contains(body, `"egress_ip":"1.2.3.4"`) {
+		t.Errorf("ping missing egress_ip, got: %s", body)
+	}
+}
+
+func TestAPIVPNPingError(t *testing.T) {
+	h := newTestHandler(t)
+	h.vpn.(*fakeVPN).ping = vpngate.PingResult{Connected: false, DNSError: "tunnel not connected"}
+	rr := serveViaRoutes(h, "POST", "/api/vpn/ping")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (ping result is valid even when disconnected)", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"connected":false`) {
+		t.Errorf("ping missing connected:false, got: %s", rr.Body.String())
 	}
 }
 

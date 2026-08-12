@@ -613,6 +613,26 @@ button.btn-tertiary:hover {
   color: var(--text-faint);
 }
 
+.vpn-ping-result {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.vpn-ping-result.ok {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.vpn-ping-result.bad {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 @media (max-width: 480px) {
   .vpn-select-row {
     flex-direction: column;

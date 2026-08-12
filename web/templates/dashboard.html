@@ -113,6 +113,7 @@
         <span class="card-title"># VPN Server</span>
         <div class="filter-bar">
           <span id="vpn-status-label" class="vpn-status-label">—</span>
+          <button id="vpn-ping" class="btn-secondary" type="button">> ping</button>
           <button id="vpn-rotate" class="btn-secondary" type="button">> rotate random</button>
         </div>
       </div>
@@ -128,6 +129,7 @@
           <button id="vpn-connect" class="btn-primary" type="button" disabled>> connect</button>
         </div>
         <div class="vpn-note">// connect to any relay manually — no automatic IP rotation on 429</div>
+        <div id="vpn-ping-result" class="vpn-ping-result" style="display:none"></div>
       </div>
     </div>
 
@@ -380,6 +382,47 @@
       }
       btn.disabled = false;
       refreshVPNStatus();
+    });
+    document.getElementById('vpn-ping').addEventListener('click', async function() {
+      const btn = this;
+      const box = document.getElementById('vpn-ping-result');
+      btn.disabled = true;
+      box.style.display = 'block';
+      box.textContent = '// pinging through tunnel…';
+      const t0 = Date.now();
+      try {
+        const resp = await fetch('/api/vpn/ping', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+          box.textContent = '! ping failed: ' + (data.error || resp.status);
+          box.className = 'vpn-ping-result';
+          btn.disabled = false;
+          return;
+        }
+        const wall = ((Date.now() - t0) / 1000).toFixed(1);
+        if (!data.connected) {
+          box.textContent = '! tunnel disconnected — nothing to ping';
+          box.className = 'vpn-ping-result';
+          btn.disabled = false;
+          return;
+        }
+        const lines = [];
+        lines.push(data.dns_ok
+          ? '  dns: ok (' + data.dns_ms + 'ms)'
+          : '  dns: FAIL (' + (data.dns_error || data.dns_ms + 'ms') + ')');
+        if (data.egress_ok) {
+          lines.push('  egress: ok @ ' + data.egress_ip + ' (' + data.http_ms + 'ms, HTTP ' + data.http_code + ')');
+        } else {
+          lines.push('  egress: FAIL (' + (data.egress_error || ('HTTP ' + data.http_code)) + ')');
+        }
+        const allOK = data.dns_ok && data.egress_ok;
+        box.textContent = (allOK ? 'vpn healthy' : 'vpn PROBLEM') + ' [' + wall + 's wall]\n' + lines.join('\n');
+        box.className = 'vpn-ping-result ' + (allOK ? 'ok' : 'bad');
+      } catch (e) {
+        box.textContent = '! ping failed: network error';
+        box.className = 'vpn-ping-result';
+      }
+      btn.disabled = false;
     });
     document.getElementById('vpn-rotate').addEventListener('click', async function() {
       const btn = this;

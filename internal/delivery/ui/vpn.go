@@ -51,6 +51,18 @@ func (h *Handler) apiVPNConnect(w http.ResponseWriter, r *http.Request) {
 	writeVPNJSON(w, http.StatusOK, st)
 }
 
+// apiVPNPing runs a live connectivity check through the tunnel (DNS +
+// HTTPS egress + latency) so the dashboard can verify the VPN actually
+// routes traffic.
+func (h *Handler) apiVPNPing(w http.ResponseWriter, r *http.Request) {
+	res, err := h.vpn.Ping()
+	if err != nil {
+		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeVPNJSON(w, http.StatusOK, res)
+}
+
 // apiVPNRotate disconnects and connects to a different random server
 // (manual equivalent of the old automatic 429 rotation).
 func (h *Handler) apiVPNRotate(w http.ResponseWriter, r *http.Request) {
