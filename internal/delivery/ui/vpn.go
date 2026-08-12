@@ -17,14 +17,40 @@ func (h *Handler) apiVPNServers(w http.ResponseWriter, r *http.Request) {
 	writeVPNJSON(w, http.StatusOK, map[string]any{"servers": servers})
 }
 
-// apiVPNStatus returns the current tunnel state.
+// apiVPNStatus returns the current tunnel state plus the active route
+// mode (direct vs tunnel).
 func (h *Handler) apiVPNStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := h.vpn.Status()
 	if err != nil {
 		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeVPNJSON(w, http.StatusOK, st)
+	writeVPNJSON(w, http.StatusOK, map[string]any{
+		"direct":       h.vpn.Direct(),
+		"connected":    st.Connected,
+		"server":       st.Server,
+		"country":      st.Country,
+		"ip":           st.IP,
+		"connected_at": st.ConnectedAt,
+	})
+}
+
+// apiVPNDirect switches the proxy between direct connections and the VPN
+// tunnel at runtime: {"direct": true} routes upstream traffic straight from
+// the proxy container, {"direct": false} back through the tunnel.
+func (h *Handler) apiVPNDirect(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Direct *bool `json:"direct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Direct == nil {
+		writeVPNJSONError(w, http.StatusBadRequest, "body must be {\"direct\": true|false}")
+		return
+	}
+	if err := h.vpn.SetDirect(*req.Direct); err != nil {
+		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeVPNJSON(w, http.StatusOK, map[string]any{"direct": *req.Direct})
 }
 
 // apiVPNConnect connects the tunnel to a specific server the user picked:
@@ -53,13 +79,16 @@ func (h *Handler) apiVPNConnect(w http.ResponseWriter, r *http.Request) {
 
 // apiVPNPing runs a live connectivity check through the tunnel (DNS +
 // HTTPS egress + latency) so the dashboard can verify the VPN actually
-// routes traffic.
+// routes traffic. The route mode is attached to the result: in direct
+// mode the ping reflects the tunnel, not the active traffic path, and the
+// dashboard must say so.
 func (h *Handler) apiVPNPing(w http.ResponseWriter, r *http.Request) {
 	res, err := h.vpn.Ping()
 	if err != nil {
 		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	res.Direct = h.vpn.Direct()
 	writeVPNJSON(w, http.StatusOK, res)
 }
 

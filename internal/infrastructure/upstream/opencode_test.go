@@ -19,8 +19,8 @@ func newTestOpenCode(t *testing.T, body string) *OpenCodeUpstream {
 	}))
 	t.Cleanup(srv.Close)
 
-	u := NewOpenCodeUpstream(srv.URL, "public", "", []string{"big-pickle"})
-	u.client = NewHTTPClient(srv.URL, "public", "", map[string]string{"x-opencode-client": "desktop"})
+	u := NewOpenCodeUpstream(srv.URL, "public", nil, []string{"big-pickle"})
+	u.client = NewHTTPClient(srv.URL, "public", nil, map[string]string{"x-opencode-client": "desktop"})
 	return u
 }
 
@@ -128,7 +128,7 @@ func newTestOpenCodeWithAllowlist(t *testing.T, body string, allowlist []string)
 	}))
 	t.Cleanup(srv.Close)
 
-	u := NewOpenCodeUpstream(srv.URL, "public", "", allowlist)
-	u.client = NewHTTPClient(srv.URL, "public", "", map[string]string{"x-opencode-client": "desktop"})
+	u := NewOpenCodeUpstream(srv.URL, "public", nil, allowlist)
+	u.client = NewHTTPClient(srv.URL, "public", nil, map[string]string{"x-opencode-client": "desktop"})
 	return u
 }

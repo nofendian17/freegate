@@ -13,8 +13,6 @@ type Config struct {
 	APIKey    string
 	RateLimit int
 
-	BypassProxy bool
-
 	// VPNGate replaces the old Tor proxy. The "vpn" sidecar container
 	// (cmd/vpngate-supervisor) keeps an OpenVPN tunnel to a VPNGate relay
 	// server, exposes a SOCKS5 proxy through it, and a small HTTP control
@@ -45,8 +43,6 @@ func Load() *Config {
 		LogLevel:  envStr("LOG_LEVEL", "info"),
 		APIKey:    envStr("API_KEY", ""),
 		RateLimit: envInt("RATE_LIMIT", 60),
-
-		BypassProxy: envBool("BYPASS_PROXY", false),
 
 		VPNGateHost:           envStr("VPNGATE_HOST", "127.0.0.1"),
 		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
@@ -112,15 +108,6 @@ func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
-		}
-	}
-	return def
-}
-
-func envBool(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
 		}
 	}
 	return def

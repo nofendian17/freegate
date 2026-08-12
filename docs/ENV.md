@@ -17,7 +17,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 
 ## VPNGate (proxy)
 
-freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API (`/rotate`, `/connect`, `/servers`, `/status`, `/ip`) used by the dashboard's manual server picker. There is no automatic IP rotation on upstream 429s — pick a server manually from the dashboard.
+freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API (`/rotate`, `/connect`, `/servers`, `/status`, `/ip`) used by the dashboard's manual server picker. There is no automatic IP rotation on upstream 429s — pick a server manually from the dashboard, or switch to **direct** (no tunnel, from the proxy container) with the "direct (no VPN)" option. There is no static bypass env var; the route is switched live at runtime.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -30,7 +30,7 @@ The internal `SOCKSAddr` field is derived as `VPNGATE_HOST:VPNGATE_SOCKS_PORT`.
 
 The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING` (server-selection filters) and `VPNGATE_REFRESH_SECONDS` (server-list refresh interval). These are wired in `docker-compose.yml`.
 
-`VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan).
+`VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
 
 ## Upstreams
 

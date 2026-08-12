@@ -30,6 +30,8 @@ type VPNClient interface {
 	ForceNewIP() error
 	Status() (vpngate.StatusInfo, error)
 	Ping() (vpngate.PingResult, error)
+	SetDirect(direct bool) error
+	Direct() bool
 	CurrentIP() string
 }
 
@@ -77,6 +79,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/api/vpn/connect", h.apiVPNConnect)
 	r.Post("/api/vpn/rotate", h.apiVPNRotate)
 	r.Post("/api/vpn/ping", h.apiVPNPing)
+	r.Post("/api/vpn/direct", h.apiVPNDirect)
 
 	r.Get("/static/*", func(w http.ResponseWriter, req *http.Request) {
 		req.URL.Path = "/" + chi.URLParam(req, "*")

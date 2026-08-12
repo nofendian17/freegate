@@ -16,7 +16,7 @@ func TestPostSetsAcceptHeaderForStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, "key", "", nil)
+	client := NewHTTPClient(srv.URL, "key", nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":true}`))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestPostOmitsAcceptForNonStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, "key", "", nil)
+	client := NewHTTPClient(srv.URL, "key", nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestPostOmitsAcceptWhenStreamFieldMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, "key", "", nil)
+	client := NewHTTPClient(srv.URL, "key", nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"foo"}`))
 	if err != nil {
 		t.Fatal(err)

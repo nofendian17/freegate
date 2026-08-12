@@ -16,9 +16,9 @@ type KiloUpstream struct {
 	cache  *ModelCache
 }
 
-func NewKiloUpstream(baseURL, apiKey, socksAddr string) *KiloUpstream {
+func NewKiloUpstream(baseURL, apiKey string, d *Dialer) *KiloUpstream {
 	return &KiloUpstream{
-		client: NewHTTPClient(baseURL, apiKey, socksAddr, nil),
+		client: NewHTTPClient(baseURL, apiKey, d, nil),
 		cache:  NewModelCache(),
 	}
 }

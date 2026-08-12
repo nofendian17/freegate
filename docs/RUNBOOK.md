@@ -121,6 +121,10 @@ The rate limiter is per-IP. Symptoms: a client gets `{"error":{"type":"rate_limi
 The rate limiter is **in-memory only**; restarting the proxy clears all counters.### Upstream returns 429 → pass-through
 The `ChatService` forwards upstream responses — including 429 — to the client verbatim. There is no automatic retry or IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button). The client sees the provider's original 429 body and status.
 
+### Switch between VPN and direct
+
+The dashboard's VPN Server card offers "direct (no VPN)" as the first option: selecting it routes all upstream traffic straight from the proxy container (no tunnel), while picking any relay (or rotate-random) routes back through the tunnel. This is a live runtime switch (backed by `upstream.Dialer`); there is no static `BYPASS_PROXY` env var anymore.
+
 ### `502 Bad Gateway` with "select upstream" error
 
 Routing could not find a free upstream for the model. Verify:

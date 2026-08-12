@@ -6,13 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
-
-	"golang.org/x/net/proxy"
 )
 
 const MaxResponseBodySize = 10 << 20 // 10 MB
@@ -24,31 +20,20 @@ type HTTPClient struct {
 	headers map[string]string
 }
 
-func NewHTTPClient(baseURL, apiKey, socksAddr string, headers map[string]string) *HTTPClient {
+func NewHTTPClient(baseURL, apiKey string, d *Dialer, headers map[string]string) *HTTPClient {
 	hc := &http.Client{Timeout: 0}
-	if socksAddr != "" {
-		dialer, err := proxy.SOCKS5("tcp", socksAddr, nil, proxy.Direct)
-		if err != nil {
-			slog.Warn("SOCKS5 dialer failed, using direct connection", "error", err)
-		} else {
-			tr := &http.Transport{
-				ForceAttemptHTTP2: false,
-				// Bound only the connection phase: a dead VPN tunnel or a
-				// slow relay should fail fast instead of hanging client
-				// requests. Streaming responses are unaffected because the
-				// body streams after the header arrives.
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
-			}
-			if dc, ok := dialer.(proxy.ContextDialer); ok {
-				tr.DialContext = dc.DialContext
-			} else {
-				tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				}
-			}
-			hc.Transport = tr
+	if d != nil {
+		tr := &http.Transport{
+			ForceAttemptHTTP2: false,
+			// Bound only the connection phase: a dead VPN tunnel or a
+			// slow relay should fail fast instead of hanging client
+			// requests. Streaming responses are unaffected because the
+			// body streams after the header arrives.
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
 		}
+		tr.DialContext = d.DialContext
+		hc.Transport = tr
 	}
 	if headers == nil {
 		headers = make(map[string]string)

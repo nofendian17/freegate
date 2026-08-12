@@ -224,6 +224,7 @@ type healthResp struct {
 	HasModels  bool   `json:"has_models"`
 	ModelCount int    `json:"model_count"`
 	VPNIP      string `json:"vpn_ip"`
+	VPNDirect  bool   `json:"vpn_direct"`
 }
 
 func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +236,7 @@ func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
 		HasModels:  len(models) > 0,
 		ModelCount: len(models),
 		VPNIP:      h.data.VPNIP(),
+		VPNDirect:  h.vpn.Direct(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

@@ -51,9 +51,12 @@ type StatusInfo struct {
 
 // PingResult is the outcome of the supervisor's live connectivity check
 // (POST /ping): DNS resolution, an HTTPS egress probe with latency, and
-// the current tunnel state.
+// the current tunnel state. Direct is filled in by the proxy side (the
+// supervisor has no notion of the dialer route) so the dashboard can tell
+// the user that the ping reflects the tunnel, not the active route.
 type PingResult struct {
 	Connected bool   `json:"connected"`
+	Direct    bool   `json:"direct"`
 	Server    string `json:"server"`
 	Country   string `json:"country"`
 	IP        string `json:"ip"`

@@ -73,6 +73,23 @@ func (u *upstreamAdapter) Start(ctx context.Context) {
 	u.Upstream.Start(ctx, 0)
 }
 
+// vpnUI adapts the VPN controller for the dashboard: it embeds the
+// controller (ListServers/ConnectTo/ForceNewIP/Status/Ping/CurrentIP) and
+// adds the live direct/tunnel switch backed by the shared upstream dialer.
+type vpnUI struct {
+	*vpngate.Controller
+	dialer *upstream.Dialer
+}
+
+func (v *vpnUI) SetDirect(direct bool) error {
+	v.dialer.SetDirect(direct)
+	return nil
+}
+
+func (v *vpnUI) Direct() bool {
+	return v.dialer.IsDirect()
+}
+
 // New constructs a Server from configuration. It wires all
 // dependencies (VPN, upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
@@ -85,22 +102,20 @@ func New(cfg *config.Config) (*Server, error) {
 
 	tc := vpngate.NewController(cfg.VPNGateHost, cfg.VPNGateCtrlPort, time.Duration(cfg.VPNGateRotateInterval)*time.Second)
 
-	socks := cfg.SOCKSAddr
-	if cfg.BypassProxy {
-		socks = ""
-		slog.Info("proxy bypass enabled: direct connections, no IP rotation")
-	}
+	// One shared dialer routes both upstreams; direct vs tunnel is switched
+	// live from the dashboard (replaces the old static BYPASS_PROXY env).
+	dialer := upstream.NewDialer(cfg.SOCKSAddr)
 
 	opencode := upstream.NewOpenCodeUpstream(
 		cfg.UpstreamURLOpenCode,
 		cfg.UpstreamKeyOpenCode,
-		socks,
+		dialer,
 		cfg.UpstreamOpenCodeFreeAllowlist,
 	)
 	kilo := upstream.NewKiloUpstream(
 		cfg.UpstreamURLKilo,
 		cfg.UpstreamKeyKilo,
-		socks,
+		dialer,
 	)
 
 	infraRouter := upstream.NewRouter(opencode, kilo)
@@ -114,7 +129,7 @@ func New(cfg *config.Config) (*Server, error) {
 	rec := recorder.NewRecorder(m.Snapshot)
 	rec.SetModelsFunc(ms.AllModels)
 	rec.SetVPNIPFunc(func() string {
-		if cfg.BypassProxy {
+		if dialer.IsDirect() {
 			return "direct"
 		}
 		return tc.CurrentIP()
@@ -126,7 +141,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.NewHandler(rec, tc, tpl, web.Static())
+	uiHandler := ui.NewHandler(rec, &vpnUI{Controller: tc, dialer: dialer}, tpl, web.Static())
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
@@ -195,15 +210,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	stopIP := make(chan struct{})
-	if !s.cfg.BypassProxy {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.tc.StartMonitor(vpnMonitorInterval, stopIP)
-		}()
-	} else {
-		slog.Info("vpn: IP monitor skipped (bypass enabled)")
-	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.tc.StartMonitor(vpnMonitorInterval, stopIP)
+	}()
 
 	s.logger.Info("starting server", "addr", s.httpSrv.Addr)
 	errCh := make(chan error, 1)

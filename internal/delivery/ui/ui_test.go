@@ -63,6 +63,7 @@ type fakeVPN struct {
 	ping      vpngate.PingResult
 	connectTo string
 	rotateErr error
+	direct    bool
 }
 
 func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
@@ -70,6 +71,8 @@ func (f *fakeVPN) ConnectTo(h string) error                   { f.connectTo = h;
 func (f *fakeVPN) ForceNewIP() error                          { return f.rotateErr }
 func (f *fakeVPN) Status() (vpngate.StatusInfo, error)        { return f.status, nil }
 func (f *fakeVPN) Ping() (vpngate.PingResult, error)          { return f.ping, nil }
+func (f *fakeVPN) SetDirect(v bool) error                     { f.direct = v; return nil }
+func (f *fakeVPN) Direct() bool                               { return f.direct }
 func (f *fakeVPN) CurrentIP() string                          { return f.status.IP }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
@@ -284,6 +287,30 @@ func TestAPIVPNPing(t *testing.T) {
 	if !strings.Contains(body, `"egress_ip":"1.2.3.4"`) {
 		t.Errorf("ping missing egress_ip, got: %s", body)
 	}
+	if !strings.Contains(body, `"direct":false`) {
+		t.Errorf("ping missing route mode direct:false, got: %s", body)
+	}
+}
+
+func TestAPIVPNPingDirectMode(t *testing.T) {
+	// In direct mode the ping result must carry the route mode so the
+	// dashboard can label the tunnel check as such.
+	h := newTestHandler(t)
+	vpn := h.vpn.(*fakeVPN)
+	vpn.direct = true
+	vpn.ping = vpngate.PingResult{
+		Connected: true,
+		DNSOK:     true, DNSMS: 8,
+		EgressOK: true, EgressIP: "9.9.9.9", HTTPMS: 150, HTTPCode: 200,
+	}
+	rr := serveViaRoutes(h, "POST", "/api/vpn/ping")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"direct":true`) {
+		t.Errorf("ping missing direct:true in direct mode, got: %s", rr.Body.String())
+	}
 }
 
 func TestAPIVPNPingError(t *testing.T) {
@@ -296,6 +323,53 @@ func TestAPIVPNPingError(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"connected":false`) {
 		t.Errorf("ping missing connected:false, got: %s", rr.Body.String())
+	}
+}
+
+func TestAPIVPNDirect(t *testing.T) {
+	h := newTestHandler(t)
+	vpn := h.vpn.(*fakeVPN)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":true}`))
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if !vpn.direct {
+		t.Error("expected dialer to be switched to direct")
+	}
+	if !strings.Contains(rr.Body.String(), `"direct":true`) {
+		t.Errorf("direct response missing field, got: %s", rr.Body.String())
+	}
+}
+
+func TestAPIVPNDirectBackToTunnel(t *testing.T) {
+	h := newTestHandler(t)
+	vpn := h.vpn.(*fakeVPN)
+	vpn.direct = true
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":false}`))
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if vpn.direct {
+		t.Error("expected dialer to be switched back to tunnel")
+	}
+}
+
+func TestAPIVPNDirectInvalidBody(t *testing.T) {
+	h := newTestHandler(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{}`))
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != 400 {
+		t.Fatalf("status = %d, want 400", rr.Code)
 	}
 }
 
