@@ -941,6 +941,34 @@ body.modal-open {
   overflow: hidden;
 }
 
+/* ----- Model Test button + result modal ----- */
+button.test-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+  height: 24px;
+  color: var(--tertiary);
+  border: 1px solid var(--border);
+}
+button.test-btn:hover {
+  border-color: var(--tertiary);
+  color: var(--tertiary);
+}
+button.test-btn:disabled {
+  color: var(--text-faint);
+  border-color: var(--border);
+  cursor: wait;
+}
+
+.modal-body.test-body {
+  color: var(--text);
+}
+.modal-body.test-body.tone-ok {
+  color: var(--success);
+}
+.modal-body.test-body.tone-err {
+  color: var(--error);
+}
+
 /* ----- Error Link (clickable truncated error) ----- */
 .error-link {
   color: var(--error);

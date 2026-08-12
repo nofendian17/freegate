@@ -158,6 +158,7 @@
               <th>model</th>
               <th style="width:120px">provider</th>
               <th style="width:80px">free</th>
+              <th style="width:80px">test</th>
             </tr>
           </thead>
           <tbody id="models-body"
@@ -214,6 +215,17 @@
         <span class="modal-close" role="button" tabindex="0" aria-label="Close error modal">x</span>
       </div>
       <pre id="error-detail" class="modal-body"></pre>
+    </div>
+  </div>
+
+  <!-- Model Test Result Modal -->
+  <div id="test-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="test-title" aria-describedby="test-detail">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <span class="modal-title" id="test-title">// model test</span>
+        <span class="modal-close" id="test-close" role="button" tabindex="0" aria-label="Close test modal">x</span>
+      </div>
+      <pre id="test-detail" class="modal-body test-body"></pre>
     </div>
   </div>
 
@@ -445,6 +457,112 @@
     });
     setInterval(refreshVPNStatus, 5000);
     setInterval(refreshVPNServers, 30000);
+
+    // ----- Model Test (HTMX-safe delegation) -----
+    var testInFlight = false;
+    var testLastFocused = null;
+    function openTestModal() {
+      testLastFocused = document.activeElement;
+      document.getElementById('test-modal').style.display = 'flex';
+      document.body.classList.add('modal-open');
+      var closeBtn = document.getElementById('test-close');
+      if (closeBtn) closeBtn.focus();
+    }
+    function closeTestModal() {
+      document.getElementById('test-modal').style.display = 'none';
+      document.body.classList.remove('modal-open');
+      if (testLastFocused && typeof testLastFocused.focus === 'function') {
+        testLastFocused.focus();
+      }
+      testLastFocused = null;
+    }
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest('.test-btn');
+      if (!btn) return;
+      e.preventDefault();
+      // Guard against concurrent tests: the models tbody is swapped by HTMX
+      // every 10s, so a disabled state on a specific button does not survive
+      // the swap. A module-level flag prevents double-firing while a test
+      // (which can take 30–90s on free relays) is still in flight.
+      if (testInFlight) return;
+      testInFlight = true;
+      var model = btn.dataset.model;
+      btn.disabled = true;
+      var orig = btn.textContent;
+      btn.textContent = '…';
+      var detail = document.getElementById('test-detail');
+      var title = document.getElementById('test-title');
+      title.textContent = '// testing: ' + model;
+      detail.textContent = '// sending completion…';
+      detail.className = 'modal-body test-body';
+      openTestModal();
+
+      var t0 = Date.now();
+      fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+          max_tokens: 20
+        })
+      })
+      .then(function(resp) {
+        return resp.text().then(function(text) { return { status: resp.status, body: text }; });
+      })
+      .then(function(result) {
+        var ms = Date.now() - t0;
+        var status = result.status;
+        var raw = result.body || '';
+        var lines = ['status: ' + status + ' [' + ms + 'ms]'];
+        var ok = status >= 200 && status < 300;
+        var content = '';
+        try {
+          var data = JSON.parse(raw);
+          if (data.error && data.error.message) {
+            lines.push('error: ' + data.error.message);
+            ok = false;
+          } else if (data.choices && data.choices[0] && data.choices[0].message) {
+            var msg = data.choices[0].message;
+            content = msg.content || msg.reasoning || '';
+            if (content) lines.push('content: ' + content);
+            if (data.usage) {
+              lines.push('tokens: ' + (data.usage.total_tokens || '?') +
+                ' (in ' + (data.usage.prompt_tokens || 0) + ' / out ' + (data.usage.completion_tokens || 0) + ')');
+            }
+            if (msg.reasoning && msg.content) lines.push('reasoning: ' + msg.reasoning);
+          } else if (!content) {
+            lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
+          }
+        } catch (err) {
+          lines.push('parse error: ' + err.message);
+          if (raw) lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
+        }
+        detail.textContent = lines.join('\n');
+        detail.className = 'modal-body test-body ' + (ok ? 'tone-ok' : 'tone-err');
+      })
+      .catch(function(err) {
+        var ms = Date.now() - t0;
+        detail.textContent = 'status: network error [' + ms + 'ms]\nerror: ' + (err && err.message ? err.message : String(err));
+        detail.className = 'modal-body test-body tone-err';
+      })
+      .finally(function() {
+        testInFlight = false;
+        // The tbody may have been swapped by HTMX since the click; the
+        // detached node is safe to mutate regardless.
+        btn.disabled = false;
+        btn.textContent = orig;
+      });
+    });
+    document.getElementById('test-close').addEventListener('click', closeTestModal);
+    document.getElementById('test-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeTestModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('test-modal').style.display === 'flex') {
+        closeTestModal();
+      }
+    });
 
     // ----- Error Modal (HTMX-safe delegation) -----
     let lastFocused = null;

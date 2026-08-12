@@ -128,11 +128,27 @@ func TestPartialModelsFilter(t *testing.T) {
 	if strings.Contains(body, "test-model-2") {
 		t.Errorf("did not expect test-model-2 (kilo) when filter=opencode")
 	}
+	if !strings.Contains(body, "test-btn") {
+		t.Errorf("expected test button in model rows")
+	}
 
 	rr = serveViaRoutes(h, "GET", "/partials/models?provider=kilo")
 	body = rr.Body.String()
 	if !strings.Contains(body, "test-model-2") {
 		t.Errorf("expected test-model-2 (kilo) when filter=kilo")
+	}
+}
+
+func TestModelRowsEmptyColspan(t *testing.T) {
+	h := newTestHandler(t)
+	h.data.(*fakeData).models = nil
+	rr := serveViaRoutes(h, "GET", "/partials/models")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `colspan="4"`) {
+		t.Errorf("expected empty-state row with colspan=4, got: %s", body)
 	}
 }
 
