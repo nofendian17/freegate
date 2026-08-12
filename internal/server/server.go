@@ -33,8 +33,12 @@ const (
 	serverIdleTimeout       = 120 * time.Second
 	shutdownTimeout         = 10 * time.Second
 	vpnMonitorInterval      = 5 * time.Minute
-	defaultMaxRetries       = 5
-	defaultRetryDelay       = 3 * time.Second
+	// Keep retries low: each retry on 429 rotates the VPN tunnel, which
+	// takes tens of seconds on flaky public relays. Two retries bound a
+	// single request to ~1 minute worst case instead of hanging for
+	// minutes while every public IP in the pool is rate-limited.
+	defaultMaxRetries = 2
+	defaultRetryDelay = 3 * time.Second
 )
 
 // Server owns the freegate HTTP server: configuration, dependencies,
