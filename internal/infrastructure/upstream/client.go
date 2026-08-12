@@ -29,8 +29,14 @@ func NewHTTPClient(baseURL, apiKey string, d *Dialer, headers map[string]string)
 			// slow relay should fail fast instead of hanging client
 			// requests. Streaming responses are unaffected because the
 			// body streams after the header arrives.
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			// Non-streaming completions send no data until the provider
+			// has generated the whole response, and free relays are slow —
+			// 30s routinely had to be cut short. Keep a wide safety cap:
+			// the http.Client.Timeout is 0 and the request context comes
+			// from the client, so a client-side cancel still aborts the
+			// upstream call immediately.
+			ResponseHeaderTimeout: 300 * time.Second,
 		}
 		tr.DialContext = d.DialContext
 		hc.Transport = tr
