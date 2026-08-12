@@ -13,11 +13,19 @@ import (
 	"freegate/internal/httputil"
 )
 
+// loggablePaths are the only requests written to the access log. Everything
+// else — the dashboard's own htmx partials and /api/* JSON polls, static
+// assets, and health probes — is response/asset traffic that would drown the
+// log between real API calls.
+var loggablePaths = map[string]struct{}{
+	"/v1/chat/completions": {},
+	"/v1/messages":         {},
+	"/v1/models":           {},
+}
+
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// HTMX poll/partial requests (dashboard refresh every 5-10s) are
-		// not user-initiated navigations; skip their access-log noise.
-		if r.Header.Get("HX-Request") == "true" {
+		if _, ok := loggablePaths[r.URL.Path]; !ok {
 			next.ServeHTTP(w, r)
 			return
 		}
