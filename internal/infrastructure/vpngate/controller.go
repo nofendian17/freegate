@@ -198,6 +198,28 @@ func (c *Controller) ListServers() ([]ServerInfo, error) {
 	return out.Servers, nil
 }
 
+// RefreshServers forces the supervisor to re-fetch the live vpngate list
+// (ignoring its refresh interval) and returns the freshly filtered relays,
+// so the dashboard can pick up newly online servers on demand.
+func (c *Controller) RefreshServers() ([]ServerInfo, error) {
+	resp, err := c.client.Post(c.ctrlURL+"/servers/refresh", "application/json", http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("vpngate control refresh servers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Servers []ServerInfo `json:"servers"`
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vpngate control refresh servers: unexpected status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("vpngate control refresh servers: decode: %w", err)
+	}
+	return out.Servers, nil
+}
+
 // ConnectTo asks the supervisor to bring the tunnel up on the given relay
 // server (hostname). It blocks until the tunnel is up or the connect
 // fails, and surfaces the supervisor's error message on failure.

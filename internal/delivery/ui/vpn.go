@@ -17,6 +17,17 @@ func (h *Handler) apiVPNServers(w http.ResponseWriter, r *http.Request) {
 	writeVPNJSON(w, http.StatusOK, map[string]any{"servers": servers})
 }
 
+// apiVPNRefreshServers forces the supervisor to re-fetch the live vpngate
+// relay list and returns the freshly filtered set for the picker.
+func (h *Handler) apiVPNRefreshServers(w http.ResponseWriter, r *http.Request) {
+	servers, err := h.vpn.RefreshServers()
+	if err != nil {
+		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeVPNJSON(w, http.StatusOK, map[string]any{"servers": servers})
+}
+
 // apiVPNStatus returns the current tunnel state plus the active route
 // mode (direct vs tunnel).
 func (h *Handler) apiVPNStatus(w http.ResponseWriter, r *http.Request) {

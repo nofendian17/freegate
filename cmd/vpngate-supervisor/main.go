@@ -491,6 +491,31 @@ func (s *supervisor) getServers() ([]vpn.Server, error) {
 	return servers, nil
 }
 
+// serverListJSON returns the filtered, dashboard-ready server payload for
+// /servers and /servers/refresh (the cached list, minus servers that fail
+// the configured filters).
+func (s *supervisor) serverListJSON() ([]map[string]any, error) {
+	servers, err := s.getServers()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(servers))
+	for _, sv := range servers {
+		if !s.serverMatchesFilters(sv) {
+			continue
+		}
+		out = append(out, map[string]any{
+			"hostname":     sv.HostName,
+			"ip":           sv.IPAddr,
+			"country":      sv.CountryLong,
+			"country_code": sv.CountryShort,
+			"score":        sv.Score,
+			"ping":         sv.Ping,
+		})
+	}
+	return out, nil
+}
+
 // fetchServerList wraps vpn.GetListWithOptions with a hard timeout so a
 // hung upstream (the library retries internally for up to minutes) cannot
 // stall a rotation.
@@ -890,24 +915,31 @@ func (s *supervisor) routes() http.Handler {
 	// GET /servers lists the currently available servers (after filters)
 	// so the dashboard can render a picker.
 	mux.HandleFunc("GET /servers", func(w http.ResponseWriter, r *http.Request) {
-		servers, err := s.getServers()
+		out, err := s.serverListJSON()
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		out := make([]map[string]any, 0, len(servers))
-		for _, sv := range servers {
-			if !s.serverMatchesFilters(sv) {
-				continue
-			}
-			out = append(out, map[string]any{
-				"hostname":     sv.HostName,
-				"ip":           sv.IPAddr,
-				"country":      sv.CountryLong,
-				"country_code": sv.CountryShort,
-				"score":        sv.Score,
-				"ping":         sv.Ping,
-			})
+		writeJSON(w, http.StatusOK, map[string]any{"servers": out})
+	})
+
+	// POST /servers/refresh forces a live re-fetch of the vpngate list and
+	// swaps the cache, so the dashboard can pick up freshly online relays
+	// instead of waiting for the refresh interval to elapse.
+	mux.HandleFunc("POST /servers/refresh", func(w http.ResponseWriter, r *http.Request) {
+		list, err := fetchServerList(true)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err)
+			return
+		}
+		s.mu.Lock()
+		s.servers = *list
+		s.lastRefresh = time.Now()
+		s.mu.Unlock()
+		out, err := s.serverListJSON()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"servers": out})
 	})

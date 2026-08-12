@@ -26,6 +26,7 @@ type DataSource interface {
 // render the server picker, drive manual connects, and check connectivity.
 type VPNClient interface {
 	ListServers() ([]vpngate.ServerInfo, error)
+	RefreshServers() ([]vpngate.ServerInfo, error)
 	ConnectTo(hostname string) error
 	ForceNewIP() error
 	Status() (vpngate.StatusInfo, error)
@@ -75,6 +76,7 @@ func (h *Handler) Routes() chi.Router {
 
 	// VPN server picker (manual connect, no automatic 429 handling)
 	r.Get("/api/vpn/servers", h.apiVPNServers)
+	r.Post("/api/vpn/servers/refresh", h.apiVPNRefreshServers)
 	r.Get("/api/vpn/status", h.apiVPNStatus)
 	r.Post("/api/vpn/connect", h.apiVPNConnect)
 	r.Post("/api/vpn/rotate", h.apiVPNRotate)

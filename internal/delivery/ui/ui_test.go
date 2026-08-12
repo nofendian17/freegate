@@ -67,6 +67,7 @@ type fakeVPN struct {
 }
 
 func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
+func (f *fakeVPN) RefreshServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
 func (f *fakeVPN) ConnectTo(h string) error                   { f.connectTo = h; return nil }
 func (f *fakeVPN) ForceNewIP() error                          { return f.rotateErr }
 func (f *fakeVPN) Status() (vpngate.StatusInfo, error)        { return f.status, nil }

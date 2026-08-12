@@ -158,6 +158,35 @@ func TestListServers(t *testing.T) {
 	}
 }
 
+func TestRefreshServers(t *testing.T) {
+	var method string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/servers/refresh" {
+			http.NotFound(w, r)
+			return
+		}
+		method = r.Method
+		writeTestJSON(w, map[string]any{"servers": []ServerInfo{
+			{Hostname: "vpn-fresh-1", IP: "9.9.9.9", Country: "Singapore", CountryCode: "SG", Score: 6000, Ping: "30"},
+		}})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	servers, err := c.RefreshServers()
+	if err != nil {
+		t.Fatalf("RefreshServers failed: %v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("method = %q, want POST", method)
+	}
+	if len(servers) != 1 || servers[0].Hostname != "vpn-fresh-1" {
+		t.Errorf("unexpected servers: %+v", servers)
+	}
+}
+
 func TestConnectTo(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
