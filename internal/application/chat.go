@@ -148,7 +148,10 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalUpstream = u.Name()
 	slog.Info("upstream selected", "request_id", requestID, "model", modelID, "upstream", u.Name())
 
-	var resp *http.Response
+	var (
+		resp          *http.Response
+		last429Reason string
+	)
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
 		if attempt > 0 {
 			if s.ipRotator != nil {
@@ -201,12 +204,18 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 			break
 		}
 
+		// Read the provider's 429 body before closing so the reason
+		// (e.g. FreeUsageLimitError) shows up in the logs.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
+		last429Reason = extractProviderErr(errBody)
 		slog.Warn("upstream returned 429, rotating IP and retrying",
 			"request_id", requestID,
 			"upstream", u.Name(),
+			"model", modelID,
 			"attempt", attempt+1,
 			"max_retry", s.maxRetries,
+			"reason", last429Reason,
 		)
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -215,6 +224,13 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		}
 		finalStatus = resp.StatusCode
 		finalErr = &MaxRetriesExceededError{ModelID: modelID}
+		slog.Error("429 retries exhausted, returning 429 to client",
+			"request_id", requestID,
+			"upstream", u.Name(),
+			"model", modelID,
+			"attempts", s.maxRetries+1,
+			"last_reason", last429Reason,
+		)
 		return finalErr
 	}
 	defer resp.Body.Close()
