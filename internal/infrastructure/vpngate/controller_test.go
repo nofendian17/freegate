@@ -2,11 +2,13 @@ package vpngate
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -125,5 +127,115 @@ func TestCurrentIPInitiallyEmpty(t *testing.T) {
 	c := NewController("127.0.0.1", 1, time.Hour)
 	if got := c.CurrentIP(); got != "" {
 		t.Fatalf("expected empty CurrentIP, got %q", got)
+	}
+}
+
+func TestListServers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/servers" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, map[string]any{"servers": []ServerInfo{
+			{Hostname: "vpn-korea-1", IP: "1.2.3.4", Country: "South Korea", CountryCode: "KR", Score: 5000, Ping: "12"},
+			{Hostname: "vpn-th-1", IP: "5.6.7.8", Country: "Thailand", CountryCode: "TH", Score: 3000, Ping: "80"},
+		}})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	servers, err := c.ListServers()
+	if err != nil {
+		t.Fatalf("ListServers failed: %v", err)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(servers))
+	}
+	if servers[0].Hostname != "vpn-korea-1" || servers[0].Country != "South Korea" {
+		t.Errorf("unexpected server: %+v", servers[0])
+	}
+}
+
+func TestConnectTo(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/connect" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		writeTestJSON(w, map[string]string{"ip": "9.9.9.9"})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	if err := c.ConnectTo("vpn-korea-1"); err != nil {
+		t.Fatalf("ConnectTo failed: %v", err)
+	}
+	if !strings.Contains(gotBody, "vpn-korea-1") {
+		t.Errorf("expected hostname in request body, got %q", gotBody)
+	}
+	if got := c.CurrentIP(); got != "9.9.9.9" {
+		t.Errorf("CurrentIP = %q, want %q", got, "9.9.9.9")
+	}
+}
+
+func TestConnectToPropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeTestJSON(w, map[string]any{"error": "server dead"})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	err := c.ConnectTo("vpn-dead")
+	if err == nil {
+		t.Fatal("expected error when supervisor rejects connect")
+	}
+	if !strings.Contains(err.Error(), "server dead") {
+		t.Errorf("expected supervisor message in error, got %v", err)
+	}
+}
+
+func TestStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(w, StatusInfo{Connected: true, Server: "vpn-korea-1", Country: "South Korea", IP: "1.2.3.4", ConnectedAt: 12345})
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	st, err := c.Status()
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if !st.Connected || st.Server != "vpn-korea-1" || st.IP != "1.2.3.4" {
+		t.Errorf("unexpected status: %+v", st)
+	}
+}
+
+func TestStatusPropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"boom"}`, http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	host, port := splitAddr(srv.URL)
+	c := NewController(host, port, time.Hour)
+
+	if _, err := c.Status(); err == nil {
+		t.Fatal("expected error when supervisor returns 503")
 	}
 }

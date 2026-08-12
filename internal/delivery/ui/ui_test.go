@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"freegate/internal/infrastructure/vpngate"
 	"freegate/internal/model"
 )
 
@@ -53,8 +54,21 @@ func newTestHandler(t *testing.T) *Handler {
 		},
 		uptime: 90,
 		start:  time.Now().Add(-90 * time.Second).Unix(),
-	}, tpl, webStaticFS(t))
+	}, &fakeVPN{}, tpl, webStaticFS(t))
 }
+
+type fakeVPN struct {
+	servers   []vpngate.ServerInfo
+	status    vpngate.StatusInfo
+	connectTo string
+	rotateErr error
+}
+
+func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
+func (f *fakeVPN) ConnectTo(h string) error                   { f.connectTo = h; return nil }
+func (f *fakeVPN) ForceNewIP() error                          { return f.rotateErr }
+func (f *fakeVPN) Status() (vpngate.StatusInfo, error)        { return f.status, nil }
+func (f *fakeVPN) CurrentIP() string                          { return f.status.IP }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
@@ -161,5 +175,83 @@ func TestAPIHealth(t *testing.T) {
 	}
 	if !strings.Contains(body, `"model_count":2`) {
 		t.Errorf("health missing model_count:2, got: %s", body)
+	}
+}
+
+func TestAPIVPNServers(t *testing.T) {
+	h := newTestHandler(t)
+	h.vpn.(*fakeVPN).servers = []vpngate.ServerInfo{
+		{Hostname: "vpn-korea-1", IP: "1.2.3.4", Country: "South Korea", Score: 5000, Ping: "12"},
+	}
+	rr := serveViaRoutes(h, "GET", "/api/vpn/servers")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "vpn-korea-1") {
+		t.Errorf("servers missing hostname, got: %s", body)
+	}
+	if !strings.Contains(body, "South Korea") {
+		t.Errorf("servers missing country, got: %s", body)
+	}
+}
+
+func TestAPIVPNConnect(t *testing.T) {
+	h := newTestHandler(t)
+	vpn := h.vpn.(*fakeVPN)
+	vpn.status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/vpn/connect", strings.NewReader(`{"server":"vpn-korea-1"}`))
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if vpn.connectTo != "vpn-korea-1" {
+		t.Errorf("expected connect to vpn-korea-1, got %q", vpn.connectTo)
+	}
+	if !strings.Contains(rr.Body.String(), `"connected":true`) {
+		t.Errorf("connect response missing status, got: %s", rr.Body.String())
+	}
+}
+
+func TestAPIVPNConnectMissingServer(t *testing.T) {
+	h := newTestHandler(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/vpn/connect", strings.NewReader(`{}`))
+	h.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != 400 {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestAPIVPNRotate(t *testing.T) {
+	h := newTestHandler(t)
+	vpn := h.vpn.(*fakeVPN)
+	vpn.status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-2", IP: "5.6.7.8"}
+
+	rr := serveViaRoutes(h, "POST", "/api/vpn/rotate")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "vpn-korea-2") {
+		t.Errorf("rotate response missing server, got: %s", rr.Body.String())
+	}
+}
+
+func TestAPIVPNStatus(t *testing.T) {
+	h := newTestHandler(t)
+	h.vpn.(*fakeVPN).status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
+	rr := serveViaRoutes(h, "GET", "/api/vpn/status")
+
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"server":"vpn-korea-1"`) {
+		t.Errorf("status missing server, got: %s", rr.Body.String())
 	}
 }

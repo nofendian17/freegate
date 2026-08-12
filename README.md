@@ -8,11 +8,12 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 
 - **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
-- **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); 429 retries rotate the tunnel to a new relay IP. Set `BYPASS_PROXY=true` to go direct
+- **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); pick any relay server from the dashboard (or rotate to a random one) — no automatic IP rotation on 429. Set `BYPASS_PROXY=true` to go direct
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **VPN IP monitoring** — current tunnel exit IP shown in dashboard header, refreshed every 3s
+- **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` or `X-API-Key: <key>` header
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
@@ -76,7 +77,7 @@ All settings are environment variables:
 | `VPNGATE_SOCKS_PORT` | `9050` | VPN SOCKS5 port |
 | `VPNGATE_CTRL_PORT` | `8080` | Supervisor control API port (`POST /rotate`, `GET /ip`) |
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
-| `BYPASS_PROXY` | `false` | Set to `true` to bypass the VPN entirely — direct connections, no IP rotation on 429 |
+| `BYPASS_PROXY` | `false` | Set to `true` to bypass the VPN entirely — direct connections, no tunnel |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `API_KEY` | (empty) | Optional auth key; empty = no auth |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
@@ -324,7 +325,7 @@ docker compose build
 
 - **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
-- **[VPNGate](https://www.vpngate.net/)** + OpenVPN — tunnel + SOCKS5 proxy + IP rotation on 429
+- **[VPNGate](https://www.vpngate.net/)** + OpenVPN — tunnel + SOCKS5 proxy + manual server selection
 - **Docker Compose** — orchestration
 - **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)
 - **JetBrains Mono** — terminal-inspired monospace typeface (self-hosted WOFF2)

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"freegate/internal/application"
 	"freegate/internal/model"
 )
 
@@ -196,28 +195,6 @@ func TestHandler_Chat_UpstreamError_Returns502(t *testing.T) {
 		t.Fatalf("failed to unmarshal error body: %v", err)
 	}
 	if errResp["error"]["type"] != "upstream_error" {
-		t.Errorf("unexpected error type: %v", errResp["error"]["type"])
-	}
-}
-
-func TestHandler_Chat_RateLimited_Returns429(t *testing.T) {
-	h, chat, _, _ := newMockHandler()
-	chat.err = &application.MaxRetriesExceededError{ModelID: "deepseek-v4-flash-free"}
-	body := `{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}]}`
-	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	h.Routes().ServeHTTP(w, req)
-
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected status 429, got %d", w.Code)
-	}
-	var errResp map[string]map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("failed to unmarshal error body: %v", err)
-	}
-	if errResp["error"]["type"] != "rate_limit_exceeded" {
 		t.Errorf("unexpected error type: %v", errResp["error"]["type"])
 	}
 }

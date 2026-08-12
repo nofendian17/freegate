@@ -17,14 +17,14 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 
 ## VPNGate (proxy)
 
-freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API that freegate uses to rotate the exit IP (e.g. on 429 retries).
+freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API (`/rotate`, `/connect`, `/servers`, `/status`, `/ip`) used by the dashboard's manual server picker. There is no automatic IP rotation on upstream 429s — pick a server manually from the dashboard.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `VPNGATE_HOST` | No | `127.0.0.1` | SOCKS5 / control host. In docker-compose this is set to the `vpn` service name. |
 | `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port used for all upstream traffic |
 | `VPNGATE_CTRL_PORT` | No | `8080` | Supervisor control API port (`POST /rotate`, `GET /ip`) |
-| `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations. `ForceNewIP` (on 429) bypasses it. |
+| `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
 
 The internal `SOCKSAddr` field is derived as `VPNGATE_HOST:VPNGATE_SOCKS_PORT`.
 

@@ -118,11 +118,8 @@ curl -s http://127.0.0.1:8080/status  # via docker exec fg-vpn if needed
 
 The rate limiter is per-IP. Symptoms: a client gets `{"error":{"type":"rate_limit","message":"rate limit exceeded, try again later"}}` with `Retry-After: 60`. Tune via `RATE_LIMIT` (default 60 / min).
 
-The rate limiter is **in-memory only**; restarting the proxy clears all counters.
-
-### Upstream returns 429 → IP rotation
-
-The `ChatService` retries up to 5 times (`defaultMaxRetries` in `internal/server/server.go`) on 429, calling `ForceNewIP` between attempts. If the upstream stays 429, the client sees `MaxRetriesExceededError` and the request is logged with `status: 429`. The metrics counter `retry_count` increments per attempt; `upstream_errors` increments once at the end.
+The rate limiter is **in-memory only**; restarting the proxy clears all counters.### Upstream returns 429 → pass-through
+The `ChatService` forwards upstream responses — including 429 — to the client verbatim. There is no automatic retry or IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button). The client sees the provider's original 429 body and status.
 
 ### `502 Bad Gateway` with "select upstream" error
 

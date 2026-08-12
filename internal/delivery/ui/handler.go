@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"freegate/internal/infrastructure/vpngate"
 	"freegate/internal/model"
 )
 
@@ -21,17 +22,30 @@ type DataSource interface {
 	VPNIP() string
 }
 
+// VPNClient is the subset of the VPN controller the dashboard needs to
+// render the server picker and drive manual connects.
+type VPNClient interface {
+	ListServers() ([]vpngate.ServerInfo, error)
+	ConnectTo(hostname string) error
+	ForceNewIP() error
+	Status() (vpngate.StatusInfo, error)
+	CurrentIP() string
+}
+
 // Handler serves the dashboard UI.
 type Handler struct {
 	data      DataSource
+	vpn       VPNClient
 	templates *template.Template
 	staticFS  fs.FS
 }
 
-// NewHandler creates a Handler with the given data source, parsed templates, and static FS.
-func NewHandler(data DataSource, tpl *template.Template, staticFS fs.FS) *Handler {
+// NewHandler creates a Handler with the given data source, VPN client,
+// parsed templates, and static FS.
+func NewHandler(data DataSource, vpn VPNClient, tpl *template.Template, staticFS fs.FS) *Handler {
 	return &Handler{
 		data:      data,
+		vpn:       vpn,
 		templates: tpl,
 		staticFS:  staticFS,
 	}
@@ -55,6 +69,12 @@ func (h *Handler) Routes() chi.Router {
 
 	r.Get("/api/timeseries", h.apiTimeseries)
 	r.Get("/api/health", h.apiHealth)
+
+	// VPN server picker (manual connect, no automatic 429 handling)
+	r.Get("/api/vpn/servers", h.apiVPNServers)
+	r.Get("/api/vpn/status", h.apiVPNStatus)
+	r.Post("/api/vpn/connect", h.apiVPNConnect)
+	r.Post("/api/vpn/rotate", h.apiVPNRotate)
 
 	r.Get("/static/*", func(w http.ResponseWriter, req *http.Request) {
 		req.URL.Path = "/" + chi.URLParam(req, "*")

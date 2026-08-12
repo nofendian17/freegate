@@ -33,12 +33,6 @@ const (
 	serverIdleTimeout       = 120 * time.Second
 	shutdownTimeout         = 10 * time.Second
 	vpnMonitorInterval      = 5 * time.Minute
-	// Keep retries low: each retry on 429 rotates the VPN tunnel, which
-	// takes tens of seconds on flaky public relays. Two retries bound a
-	// single request to ~1 minute worst case instead of hanging for
-	// minutes while every public IP in the pool is rate-limited.
-	defaultMaxRetries = 2
-	defaultRetryDelay = 3 * time.Second
 )
 
 // Server owns the freegate HTTP server: configuration, dependencies,
@@ -114,10 +108,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	m := metrics.New()
 
-	cs := application.NewChatService(appRouter, tc, m, defaultMaxRetries, defaultRetryDelay)
-	if cfg.BypassProxy {
-		cs = application.NewChatService(appRouter, nil, m, defaultMaxRetries, defaultRetryDelay)
-	}
+	cs := application.NewChatService(appRouter, m)
 	ms := application.NewModelService(infraRouter)
 
 	rec := recorder.NewRecorder(m.Snapshot)
@@ -135,7 +126,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.NewHandler(rec, tpl, web.Static())
+	uiHandler := ui.NewHandler(rec, tc, tpl, web.Static())
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 

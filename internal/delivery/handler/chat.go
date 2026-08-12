@@ -2,13 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
-	"freegate/internal/application"
 	"freegate/internal/delivery/respond"
 	"freegate/internal/translate"
 )
@@ -104,18 +102,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeChatError maps a ProxyChat error to an HTTP status and writes an
-// OpenAI-compatible error response. A MaxRetriesExceededError surfaces as
-// 429 (the upstream kept rate-limiting after all rotations); everything
-// else is a 502 gateway error.
+// OpenAI-compatible error response. Upstream HTTP errors (including 429)
+// are passed through verbatim by ProxyChat, so errors reaching this
+// function are transport/selection failures: always a 502 gateway error.
 func (h *Handler) writeChatError(w http.ResponseWriter, err error) {
-	status := http.StatusBadGateway
-	errType := "upstream_error"
-	var mre *application.MaxRetriesExceededError
-	if errors.As(err, &mre) {
-		status = http.StatusTooManyRequests
-		errType = "rate_limit_exceeded"
-	}
-	respond.JSONError(w, status, errType, err.Error())
+	respond.JSONError(w, http.StatusBadGateway, "upstream_error", err.Error())
 }
 
 func extractModelID(body []byte) (string, error) {

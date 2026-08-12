@@ -118,7 +118,7 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/delivery/middleware` | auth, CORS, request ID, rate limit |
 | `internal/delivery/respond` | JSON + error response helpers |
 | `internal/delivery/ui` | dashboard rendering, partials, playground |
-| `internal/application` | `ChatService` retry + IP rotation |
+| `internal/application` | `ChatService` routing, pass-through proxy, request logging |
 | `internal/model` | shared types |
 | `internal/httputil` | header copy, client IP extraction, conversion helpers |
 
@@ -187,7 +187,7 @@ This proxy is anonymous-by-design but ships with sensible defaults:
 - `API_KEY` defaults to empty (no auth). Set it before exposing past `127.0.0.1`.
 - Rate limiter is per-IP, in-memory; it does not survive restart.
 - All upstream traffic goes through the VPN; don't add direct-connect code paths.
-- 429 from an upstream triggers a tunnel rotation (`POST /rotate` on the supervisor — bypasses the `VPNGATE_ROTATE_INTERVAL` minimum; see `internal/infrastructure/vpngate/controller.go::ForceNewIP`).
+- Upstream responses (including 429) are passed through to the client unchanged; the operator picks a relay server manually from the dashboard (`POST /connect` on the supervisor) or rotates to a random one (`POST /rotate`).
 - The proxy is a pass-through — it does not persist request bodies, but it does log request IDs, IPs, models, and status codes. Do not log full prompt/response content.
 
 If you find a security issue, please open a private issue rather than a public PR.

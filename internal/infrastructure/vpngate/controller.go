@@ -1,13 +1,17 @@
-// Package vpngate implements domain.IPRotator against the VPNGate/OpenVPN
-// supervisor container (cmd/vpngate-supervisor). The supervisor maintains an
-// OpenVPN tunnel with a SOCKS5 proxy and exposes a small HTTP control API:
-// POST /rotate connects to a new server/IP, GET /ip reports the current
-// tunnel IP.
+// Package vpngate talks to the VPNGate/OpenVPN supervisor container
+// (cmd/vpngate-supervisor). The supervisor maintains an OpenVPN tunnel with
+// a SOCKS5 proxy and exposes a small HTTP control API: POST /rotate picks a
+// random server, POST /connect connects to a chosen one, GET /servers lists
+// candidates, GET /status and GET /ip report tunnel state. The dashboard
+// uses these endpoints to let operators pick the exit server manually;
+// there is no automatic rotation on upstream 429s.
 package vpngate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +28,26 @@ const (
 	// case), so allow headroom.
 	requestTimeout = 100 * time.Second
 )
+
+// ServerInfo is one relay server offered by the supervisor's /servers
+// endpoint (already filtered by the supervisor's configured filters).
+type ServerInfo struct {
+	Hostname    string `json:"hostname"`
+	IP          string `json:"ip"`
+	Country     string `json:"country"`
+	CountryCode string `json:"country_code"`
+	Score       int    `json:"score"`
+	Ping        string `json:"ping"`
+}
+
+// StatusInfo is the supervisor's current tunnel state (GET /status).
+type StatusInfo struct {
+	Connected   bool   `json:"connected"`
+	Server      string `json:"server"`
+	Country     string `json:"country"`
+	IP          string `json:"ip"`
+	ConnectedAt int64  `json:"connected_at"`
+}
 
 // Controller rotates the apparent exit IP by asking the supervisor to
 // reconnect its OpenVPN tunnel to a different VPNGate server.
@@ -127,6 +151,89 @@ func (c *Controller) StartMonitor(interval time.Duration, stop <-chan struct{}) 
 			return
 		}
 	}
+}
+
+// ListServers returns the relay servers currently offered by the
+// supervisor (after its country/score/ping filters), so the dashboard can
+// render a picker.
+func (c *Controller) ListServers() ([]ServerInfo, error) {
+	resp, err := c.client.Get(c.ctrlURL + "/servers")
+	if err != nil {
+		return nil, fmt.Errorf("vpngate control servers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Servers []ServerInfo `json:"servers"`
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vpngate control servers: unexpected status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("vpngate control servers: decode: %w", err)
+	}
+	return out.Servers, nil
+}
+
+// ConnectTo asks the supervisor to bring the tunnel up on the given relay
+// server (hostname). It blocks until the tunnel is up or the connect
+// fails, and surfaces the supervisor's error message on failure.
+func (c *Controller) ConnectTo(hostname string) error {
+	body, err := json.Marshal(map[string]string{"server": hostname})
+	if err != nil {
+		return fmt.Errorf("vpngate control connect: marshal: %w", err)
+	}
+	resp, err := c.client.Post(c.ctrlURL+"/connect", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("vpngate control connect: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg := readErrorBody(resp)
+		return fmt.Errorf("vpngate control connect: status %d: %s", resp.StatusCode, msg)
+	}
+	var out struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err == nil && out.IP != "" {
+		c.setIP(out.IP)
+	}
+	slog.Info("vpngate: connected to server", "server", hostname)
+	return nil
+}
+
+// Status returns the supervisor's current tunnel state.
+func (c *Controller) Status() (StatusInfo, error) {
+	resp, err := c.client.Get(c.ctrlURL + "/status")
+	if err != nil {
+		return StatusInfo{}, fmt.Errorf("vpngate control status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out StatusInfo
+	if resp.StatusCode != http.StatusOK {
+		return StatusInfo{}, fmt.Errorf("vpngate control status: unexpected status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return StatusInfo{}, fmt.Errorf("vpngate control status: decode: %w", err)
+	}
+	if out.IP != "" {
+		c.setIP(out.IP)
+	}
+	return out, nil
+}
+
+// readErrorBody extracts the supervisor's {"error": "..."} message from a
+// non-200 response, falling back to a truncated raw body.
+func readErrorBody(resp *http.Response) string {
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out); err == nil && out.Error != "" {
+		return out.Error
+	}
+	return "unknown error"
 }
 
 func (c *Controller) refreshIP() {

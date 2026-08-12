@@ -107,6 +107,30 @@
       </div>
     </div>
 
+    <!-- VPN Server Picker -->
+    <div class="card section-block section-gap">
+      <div class="card-header">
+        <span class="card-title"># VPN Server</span>
+        <div class="filter-bar">
+          <span id="vpn-status-label" class="vpn-status-label">—</span>
+          <button id="vpn-rotate" class="btn-secondary" type="button">> rotate random</button>
+        </div>
+      </div>
+      <div class="vpn-picker">
+        <div class="vpn-current" id="vpn-current">
+          <span class="status-dot" id="vpn-dot"></span>
+          <span id="vpn-current-text">loading…</span>
+        </div>
+        <div class="vpn-select-row">
+          <select id="vpn-server-select" aria-label="Choose a VPN server">
+            <option value="">$ select server…</option>
+          </select>
+          <button id="vpn-connect" class="btn-primary" type="button" disabled>> connect</button>
+        </div>
+        <div class="vpn-note">// connect to any relay manually — no automatic IP rotation on 429</div>
+      </div>
+    </div>
+
     <!-- Free Models -->
     <div class="card section-block section-gap">
       <div class="card-header">
@@ -284,6 +308,100 @@
     }
     setInterval(refreshHealth, 3000);
     document.addEventListener('DOMContentLoaded', refreshHealth);
+
+    // ----- VPN Server Picker -----
+    async function refreshVPNStatus() {
+      try {
+        const resp = await fetch('/api/vpn/status');
+        if (!resp.ok) return;
+        const st = await resp.json();
+        const dot = document.getElementById('vpn-dot');
+        const text = document.getElementById('vpn-current-text');
+        const label = document.getElementById('vpn-status-label');
+        if (st.connected) {
+          dot.className = 'status-dot ok';
+          text.textContent = (st.country ? st.country + ' — ' : '') + (st.server || '?') + ' @ ' + (st.ip || '…');
+          label.textContent = 'connected';
+        } else {
+          dot.className = 'status-dot warn';
+          text.textContent = 'disconnected — reconnect loop active';
+          label.textContent = 'disconnected';
+        }
+      } catch (e) { /* ignore */ }
+    }
+    function escapeHTML(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+    async function refreshVPNServers() {
+      const sel = document.getElementById('vpn-server-select');
+      const btn = document.getElementById('vpn-connect');
+      try {
+        const resp = await fetch('/api/vpn/servers');
+        if (!resp.ok) { btn.disabled = true; return; }
+        const data = await resp.json();
+        const servers = data.servers || [];
+        const current = sel.value;
+        sel.innerHTML = '<option value="">$ select server…</option>' + servers.map(s => {
+          const host = escapeHTML(s.hostname);
+          const country = escapeHTML(s.country);
+          const ping = escapeHTML(s.ping || '?');
+          return '<option value="' + host + '">' + host +
+            '  [' + country + ' · score ' + s.score + ' · ping ' + ping + 'ms]</option>';
+        }).join('');
+        if (current && servers.some(s => s.hostname === current)) sel.value = current;
+        btn.disabled = sel.value === '';
+      } catch (e) { /* ignore */ }
+    }
+    document.getElementById('vpn-server-select').addEventListener('change', function() {
+      document.getElementById('vpn-connect').disabled = this.value === '';
+    });
+    document.getElementById('vpn-connect').addEventListener('click', async function() {
+      const sel = document.getElementById('vpn-server-select');
+      const server = sel.value;
+      if (!server) return;
+      const btn = this;
+      btn.disabled = true;
+      const text = document.getElementById('vpn-current-text');
+      text.textContent = 'connecting to ' + server + '…';
+      try {
+        const resp = await fetch('/api/vpn/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ server: server })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          text.textContent = 'connect failed: ' + (data.error || resp.status);
+          btn.disabled = false;
+          return;
+        }
+      } catch (e) {
+        text.textContent = 'connect failed: network error';
+      }
+      btn.disabled = false;
+      refreshVPNStatus();
+    });
+    document.getElementById('vpn-rotate').addEventListener('click', async function() {
+      const btn = this;
+      btn.disabled = true;
+      const text = document.getElementById('vpn-current-text');
+      text.textContent = 'rotating to a random server…';
+      try {
+        const resp = await fetch('/api/vpn/rotate', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok && data.error) text.textContent = 'rotate failed: ' + data.error;
+      } catch (e) {
+        text.textContent = 'rotate failed: network error';
+      }
+      btn.disabled = false;
+      refreshVPNStatus();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshVPNStatus();
+      refreshVPNServers();
+    });
+    setInterval(refreshVPNStatus, 5000);
+    setInterval(refreshVPNServers, 30000);
 
     // ----- Error Modal (HTMX-safe delegation) -----
     let lastFocused = null;

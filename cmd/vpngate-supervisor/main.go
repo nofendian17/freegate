@@ -47,6 +47,10 @@ import (
 // from the reconnect loop) is already running.
 var errRotationInProgress = errors.New("rotation already in progress")
 
+// errServerNotFound is returned by connectToServerByName when the requested
+// hostname is not in the (filtered) server list.
+var errServerNotFound = errors.New("server not found in list")
+
 const (
 	// Server-selection weighting. Score is the primary reliability signal;
 	// ping is secondary (many relays report 0 or no ping at all).
@@ -75,6 +79,7 @@ func main() {
 	if os.Getenv("VPNGATE_LOG_LEVEL") == "debug" {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
+	slog.Info("vpngate: supervisor starting", "debug", os.Getenv("VPNGATE_LOG_LEVEL"))
 
 	s := &supervisor{
 		socksAddr:  "0.0.0.0:" + envStr("VPNGATE_SOCKS_PORT", "9050"),
@@ -170,22 +175,19 @@ func (s *supervisor) reconnectLoop() {
 // short state reads/writes, never while a tunnel is being brought up, so
 // the control API stays responsive during a slow rotation.
 func (s *supervisor) rotate() error {
-	s.mu.Lock()
-	if s.rotating {
-		s.mu.Unlock()
-		return errRotationInProgress
+	end, err := s.beginRotation()
+	if err != nil {
+		return err
 	}
-	s.rotating = true
-	s.mu.Unlock()
+	defer end()
 
 	success := false
 	defer func() {
-		s.mu.Lock()
-		s.rotating = false
 		if !success {
+			s.mu.Lock()
 			s.connected = false
+			s.mu.Unlock()
 		}
-		s.mu.Unlock()
 	}()
 
 	// Build the tried set from the current connection.
@@ -213,50 +215,108 @@ func (s *supervisor) rotate() error {
 
 	var lastErr error
 	for _, server := range candidates {
-		// Tear down the previous tunnel outside the lock so the control
-		// API stays responsive while the process is being killed.
-		s.mu.Lock()
-		old, oldPath := s.cmd, s.cfgPath
-		s.cmd = nil
-		s.connected = false
-		s.cfgPath = ""
-		s.mu.Unlock()
-		if old != nil {
-			killProcess(old)
-		}
-		if oldPath != "" {
-			os.Remove(oldPath)
-		}
-
-		waitTunDown()
-
-		cmd, cfgPath, err := startOpenVPN(server)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		go s.watch(cmd)
-
-		ip, err := waitTunnelUp(cmd)
-		if err != nil {
-			killProcess(cmd)
+		if err := s.connectToServer(server); err != nil {
 			lastErr = err
 			slog.Warn("vpngate: connect attempt failed, trying another server", "server", server.HostName, "error", err)
 			continue
 		}
-
-		s.mu.Lock()
-		s.cmd = cmd
-		s.cfgPath = cfgPath
-		s.current = &server
-		s.ip = ip
-		s.connected = true
-		s.connectedAt = time.Now()
-		s.mu.Unlock()
 		success = true
 		return nil
 	}
 	return fmt.Errorf("rotation failed after %d attempt(s): %w", len(candidates), lastErr)
+}
+
+// beginRotation acquires the single-rotation guard, or returns
+// errRotationInProgress if another rotation is already running. The
+// returned func releases the guard; call it via defer.
+func (s *supervisor) beginRotation() (func(), error) {
+	s.mu.Lock()
+	if s.rotating {
+		s.mu.Unlock()
+		return nil, errRotationInProgress
+	}
+	s.rotating = true
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		s.rotating = false
+		s.mu.Unlock()
+	}, nil
+}
+
+// connectToServer tears down the current tunnel (if any) and brings up a
+// new one to the given server. The caller must hold the rotation guard.
+// The mutex is only held for short state reads/writes, never while the
+// tunnel is being killed or brought up, so the control API stays
+// responsive during a slow connect.
+func (s *supervisor) connectToServer(server vpn.Server) error {
+	// Tear down the previous tunnel outside the lock so the control
+	// API stays responsive while the process is being killed.
+	s.mu.Lock()
+	old, oldPath := s.cmd, s.cfgPath
+	s.cmd = nil
+	s.connected = false
+	s.cfgPath = ""
+	s.mu.Unlock()
+	if old != nil {
+		killProcess(old)
+	}
+	if oldPath != "" {
+		os.Remove(oldPath)
+	}
+
+	waitTunDown()
+
+	cmd, cfgPath, err := startOpenVPN(server)
+	if err != nil {
+		return err
+	}
+	go s.watch(cmd)
+
+	ip, err := waitTunnelUp(cmd)
+	if err != nil {
+		killProcess(cmd)
+		return err
+	}
+
+	s.mu.Lock()
+	s.cmd = cmd
+	s.cfgPath = cfgPath
+	s.current = &server
+	s.ip = ip
+	s.connected = true
+	s.connectedAt = time.Now()
+	s.mu.Unlock()
+	return nil
+}
+
+// connectToServerByName resolves a hostname from the cached server list and
+// connects to it, holding the rotation guard. This is the explicit
+// user-driven path (/connect). Only servers that pass the configured
+// filters are connectable, so the picker and the direct API agree on what
+// the operator is allowed to select.
+func (s *supervisor) connectToServerByName(hostname string) error {
+	servers, err := s.getServers()
+	if err != nil {
+		return fmt.Errorf("fetch server list: %w", err)
+	}
+	for _, sv := range servers {
+		if sv.HostName == hostname && s.serverMatchesFilters(sv) {
+			end, err := s.beginRotation()
+			if err != nil {
+				return err
+			}
+			defer end()
+			if err := s.connectToServer(sv); err != nil {
+				s.mu.Lock()
+				s.connected = false
+				s.mu.Unlock()
+				return err
+			}
+			return nil
+		}
+	}
+	return errServerNotFound
 }
 
 // watch waits for an openvpn process and marks the tunnel disconnected
@@ -286,6 +346,23 @@ func (s *supervisor) watch(cmd *exec.Cmd) {
 	}
 }
 
+// serverMatchesFilters reports whether a server passes the configured
+// country / score / ping filters.
+func (s *supervisor) serverMatchesFilters(sv vpn.Server) bool {
+	if !matchCountry(s.country, sv) {
+		return false
+	}
+	if s.minScore > 0 && sv.Score < s.minScore {
+		return false
+	}
+	if s.maxPing > 0 {
+		if p, ok := parsePing(sv.Ping); !ok || p > s.maxPing {
+			return false
+		}
+	}
+	return true
+}
+
 // pickServer returns a random server matching the filters, excluding any
 // hostnames in tried. Selection is ping-aware weighted random: every
 // candidate that passes the filters stays eligible, but relays with
@@ -301,16 +378,8 @@ func (s *supervisor) pickServer(tried map[string]bool) (vpn.Server, error) {
 		if tried[sv.HostName] {
 			continue
 		}
-		if !matchCountry(s.country, sv) {
+		if !s.serverMatchesFilters(sv) {
 			continue
-		}
-		if s.minScore > 0 && sv.Score < s.minScore {
-			continue
-		}
-		if s.maxPing > 0 {
-			if p, ok := parsePing(sv.Ping); !ok || p > s.maxPing {
-				continue
-			}
 		}
 		candidates = append(candidates, sv)
 	}
@@ -574,7 +643,12 @@ func (s *supervisor) ipRefresher() {
 		if !connected {
 			continue
 		}
-		if ip, err := fetchPublicIP(); err == nil && ip != "" {
+		ip, err := fetchPublicIP()
+		if err != nil {
+			slog.Debug("vpngate: ip refresh failed", "error", err)
+			continue
+		}
+		if ip != "" {
 			s.mu.Lock()
 			if s.connected && s.cmd != nil {
 				s.ip = ip
@@ -654,6 +728,59 @@ func (s *supervisor) routes() http.Handler {
 				return
 			}
 			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		s.mu.Lock()
+		ip := s.ip
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ip": ip})
+	})
+
+	// GET /servers lists the currently available servers (after filters)
+	// so the dashboard can render a picker.
+	mux.HandleFunc("GET /servers", func(w http.ResponseWriter, r *http.Request) {
+		servers, err := s.getServers()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		out := make([]map[string]any, 0, len(servers))
+		for _, sv := range servers {
+			if !s.serverMatchesFilters(sv) {
+				continue
+			}
+			out = append(out, map[string]any{
+				"hostname":     sv.HostName,
+				"ip":           sv.IPAddr,
+				"country":      sv.CountryLong,
+				"country_code": sv.CountryShort,
+				"score":        sv.Score,
+				"ping":         sv.Ping,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"servers": out})
+	})
+
+	// POST /connect connects the tunnel to a specific server chosen by the
+	// user: {"server": "<hostname>"}. Returns 404 if the hostname is not
+	// in the current list.
+	mux.HandleFunc("POST /connect", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Server string `json:"server"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Server == "" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("body must be {\"server\": \"<hostname>\"}"))
+			return
+		}
+		if err := s.connectToServerByName(req.Server); err != nil {
+			switch {
+			case errors.Is(err, errRotationInProgress):
+				writeErr(w, http.StatusConflict, err)
+			case errors.Is(err, errServerNotFound):
+				writeErr(w, http.StatusNotFound, err)
+			default:
+				writeErr(w, http.StatusInternalServerError, err)
+			}
 			return
 		}
 		s.mu.Lock()
