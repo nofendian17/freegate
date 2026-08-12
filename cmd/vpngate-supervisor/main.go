@@ -78,6 +78,11 @@ const (
 	// A slow-but-usable relay is not rejected here; the ipRefresher reaps
 	// tunnels that stop routing.
 	ipCheckTimeout = 6 * time.Second
+	// ipRefreshAttempts / ipRefreshRetryDelay give the background IP
+	// refresher patience with slow free relays instead of giving up after
+	// one timed-out probe per tick.
+	ipRefreshAttempts     = 3
+	ipRefreshRetryDelay   = 3 * time.Second
 	// listFetchTimeout bounds a single server-list refresh so a hung
 	// fetch cannot wedge the rotation state.
 	listFetchTimeout = 20 * time.Second
@@ -291,6 +296,15 @@ func (s *supervisor) connectToServer(server vpn.Server) error {
 	s.cmd = cmd
 	s.cfgPath = cfgPath
 	s.current = &server
+	if ip == "" {
+		// The measured egress IP is often blank on slow relays: the
+		// check right after tun0 is up is best-effort and frequently
+		// times out. The relay's own address is a reliable stand-in —
+		// traffic exits at the relay — so /ip and the dashboard label
+		// stay populated instead of showing "—" until the refresher
+		// refines the value.
+		ip = server.IPAddr
+	}
 	s.ip = ip
 	s.connected = true
 	s.connectedAt = time.Now()
@@ -651,17 +665,25 @@ func (s *supervisor) ipRefresher() {
 		if !connected {
 			continue
 		}
-		ip, err := fetchPublicIP()
-		if err != nil {
-			slog.Debug("vpngate: ip refresh failed", "error", err)
-			continue
-		}
-		if ip != "" {
-			s.mu.Lock()
-			if s.connected && s.cmd != nil {
-				s.ip = ip
+		// Egress probes through free relays routinely need a few tries
+		// before any echo service answers. Retry inside the tick so a
+		// slow-but-working tunnel fills the label in this cycle instead
+		// of waiting for the next tick.
+		for attempt := 0; attempt < ipRefreshAttempts; attempt++ {
+			ip, err := fetchPublicIP()
+			if err == nil && ip != "" {
+				s.mu.Lock()
+				if s.connected && s.cmd != nil {
+					s.ip = ip
+				}
+				s.mu.Unlock()
+				break
 			}
-			s.mu.Unlock()
+			slog.Debug("vpngate: ip refresh attempt failed",
+				"attempt", attempt+1, "error", err)
+			if attempt+1 < ipRefreshAttempts {
+				time.Sleep(ipRefreshRetryDelay)
+			}
 		}
 	}
 }
@@ -755,42 +777,66 @@ func (s *supervisor) ping() pingResult {
 	return res
 }
 
-// fetchPublicIP returns the public IP as seen through the tunnel, trying a
-// second endpoint if the first fails. Free VPN relays are slow, so the
-// client timeout gives the TLS round-trip room to breathe.
-func fetchPublicIP() (string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	var lastErr error
+// ipEchoProbe describes a public service that answers with the caller's
+// public IP. jsonKey selects a field in a JSON response; empty means the
+// body is the bare IP.
+type ipEchoProbe struct {
+	url     string
+	jsonKey string
+}
 
-	resp, err := client.Get("https://api.ipify.org?format=json")
-	if err == nil {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			var out struct {
-				IP string `json:"ip"`
-			}
-			if err := json.Unmarshal(body, &out); err == nil && out.IP != "" {
-				return out.IP, nil
-			}
+// ipEchoProbes are tried in order by fetchPublicIP.
+var ipEchoProbes = []ipEchoProbe{
+	{url: "https://api.ipify.org?format=json", jsonKey: "ip"},
+	{url: "https://ifconfig.me/ip"},
+}
+
+// probeIP fetches one echo endpoint and returns the public IP it reports.
+// The timeout is per endpoint so one slow or blackholed service cannot eat
+// the whole attempt.
+func probeIP(p ipEchoProbe) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(p.url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: status %d", p.url, resp.StatusCode)
+	}
+	if p.jsonKey != "" {
+		var out map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			return "", fmt.Errorf("%s: decode: %w", p.url, err)
 		}
-		lastErr = fmt.Errorf("ipify: status %d", resp.StatusCode)
-	} else {
+		ip := strings.TrimSpace(fmt.Sprint(out[p.jsonKey]))
+		if ip == "" {
+			return "", fmt.Errorf("%s: empty ip field", p.url)
+		}
+		return ip, nil
+	}
+	ip := strings.TrimSpace(string(body))
+	if ip == "" {
+		return "", fmt.Errorf("%s: empty body", p.url)
+	}
+	return ip, nil
+}
+
+// fetchPublicIP returns the public IP as seen through the tunnel, trying
+// the echo endpoints in order. Free VPN relays are slow, so failed
+// endpoints are skipped rather than aborted.
+func fetchPublicIP() (string, error) {
+	var lastErr error
+	for _, p := range ipEchoProbes {
+		ip, err := probeIP(p)
+		if err == nil && ip != "" {
+			return ip, nil
+		}
 		lastErr = err
 	}
-
-	resp, err = client.Get("https://ifconfig.me/ip")
-	if err == nil {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			if ip := strings.TrimSpace(string(body)); ip != "" {
-				return ip, nil
-			}
-		}
-		lastErr = fmt.Errorf("ifconfig.me: status %d", resp.StatusCode)
-	} else {
-		lastErr = err
+	if lastErr == nil {
+		lastErr = errors.New("no ip echo endpoint reachable")
 	}
 	return "", lastErr
 }

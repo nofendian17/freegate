@@ -943,11 +943,24 @@ body.modal-open {
 
 /* ----- Model Test button + result modal ----- */
 button.test-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
   font-size: 11px;
-  padding: 4px 8px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0 var(--space-2);
   height: 24px;
-  color: var(--tertiary);
+  vertical-align: middle;
+  color: var(--text-dim);
+  background: transparent;
   border: 1px solid var(--border);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--easing),
+              border-color var(--duration-fast) var(--easing);
 }
 button.test-btn:hover {
   border-color: var(--tertiary);
@@ -957,6 +970,20 @@ button.test-btn:disabled {
   color: var(--text-faint);
   border-color: var(--border);
   cursor: wait;
+}
+
+/* Free-models table: compact rows with pill + test button on one line,
+   same 24px height so the columns stay aligned and tidy. */
+#models-body td {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  vertical-align: middle;
+}
+#models-body .pill {
+  height: 24px;
+  line-height: 1;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
 }
 
 .modal-body.test-body {

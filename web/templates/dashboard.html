@@ -124,8 +124,8 @@
         </div>
         <div class="vpn-select-row">
           <select id="vpn-server-select" aria-label="Choose a VPN server or direct">
-            <option value="__direct__">$ direct (no VPN)</option>
             <option value="">$ select server…</option>
+            <option value="__direct__">$ direct (no VPN)</option>
           </select>
           <button id="vpn-connect" class="btn-primary" type="button" disabled>> connect</button>
         </div>
@@ -325,11 +325,31 @@
     document.addEventListener('DOMContentLoaded', refreshHealth);
 
     // ----- VPN Server Picker -----
+    // Last known route mode from /api/vpn/status (direct vs tunnel). The
+    // picker is kept in sync with it so it never silently claims to be in
+    // direct mode while the tunnel is the active route.
+    let vpnRouteDirect = false;
+    // Aligns the picker's selection to the real route without clobbering an
+    // in-progress manual server pick: a chosen server is left alone; only the
+    // "" placeholder and "__direct__" are auto-corrected.
+    function syncVPNSelectToRoute(direct) {
+      const sel = document.getElementById('vpn-server-select');
+      if (!sel) return;
+      const v = sel.value;
+      if (v !== '' && v !== '__direct__') return;
+      const want = direct ? '__direct__' : '';
+      if (v === want) return;
+      sel.value = want;
+      const btn = document.getElementById('vpn-connect');
+      if (btn) btn.disabled = want === '' || want === '__direct__';
+    }
     async function refreshVPNStatus() {
       try {
         const resp = await fetch('/api/vpn/status');
         if (!resp.ok) return;
         const st = await resp.json();
+        vpnRouteDirect = !!st.direct;
+        syncVPNSelectToRoute(vpnRouteDirect);
         const dot = document.getElementById('vpn-dot');
         const text = document.getElementById('vpn-current-text');
         const label = document.getElementById('vpn-status-label');
@@ -351,6 +371,14 @@
     function escapeHTML(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
+    // Renders a country flag emoji from its two-letter ISO code (regional
+    // indicator symbols), or "" when the code is unavailable/invalid.
+    function flagEmoji(code) {
+      if (!code || code.length !== 2) return '';
+      const a = code.charCodeAt(0), b = code.charCodeAt(1);
+      if (a < 0x41 || a > 0x5A || b < 0x41 || b > 0x5A) return '';
+      return String.fromCodePoint(0x1F1E6 + (a - 0x41)) + String.fromCodePoint(0x1F1E6 + (b - 0x41));
+    }
     async function refreshVPNServers() {
       const sel = document.getElementById('vpn-server-select');
       const btn = document.getElementById('vpn-connect');
@@ -360,15 +388,23 @@
         const data = await resp.json();
         const servers = data.servers || [];
         const current = sel.value;
-        sel.innerHTML = '<option value="__direct__">$ direct (no VPN)</option>' +
-          '<option value="">$ select server…</option>' + servers.map(s => {
+        sel.innerHTML = '<option value="">$ select server…</option>' +
+          '<option value="__direct__">$ direct (no VPN)</option>' + servers.map(s => {
           const host = escapeHTML(s.hostname);
-          const country = escapeHTML(s.country);
+          const flag = flagEmoji(s.country_code);
+          const country = escapeHTML((flag ? flag + ' ' : '') + (s.country || ''));
           const ping = escapeHTML(s.ping || '?');
           return '<option value="' + host + '">' + host +
             '  [' + country + ' · score ' + s.score + ' · ping ' + ping + 'ms]</option>';
         }).join('');
-        if (current && (current === '__direct__' || servers.some(s => s.hostname === current))) sel.value = current;
+        // Preserve a valid selection; otherwise fall back to the real route
+        // mode instead of the rebuild's first option (never claim direct
+        // while the tunnel is active).
+        let next = current;
+        if (!(next === '__direct__' || servers.some(s => s.hostname === next))) {
+          next = vpnRouteDirect ? '__direct__' : '';
+        }
+        sel.value = next;
         btn.disabled = sel.value === '' || sel.value === '__direct__';
       } catch (e) { /* ignore */ }
     }

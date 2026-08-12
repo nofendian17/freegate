@@ -95,9 +95,41 @@ func TestDashboardRenders(t *testing.T) {
 		"opencode", "kilo",
 		"test-model-1", "test-model-2",
 		"htmx.min.js", "chart.umd.js", "app.css",
+		"flagEmoji",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+// TestDashboardVPNDirectPickerDefault guards against the dashboard picker
+// silently defaulting to "$ direct (no VPN)" while the active route is still
+// the tunnel. The placeholder option must render first so the initial
+// selection is a neutral "select server…", and the client-side route sync
+// (which keeps the picker honest and makes a direct click actually engage
+// direct mode) must be present in the served page.
+func TestDashboardVPNDirectPickerDefault(t *testing.T) {
+	h := newTestHandler(t)
+	rr := serveViaRoutes(h, "GET", "/")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+
+	placeholder := `<option value="">$ select server…</option>`
+	direct := `<option value="__direct__">$ direct (no VPN)</option>`
+	phIdx := strings.Index(body, placeholder)
+	dirIdx := strings.Index(body, direct)
+	if phIdx < 0 || dirIdx < 0 {
+		t.Fatalf("picker options missing (placeholder@%d direct@%d)", phIdx, dirIdx)
+	}
+	if dirIdx < phIdx {
+		t.Error("direct option renders before the neutral placeholder; picker would default to direct while the route may still be the tunnel")
+	}
+	for _, want := range []string{"vpnRouteDirect", "syncVPNSelectToRoute"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing route-sync logic %q", want)
 		}
 	}
 }
