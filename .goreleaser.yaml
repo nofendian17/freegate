@@ -49,10 +49,11 @@ release:
     owner: nofendian17
     name: freegate
   footer: |
-    ## Running without Tor
+    ## Running without a VPN
 
-    freegate routes all upstream traffic through a Tor SOCKS5 proxy by default.
-    If you are **not** running a Tor proxy, set:
+    freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel
+    (SOCKS5 proxy) by default. If you are **not** running the `vpn` sidecar,
+    set:
 
     ```bash
     BYPASS_PROXY=true

@@ -73,7 +73,7 @@ func (e *MaxRetriesExceededError) Error() string {
 }
 
 // ProxyChat routes the request to the appropriate upstream, retries on
-// 429 with Tor IP rotation, and streams the response back to w.
+// 429 with VPN IP rotation, and streams the response back to w.
 func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error {
 	start := time.Now()
 	requestID := ""
@@ -152,10 +152,10 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
 		if attempt > 0 {
 			if s.ipRotator != nil {
-				if torErr := s.ipRotator.ForceNewIP(); torErr != nil {
-					slog.Warn("tor: forced IP rotation failed", "request_id", requestID, "attempt", attempt, "error", torErr)
+				if vpnErr := s.ipRotator.ForceNewIP(); vpnErr != nil {
+					slog.Warn("vpn: forced IP rotation failed", "request_id", requestID, "attempt", attempt, "error", vpnErr)
 				} else {
-					slog.Info("tor: IP rotated for retry", "request_id", requestID, "attempt", attempt)
+					slog.Info("vpn: IP rotated for retry", "request_id", requestID, "attempt", attempt)
 				}
 			}
 			if s.metrics != nil {

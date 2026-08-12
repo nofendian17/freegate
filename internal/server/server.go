@@ -22,8 +22,8 @@ import (
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
-	"freegate/internal/infrastructure/tor"
 	"freegate/internal/infrastructure/upstream"
+	"freegate/internal/infrastructure/vpngate"
 	"freegate/web"
 )
 
@@ -32,7 +32,7 @@ const (
 	serverReadTimeout       = 30 * time.Second
 	serverIdleTimeout       = 120 * time.Second
 	shutdownTimeout         = 10 * time.Second
-	torMonitorInterval      = 5 * time.Minute
+	vpnMonitorInterval      = 5 * time.Minute
 	defaultMaxRetries       = 5
 	defaultRetryDelay       = 3 * time.Second
 )
@@ -43,7 +43,7 @@ type Server struct {
 	cfg       *config.Config
 	httpSrv   *http.Server
 	logger    *slog.Logger
-	tc        *tor.Controller
+	tc        *vpngate.Controller
 	opencode  *upstream.OpenCodeUpstream
 	kilo      *upstream.KiloUpstream
 	rec       *recorder.Recorder
@@ -76,7 +76,7 @@ func (u *upstreamAdapter) Start(ctx context.Context) {
 }
 
 // New constructs a Server from configuration. It wires all
-// dependencies (Tor, upstreams, application services, recorder, UI,
+// dependencies (VPN, upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
 // Use Run for that.
 func New(cfg *config.Config) (*Server, error) {
@@ -85,7 +85,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}))
 	slog.SetDefault(logger)
 
-	tc := tor.NewController(cfg.TorHost, cfg.CtrlPort, cfg.CtrlPass, cfg.SOCKSAddr)
+	tc := vpngate.NewController(cfg.VPNGateHost, cfg.VPNGateCtrlPort, time.Duration(cfg.VPNGateRotateInterval)*time.Second)
 
 	socks := cfg.SOCKSAddr
 	if cfg.BypassProxy {
@@ -118,7 +118,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	rec := recorder.NewRecorder(m.Snapshot)
 	rec.SetModelsFunc(ms.AllModels)
-	rec.SetTorIPFunc(func() string {
+	rec.SetVPNIPFunc(func() string {
 		if cfg.BypassProxy {
 			return "direct"
 		}
@@ -177,7 +177,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}, nil
 }
 
-// Run starts background workers (upstream refreshers, Tor IP monitor,
+// Run starts background workers (upstream refreshers, VPN IP monitor,
 // recorder sampler) and ListenAndServe. It blocks until ctx is canceled,
 // then performs a graceful shutdown.
 func (s *Server) Run(ctx context.Context) error {
@@ -204,10 +204,10 @@ func (s *Server) Run(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.tc.StartMonitor(torMonitorInterval, stopIP)
+			s.tc.StartMonitor(vpnMonitorInterval, stopIP)
 		}()
 	} else {
-		slog.Info("tor: IP monitor skipped (bypass enabled)")
+		slog.Info("vpn: IP monitor skipped (bypass enabled)")
 	}
 
 	s.logger.Info("starting server", "addr", s.httpSrv.Addr)

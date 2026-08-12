@@ -5,7 +5,7 @@ Dev setup, scripts, testing, code style, and PR checklist for freegate.
 ## Prerequisites
 
 - **Go 1.26+** (matches `go.mod`)
-- **Tor** (only if running outside docker compose — `apt install tor` or use the `Dockerfile.tor` image)
+- **VPNGate/OpenVPN** (only if running outside docker compose — run the `vpn` sidecar image built from `Dockerfile.vpn`; requires a Linux host with `/dev/net/tun`)
 - **Docker + Docker Compose** (only if using `make up` / `make down`)
 - **`make`** (GNU make; standard on Linux/macOS)
 
@@ -24,7 +24,7 @@ See `README.md → Project Structure`. Source of truth for new code organization
 - `internal/application` — use cases (chat, models)
 - `internal/delivery` — HTTP-facing layer (handlers, middleware, UI)
 - `internal/domain` — types and interfaces that don't depend on frameworks
-- `internal/infrastructure` — out-of-process integrations (Tor, upstreams, metrics, recorder)
+- `internal/infrastructure` — out-of-process integrations (VPNGate, upstreams, metrics, recorder)
 - `internal/translate` — OpenAI ↔ Claude ↔ Gemini format translation
 - `web/` — embedded templates, CSS, JS, fonts
 
@@ -50,7 +50,7 @@ Run `make help` for the full inline list. Targets in the `Makefile`:
 | `make up` | `docker compose up -d` |
 | `make down` | `docker compose down` |
 | `make restart` | `docker compose restart` |
-| `make logs svc=proxy` | Tail a service's logs (e.g. `svc=tor`) |
+| `make logs svc=proxy` | Tail a service's logs (e.g. `svc=vpn`) |
 | `make ps` | List running compose services |
 | `make ps-all` | List all compose services including stopped |
 | `make compose-build` | Build compose service images |
@@ -65,11 +65,14 @@ Run `make help` for the full inline list. Targets in the `Makefile`:
 ### Without docker
 
 ```bash
-# 1. Start Tor (system service or a long-running container)
-tor &
+# 1. Start the VPNGate supervisor (or run the vpn sidecar image)
+docker run -d --rm --name fg-vpn \
+  --cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun:/dev/net/tun \
+  -e VPNGATE_COUNTRY=Japan \
+  freegate-vpn
 
-# 2. Run the proxy against the local Tor SOCKS5
-TOR_HOST=127.0.0.1 TOR_CTRL_PORT=9051 LOG_LEVEL=debug make run
+# 2. Run the proxy against the local supervisor SOCKS5
+VPNGATE_HOST=127.0.0.1 LOG_LEVEL=debug make run
 
 # 3. In another shell
 curl http://localhost:1234/ready
@@ -79,7 +82,7 @@ curl http://localhost:1234/v1/models
 ### With docker compose
 
 ```bash
-make up            # start proxy + tor
+make up            # start proxy + vpn
 make logs svc=proxy
 make ps
 make down
@@ -107,7 +110,7 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/translate/internal/prepost` | thinking normalization, max-tokens adjustment, history sanitization, id/role fixing |
 | `internal/infrastructure/proxy` | response normalization, `reasoning_content` collapse, SSE line handling |
 | `internal/infrastructure/upstream` | client, model cache, Kilo/OpenCode parsing |
-| `internal/infrastructure/tor` | controller (interval, force-rotation, control protocol) |
+| `internal/infrastructure/vpngate` | controller (interval, force-rotation, supervisor control API) |
 | `internal/infrastructure/recorder` | ring buffer + timeseries sampler |
 | `internal/infrastructure/metrics` | counter / snapshot |
 | `internal/infrastructure/ringbuffer` | generic typed ring buffer |
@@ -136,7 +139,7 @@ make test-race     # run with -race if you touched any concurrency code
 - **`gofmt -s`** (run via `make fmt`); CI-equivalent is `make check`
 - **`go vet ./...`** (run via `make vet`); must be clean
 - **No external linter yet** — `make check` is the gate
-- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`, `golang.org/x/net/proxy`)
+- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`, `golang.org/x/net/proxy`, `github.com/davegallant/vpngate/pkg/vpn`, `github.com/armon/go-socks5`)
 - **Naming** — exported types/functions from `internal/...` are still `PascalCase`; unexported helpers are `camelCase`; tests use `TestXxx` / `t.Run("case", ...)`
 - **Errors** — wrap with `fmt.Errorf("...: %w", err)`; never discard with `_` unless the API forces it (and then add a comment)
 - **Logging** — `slog` via the default logger set in `internal/server/server.go`; don't introduce `log` or `fmt.Println`
@@ -183,8 +186,8 @@ This proxy is anonymous-by-design but ships with sensible defaults:
 
 - `API_KEY` defaults to empty (no auth). Set it before exposing past `127.0.0.1`.
 - Rate limiter is per-IP, in-memory; it does not survive restart.
-- All upstream traffic goes through Tor; don't add direct-connect code paths.
-- 429 from an upstream triggers `SIGNAL NEWNYM` (bypasses the 10 s Tor minimum interval — see `internal/infrastructure/tor/controller.go::ForceNewIP`).
+- All upstream traffic goes through the VPN; don't add direct-connect code paths.
+- 429 from an upstream triggers a tunnel rotation (`POST /rotate` on the supervisor — bypasses the `VPNGATE_ROTATE_INTERVAL` minimum; see `internal/infrastructure/vpngate/controller.go::ForceNewIP`).
 - The proxy is a pass-through — it does not persist request bodies, but it does log request IDs, IPs, models, and status codes. Do not log full prompt/response content.
 
 If you find a security issue, please open a private issue rather than a public PR.

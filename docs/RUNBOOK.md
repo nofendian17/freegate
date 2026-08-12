@@ -7,9 +7,9 @@ Operational reference for deploying, monitoring, and recovering freegate.
 ### Local (development)
 
 ```bash
-make run                  # run server against system Tor
+make run                  # run server against a local VPNGate supervisor
 # or, for the full stack:
-make up                   # docker compose up -d (proxy + tor)
+make up                   # docker compose up -d (proxy + vpn)
 ```
 
 ### Production / remote
@@ -20,7 +20,8 @@ docker compose build
 
 # 2. Configure (.env at repo root or in the shell)
 cat > .env <<EOF
-TOR_PASS=$(openssl rand -hex 16)
+VPNGATE_COUNTRY=
+VPNGATE_MIN_SCORE=0
 API_KEY=$(openssl rand -hex 32)
 LOG_LEVEL=info
 RATE_LIMIT=60
@@ -38,10 +39,12 @@ The compose file is the deployment contract. It pins:
 
 | Service | Image | Port binding | Resources | Depends on |
 |---------|-------|--------------|-----------|------------|
-| `tor` | `Dockerfile.tor` (alpine:3.20 + tor) | none (internal only) | 256 MB / 0.5 CPU | — |
-| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | `tor` (healthy) |
+| `vpn` | `Dockerfile.vpn` (Go 1.26 build → alpine:3.20 + openvpn) | none (internal only) | 128 MB / 0.5 CPU | — |
+| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | `vpn` (healthy) |
 
 Both services are `restart: unless-stopped` and live on the `fg-net` compose network.
+
+The `vpn` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN): the compose file passes the device through and grants `NET_ADMIN` / `NET_RAW`. Docker Desktop (macOS/Windows) does not support TUN/TAP.
 
 ### Exposing beyond `127.0.0.1`
 
@@ -58,13 +61,13 @@ Three layered endpoints, all `GET`, all unauthenticated by default (auth is on `
 | Endpoint | Used by | Returns |
 |----------|---------|---------|
 | `GET /ready` | Docker `HEALTHCHECK` in `Dockerfile`, ops probes | `200 {"status":"ok"}` once models are loaded; `503 {"status":"not ready"}` otherwise |
-| `GET /api/health` | Dashboard health badge (refreshed every 3 s) | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
+| `GET /api/health` | Dashboard health badge (refreshed every 3 s) | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
 | `GET /api/timeseries` | Dashboard chart (refreshed every 10 s) | Array of `{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}` (1 h rolling, 10 s samples) |
 
 Docker healthchecks:
 
 - **proxy:** `wget --spider http://localhost:1234/ready` (30 s interval, 10 s start period, 3 retries)
-- **tor:** `curl -sfL --socks5 127.0.0.1:9050 https://check.torproject.org/` (30 s interval, 60 s start period, 3 retries)
+- **vpn:** `wget -q -O /dev/null http://127.0.0.1:8080/healthz` (10 s interval, 20 s start period, 5 retries) — 200 once the tunnel is up
 
 Quick manual probe:
 
@@ -102,10 +105,13 @@ make logs svc=proxy          # check for "kilo: fetch models" or "opencode: pars
 curl -s http://localhost:1234/v1/models | head
 ```
 
-If the upstreams are unreachable through Tor (rare — both have stable public endpoints), check Tor:
+If the upstreams are unreachable through the VPN (rare — both have stable public endpoints), check the tunnel:
 
 ```bash
-docker exec fg-tor curl -sfL --socks5 127.0.0.1:9050 https://check.torproject.org/ -o /dev/null -w '%{http_code}\n'
+docker exec fg-vpn wget -q -O /dev/null https://api.ipify.org && echo ipify-ok
+# or from the proxy side, through the SOCKS5 proxy:
+docker exec fg-proxy sh -c 'wget -q -O - https://api.ipify.org' 2>/dev/null || echo 'check vpn status'
+curl -s http://127.0.0.1:8080/status  # via docker exec fg-vpn if needed
 ```
 
 ### `429 Too Many Requests` on the proxy
@@ -124,14 +130,14 @@ Routing could not find a free upstream for the model. Verify:
 
 1. The model is in `GET /v1/models` (it must be free on either Kilo or OpenCode)
 2. `UPSTREAM_DEFAULT` is set to a reachable upstream
-3. The Tor container is healthy
+3. The `vpn` container is healthy
 
-### Dashboard shows `tor ip: —`
+### Dashboard shows `vpn ip: —`
 
-The Tor IP monitor (`internal/infrastructure/tor/controller.go::StartMonitor`) is unable to reach `https://api.ipify.org?format=json` through the SOCKS5 proxy. Common causes:
+The VPN IP monitor (`internal/infrastructure/vpngate/controller.go::StartMonitor`) is unable to reach `https://api.ipify.org?format=json` through the SOCKS5 proxy. Common causes:
 
-- Tor container not healthy (check `make logs svc=tor`)
-- SOCKS5 port mismatch (verify `TOR_PORT`)
+- `vpn` container not healthy (check `make logs svc=vpn`)
+- SOCKS5 port mismatch (verify `VPNGATE_SOCKS_PORT`)
 
 The monitor logs the current IP every 5 minutes. The dashboard polls `/api/health` every 3 s.
 
@@ -185,13 +191,13 @@ Most config requires a restart. The exception is the rate limiter, but it is not
 
 ```bash
 # 1. Edit .env
-# 2. Restart just the proxy (tor does not need to restart)
+# 2. Restart just the proxy (vpn does not need to restart)
 docker compose up -d proxy
 # or
 make restart svc=proxy
 ```
 
-The Tor container's `entrypoint-tor.sh` auto-generates `TOR_PASS` if unset, but reads it from env if provided. Changing `TOR_PASS` requires restarting both `tor` and `proxy`.
+The `vpn` sidecar reads its server-selection filters (`VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING`) and `VPNGATE_REFRESH_SECONDS` from env. Changing them requires restarting the `vpn` service (and rebuilding if the env var is baked into the image).
 
 ## Alerts / escalation
 
@@ -199,7 +205,7 @@ There is no built-in alerting. Recommended external probes:
 
 - **`/ready` (200)** — proxy is serving
 - **`/api/health.has_models` (true)** — catalog is loaded
-- **`/api/health.tor_ip` (non-empty, non-`unknown`)** — Tor is routing
+- **`/api/health.vpn_ip` (non-empty, non-`unknown`)** — VPN is routing
 
 Wire these into your existing monitor (Uptime Kuma, Healthchecks.io, Datadog HTTP check, etc.) with a 1–5 minute interval. Paging thresholds:
 
@@ -207,7 +213,7 @@ Wire these into your existing monitor (Uptime Kuma, Healthchecks.io, Datadog HTT
 |--------|---------|
 | `/ready` non-200 for > 2 min | Proxy down or models not loading |
 | `upstream_errors / total_requests > 0.5` over 5 min | Upstream is degraded or auth keys expired |
-| `tor_ip` empty / `unknown` for > 10 min | Tor container is down or unreachable |
+| `vpn_ip` empty / `unknown` for > 10 min | `vpn` container is down or the tunnel is broken |
 
 ## Disaster recovery
 
@@ -229,9 +235,9 @@ docker compose up -d
 ## Security checklist (production)
 
 - [ ] `API_KEY` is set to a high-entropy random value
-- [ ] `TOR_PASS` is set (entrypoint will auto-generate if not, but explicit is auditable)
+- [ ] `VPNGATE_MIN_SCORE` is set high enough to prefer reputable relays
 - [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS
-- [ ] Tor container is on an internal network (`fg-net`); not directly exposed
+- [ ] `vpn` container is on an internal network (`fg-net`); SOCKS port is not exposed to the host
 - [ ] `LOG_LEVEL` is `info` (not `debug`) in production
 - [ ] Docker socket is not mounted into either container
 - [ ] `.env` is in `.gitignore` and stored only in a secret manager

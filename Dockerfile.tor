@@ -1,9 +1,0 @@
-FROM alpine:3.20
-RUN apk add --no-cache tor curl bash
-COPY torrc /etc/tor/torrc
-COPY entrypoint-tor.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-EXPOSE 9050 9051
-HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
-    CMD bash -c 'echo >/dev/tcp/127.0.0.1/9050' || exit 1
-ENTRYPOINT ["/entrypoint.sh"]

@@ -1,6 +1,6 @@
 # Environment Variables
 
-freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `TOR_HOST:PORT`), or simply unset.
+freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `VPNGATE_HOST:VPNGATE_SOCKS_PORT`), or simply unset.
 
 The authoritative list lives in `internal/config/config.go::Load`; this file is generated from it and `.env.example`. If you change one, change the other.
 
@@ -15,16 +15,20 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `API_KEY` | No | (empty) | If non-empty, every `/v1/*` and `/ready` request must send a matching `Authorization: Bearer <key>` or `X-API-Key: <key>` header. Empty = no auth. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP. Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
-## Tor
+## VPNGate (proxy)
+
+freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API that freegate uses to rotate the exit IP (e.g. on 429 retries).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TOR_HOST` | No | `127.0.0.1` | SOCKS5 / control host. In docker-compose this is set to the `tor` service name. |
-| `TOR_PORT` | No | `9050` | SOCKS5 port used for all upstream traffic |
-| `TOR_CTRL_PORT` | No | `9051` | Tor control port (used for `SIGNAL NEWNYM` on 429 retries) |
-| `TOR_PASS` | No | (empty) | Tor control password. The `entrypoint-tor.sh` script generates one randomly if unset. |
+| `VPNGATE_HOST` | No | `127.0.0.1` | SOCKS5 / control host. In docker-compose this is set to the `vpn` service name. |
+| `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port used for all upstream traffic |
+| `VPNGATE_CTRL_PORT` | No | `8080` | Supervisor control API port (`POST /rotate`, `GET /ip`) |
+| `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations. `ForceNewIP` (on 429) bypasses it. |
 
-The internal `SOCKSAddr` field is derived as `TOR_HOST:TOR_PORT`.
+The internal `SOCKSAddr` field is derived as `VPNGATE_HOST:VPNGATE_SOCKS_PORT`.
+
+The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING` (server-selection filters) and `VPNGATE_REFRESH_SECONDS` (server-list refresh interval). These are wired in `docker-compose.yml`.
 
 ## Upstreams
 
@@ -55,8 +59,8 @@ The internal `SOCKSAddr` field is derived as `TOR_HOST:TOR_PORT`.
 
 `config.Validate()` is called at startup. It rejects:
 - Empty `UPSTREAM_URL_OPENCODE` or `UPSTREAM_URL_KILO`
-- `PORT`, `TOR_PORT`, or `TOR_CTRL_PORT` outside `1–65535`
-- Non-positive `RATE_LIMIT`
+- `PORT`, `VPNGATE_SOCKS_PORT`, or `VPNGATE_CTRL_PORT` outside `1–65535`
+- Non-positive `VPNGATE_ROTATE_INTERVAL` or `RATE_LIMIT`
 
 A failure prints a multi-line error and exits 1.
 
@@ -64,7 +68,7 @@ A failure prints a multi-line error and exits 1.
 
 - `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`
 - `.env.example` — annotated example
-- `docker-compose.yml` — wires these into the `proxy` and `tor` services
-- `entrypoint-tor.sh` — auto-generates a `TOR_PASS` if none is provided
+- `docker-compose.yml` — wires these into the `proxy` and `vpn` services
+- `cmd/vpngate-supervisor/main.go` — the `vpn` sidecar (OpenVPN tunnel + SOCKS5 + control API)
 
 <!-- /AUTO-GENERATED -->

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/net/proxy"
 )
@@ -30,7 +31,15 @@ func NewHTTPClient(baseURL, apiKey, socksAddr string, headers map[string]string)
 		if err != nil {
 			slog.Warn("SOCKS5 dialer failed, using direct connection", "error", err)
 		} else {
-			tr := &http.Transport{ForceAttemptHTTP2: false}
+			tr := &http.Transport{
+				ForceAttemptHTTP2: false,
+				// Bound only the connection phase: a dead VPN tunnel or a
+				// slow relay should fail fast instead of hanging client
+				// requests. Streaming responses are unaffected because the
+				// body streams after the header arrives.
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			}
 			if dc, ok := dialer.(proxy.ContextDialer); ok {
 				tr.DialContext = dc.DialContext
 			} else {

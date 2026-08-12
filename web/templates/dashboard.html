@@ -27,7 +27,7 @@
         <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
         <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
         <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
-        <span><span class="label">tor ip</span><span id="tor-ip">{{if .TorIP}}{{.TorIP}}{{else}}—{{end}}</span></span>
+        <span><span class="label">vpn ip</span><span id="vpn-ip">{{if .VPNIP}}{{.VPNIP}}{{else}}—{{end}}</span></span>
       </div>
     </nav>
 
@@ -278,8 +278,8 @@
         if (u && h.uptime) u.textContent = h.uptime;
         const mc = document.getElementById('model-count');
         if (mc) mc.textContent = h.model_count;
-        const tip = document.getElementById('tor-ip');
-        if (tip) tip.textContent = h.tor_ip || '—';
+        const tip = document.getElementById('vpn-ip');
+        if (tip) tip.textContent = h.vpn_ip || '—';
       } catch (e) { /* ignore */ }
     }
     setInterval(refreshHealth, 3000);

@@ -1,7 +1,8 @@
 package domain
 
 // IPRotator is the port for changing the apparent exit IP used to
-// reach upstream providers. Typically backed by a Tor controller.
+// reach upstream providers. Typically backed by a VPN controller
+// (e.g. a VPNGate/OpenVPN supervisor container).
 type IPRotator interface {
 	// NewIP requests a new exit IP, subject to a minimum interval
 	// (no-op if called too soon). Returns nil even when skipped.

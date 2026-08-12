@@ -157,12 +157,13 @@ func TestBypassProxy_LoadedTrue(t *testing.T) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Port:      1234,
-		TorHost:   "127.0.0.1",
-		TorPort:   9050,
-		CtrlPort:  9051,
-		LogLevel:  "info",
-		RateLimit: 60,
+		Port:                  1234,
+		VPNGateHost:           "127.0.0.1",
+		VPNGateSocksPort:      9050,
+		VPNGateCtrlPort:       8080,
+		VPNGateRotateInterval: 30,
+		LogLevel:              "info",
+		RateLimit:             60,
 
 		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
 		UpstreamKeyOpenCode:           "public",
