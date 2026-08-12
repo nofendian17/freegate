@@ -30,6 +30,8 @@ The internal `SOCKSAddr` field is derived as `VPNGATE_HOST:VPNGATE_SOCKS_PORT`.
 
 The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING` (server-selection filters) and `VPNGATE_REFRESH_SECONDS` (server-list refresh interval). These are wired in `docker-compose.yml`.
 
+`VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan).
+
 ## Upstreams
 
 ### OpenCode (default)

@@ -7,7 +7,8 @@
 //
 //	VPNGATE_SOCKS_PORT      SOCKS5 listen port (default 9050)
 //	VPNGATE_CTRL_PORT       control API listen port (default 8080)
-//	VPNGATE_COUNTRY         optional country filter (name or ISO code)
+//	VPNGATE_COUNTRY         optional country filter (name or ISO code;
+//	                        prefix with ! to exclude, e.g. !Japan)
 //	VPNGATE_MIN_SCORE       optional minimum server score
 //	VPNGATE_MAX_PING        optional maximum ping (ms)
 //	VPNGATE_REFRESH_SECONDS how often to refresh the server list (default 300)
@@ -736,11 +737,22 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{"error": err.Error()})
 }
 
+// matchCountry reports whether a server matches the VPNGATE_COUNTRY
+// filter. A leading "!" turns the filter into an exclusion, e.g.
+// "!Japan" matches every country except Japan.
 func matchCountry(filter string, s vpn.Server) bool {
 	if filter == "" {
 		return true
 	}
 	f := strings.ToLower(strings.TrimSpace(filter))
+	if strings.HasPrefix(f, "!") {
+		excl := strings.TrimSpace(f[1:])
+		if excl == "" {
+			return true
+		}
+		return !strings.Contains(strings.ToLower(s.CountryLong), excl) &&
+			!strings.EqualFold(s.CountryShort, excl)
+	}
 	return strings.Contains(strings.ToLower(s.CountryLong), f) ||
 		strings.EqualFold(s.CountryShort, f)
 }

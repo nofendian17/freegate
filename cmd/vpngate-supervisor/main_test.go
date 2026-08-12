@@ -49,6 +49,27 @@ func TestPickWeightedPingBreaksScoreTie(t *testing.T) {
 	}
 }
 
+func TestMatchCountryExclusion(t *testing.T) {
+	jp := vpn.Server{CountryLong: "Japan", CountryShort: "JP"}
+	kr := vpn.Server{CountryLong: "Korea Republic of", CountryShort: "KR"}
+
+	if matchCountry("!Japan", jp) {
+		t.Error("!Japan should exclude Japan")
+	}
+	if !matchCountry("!Japan", kr) {
+		t.Error("!Japan should allow Korea")
+	}
+	if !matchCountry("", jp) {
+		t.Error("empty filter should allow everything")
+	}
+	if !matchCountry("!", jp) {
+		t.Error("bare ! should behave like empty filter")
+	}
+	if !matchCountry("!Japan", vpn.Server{CountryLong: "United States", CountryShort: "US"}) {
+		t.Error("!Japan should allow United States")
+	}
+}
+
 func TestPickWeightedSingleCandidate(t *testing.T) {
 	got := pickWeighted([]vpn.Server{{HostName: "only", Score: 1, Ping: ""}})
 	if got.HostName != "only" {
