@@ -133,11 +133,17 @@ type supervisor struct {
 
 // reconnectLoop keeps trying until a tunnel is up, and reconnects
 // whenever the openvpn process exits unexpectedly. While disconnected it
-// retries aggressively (2s) to minimize dead-tunnel windows.
+// retries aggressively (2s) to minimize dead-tunnel windows. When another
+// rotation is already running (e.g. a request-triggered /rotate), it
+// waits silently instead of logging or racing it.
 func (s *supervisor) reconnectLoop() {
 	for {
 		if s.isConnected() {
 			time.Sleep(5 * time.Second)
+			continue
+		}
+		if s.isRotating() {
+			time.Sleep(2 * time.Second)
 			continue
 		}
 		slog.Info("vpngate: connecting to a vpn server")
@@ -418,6 +424,12 @@ func (s *supervisor) isConnected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.connected && s.cmd != nil
+}
+
+func (s *supervisor) isRotating() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rotating
 }
 
 func (s *supervisor) serverName() string {
