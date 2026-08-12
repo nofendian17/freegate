@@ -559,49 +559,26 @@ func waitTunnelUp(cmd *exec.Cmd) (string, error) {
 
 // ipRefresher periodically re-checks the tunnel's public IP so /ip and the
 // dashboard stay accurate even when the check right after connecting fails
-// (routing/DNS not settled yet). It doubles as a liveness probe: after
-// several consecutive egress failures it kills the tunnel so the reconnect
-// loop replaces what is likely a dead-but-alive relay.
+// (routing/DNS not settled yet). It deliberately does NOT kill the tunnel:
+// a slow egress check used to recycle healthy relays every ~40s. Dead
+// tunnels are detected by openvpn itself (ping-restart / connect-retry-max)
+// and replaced by the reconnect loop when the process exits.
 func (s *supervisor) ipRefresher() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	failures := 0
 	for range ticker.C {
 		s.mu.Lock()
 		connected := s.connected && s.cmd != nil
 		s.mu.Unlock()
 		if !connected {
-			failures = 0
 			continue
 		}
 		if ip, err := fetchPublicIP(); err == nil && ip != "" {
-			failures = 0
 			s.mu.Lock()
 			if s.connected && s.cmd != nil {
 				s.ip = ip
 			}
 			s.mu.Unlock()
-		} else {
-			failures++
-			// ~30s of dead egress → recycle the tunnel. Kill happens
-			// outside the lock so the control API stays responsive
-			// during the up-to-5s process teardown.
-			if failures >= 2 {
-				slog.Warn("vpngate: tunnel egress failing, forcing reconnect")
-				s.mu.Lock()
-				cmd, cfgPath := s.cmd, s.cfgPath
-				s.cmd = nil
-				s.cfgPath = ""
-				s.connected = false
-				s.mu.Unlock()
-				if cmd != nil {
-					killProcess(cmd)
-				}
-				if cfgPath != "" {
-					os.Remove(cfgPath)
-				}
-				failures = 0
-			}
 		}
 	}
 }
@@ -610,7 +587,7 @@ func (s *supervisor) ipRefresher() {
 // second endpoint if the first fails. Free VPN relays are slow, so the
 // client timeout gives the TLS round-trip room to breathe.
 func fetchPublicIP() (string, error) {
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 	var lastErr error
 
 	resp, err := client.Get("https://api.ipify.org?format=json")
