@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -308,5 +309,59 @@ func TestNormalizeJSON_RepairsToolArgs(t *testing.T) {
 
 	if !strings.Contains(output, `"arguments":"{\"cmd\":\"echo hello\"}"`) {
 		t.Errorf("expected repaired arguments in JSON output, got %s", output)
+	}
+}
+
+func TestExtractErrorMessage_OpenAI(t *testing.T) {
+	body := []byte(`{"error":{"message":"rate limit exceeded for model","type":"rate_limit"}}`)
+	if got := extractErrorMessage(body); got != "rate limit exceeded for model" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_TopLevelMessage(t *testing.T) {
+	body := []byte(`{"message":"provider overloaded"}`)
+	if got := extractErrorMessage(body); got != "provider overloaded" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_PlainTextSmall(t *testing.T) {
+	body := []byte("Bad Gateway for upstream")
+	if got := extractErrorMessage(body); got != "Bad Gateway for upstream" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_EmptyAndLarge(t *testing.T) {
+	if got := extractErrorMessage(nil); got != "" {
+		t.Errorf("nil body got %q, want empty", got)
+	}
+	big := bytes.Repeat([]byte("x"), 600)
+	if got := extractErrorMessage(big); got != "" {
+		t.Errorf("large non-JSON body got %q, want empty", got)
+	}
+}
+
+func TestPassThroughError_CapturesAndForwards(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"slow down"}}`)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+	rec := httptest.NewRecorder()
+	msg := PassThroughError(rec, resp)
+
+	if msg != "slow down" {
+		t.Errorf("captured msg = %q, want %q", msg, "slow down")
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "slow down") {
+		t.Errorf("body not forwarded verbatim: %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type = %q, want application/json", got)
 	}
 }

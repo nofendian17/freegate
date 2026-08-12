@@ -140,6 +140,15 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalStatus = resp.StatusCode
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Upstream HTTP errors (429/5xx) are passed through verbatim; capture
+	// the upstream's own error message so the record log shows why it
+	// failed instead of only the bare status code.
+	if resp.StatusCode >= 400 {
+		if msg := proxyinfra.PassThroughError(w, resp); msg != "" {
+			finalErr = fmt.Errorf("upstream: %s", msg)
+		}
+		return nil
+	}
 	usage, err := proxyinfra.NormalizeResponse(w, resp)
 	if err != nil {
 		slog.Warn("normalize response failed", "request_id", requestID, "upstream", u.Name(), "error", err)

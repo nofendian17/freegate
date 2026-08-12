@@ -562,3 +562,59 @@ func NormalizeResponse(w http.ResponseWriter, resp *http.Response) (TokenUsage, 
 	w.WriteHeader(resp.StatusCode)
 	return copyNormalized(w, resp)
 }
+
+// PassThroughError copies an upstream error response (429/5xx) to the
+// client verbatim and returns a short readable message captured from the
+// body, so the request log can record what the upstream actually said
+// instead of only the bare status code. Returns "" when no usable message
+// is present.
+func PassThroughError(w http.ResponseWriter, resp *http.Response) string {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+	httputil.CopyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+	return extractErrorMessage(body)
+}
+
+// maxErrorBodySize caps how much of an upstream error body is buffered:
+// real error payloads are a few KB, so this prevents a misbehaving
+// upstream from ballooning memory while still passing the body through.
+const maxErrorBodySize = 1 << 20
+
+// extractErrorMessage pulls a short message out of a typical upstream
+// error body: OpenAI-style {"error":{"message":"…"}}, a top-level
+// "message", or a small plain-text body. Returns "" if nothing usable.
+func extractErrorMessage(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return ""
+	}
+	var v struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &v); err == nil {
+		if v.Error.Message != "" {
+			return truncateMessage(v.Error.Message)
+		}
+		if v.Message != "" {
+			return truncateMessage(v.Message)
+		}
+	}
+	if len(body) <= 512 {
+		return truncateMessage(string(body))
+	}
+	return ""
+}
+
+// truncateMessage caps a logged error message so one noisy upstream error
+// cannot flood the dashboard table.
+func truncateMessage(s string) string {
+	const max = 300
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
