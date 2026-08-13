@@ -19,7 +19,7 @@ type OpenCodeUpstream struct {
 	allowlist map[string]bool
 }
 
-func NewOpenCodeUpstream(baseURL, apiKey string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
+func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
 	// Mimic the headers the official OpenCode client sends for opencode
 	// provider models so the upstream treats requests as first-party.
 	headers := map[string]string{
@@ -37,7 +37,7 @@ func NewOpenCodeUpstream(baseURL, apiKey string, d *Dialer, freeAllowlist []stri
 		}
 	}
 	return &OpenCodeUpstream{
-		client:    NewHTTPClient(baseURL, apiKey, d, headers),
+		client:    NewHTTPClient(baseURL, apiKeys, d, headers),
 		cache:     NewModelCache(),
 		allowlist: al,
 	}

@@ -37,7 +37,7 @@ func TestDialerDirectRoutesWithoutSocks(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	hc := NewHTTPClient(srv.URL, "key", d, nil)
+	hc := NewHTTPClient(srv.URL, []string{"key"}, d, nil)
 	resp, err := hc.Get(context.Background(), "/")
 	if err != nil {
 		t.Fatalf("direct request failed: %v", err)
@@ -61,7 +61,7 @@ func TestDialerToggle(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	hc := NewHTTPClient(srv.URL, "key", d, nil)
+	hc := NewHTTPClient(srv.URL, []string{"key"}, d, nil)
 	resp, err := hc.Get(context.Background(), "/")
 	if err != nil {
 		t.Fatalf("request after toggle failed: %v", err)

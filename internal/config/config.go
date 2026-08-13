@@ -23,7 +23,7 @@ type Config struct {
 	VPNGateRotateInterval int    // minimum seconds between scheduled IP rotations
 
 	UpstreamURLOpenCode           string
-	UpstreamKeyOpenCode           string
+	UpstreamKeyOpenCode           []string
 	UpstreamOpenCodeFreeAllowlist []string
 
 	UpstreamURLKilo string
@@ -50,7 +50,7 @@ func Load() *Config {
 		VPNGateRotateInterval: envInt("VPNGATE_ROTATE_INTERVAL", 30),
 
 		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
-		UpstreamKeyOpenCode:           envStr("UPSTREAM_KEY_OPENCODE", "public"),
+		UpstreamKeyOpenCode:           envSlice("UPSTREAM_KEY_OPENCODE", "public"),
 		UpstreamOpenCodeFreeAllowlist: envSlice("UPSTREAM_OPENCODE_FREE_ALLOWLIST", "big-pickle"),
 
 		UpstreamURLKilo: envStr("UPSTREAM_URL_KILO", "https://api.kilo.ai/api/openrouter"),
