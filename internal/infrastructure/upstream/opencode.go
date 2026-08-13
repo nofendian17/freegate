@@ -18,7 +18,7 @@ type OpenCodeUpstream struct {
 	allowlist map[string]bool
 }
 
-func NewOpenCodeUpstream(baseURL, apiKey, socksAddr string, freeAllowlist []string) *OpenCodeUpstream {
+func NewOpenCodeUpstream(baseURL string, apiKeys []string, socksAddr string, freeAllowlist []string) *OpenCodeUpstream {
 	headers := map[string]string{"x-opencode-client": "desktop"}
 	al := make(map[string]bool, len(freeAllowlist))
 	for _, id := range freeAllowlist {
@@ -28,7 +28,7 @@ func NewOpenCodeUpstream(baseURL, apiKey, socksAddr string, freeAllowlist []stri
 		}
 	}
 	return &OpenCodeUpstream{
-		client:    NewHTTPClient(baseURL, apiKey, socksAddr, headers),
+		client:    NewHTTPClient(baseURL, apiKeys, socksAddr, headers),
 		cache:     NewModelCache(),
 		allowlist: al,
 	}

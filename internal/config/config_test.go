@@ -165,7 +165,7 @@ func defaultConfig() *Config {
 		RateLimit: 60,
 
 		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
-		UpstreamKeyOpenCode:           "public",
+		UpstreamKeyOpenCode:           []string{"public"},
 		UpstreamOpenCodeFreeAllowlist: []string{"big-pickle"},
 
 		UpstreamURLKilo: "https://api.kilo.ai/api/openrouter",

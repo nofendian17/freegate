@@ -18,7 +18,7 @@ type KiloUpstream struct {
 
 func NewKiloUpstream(baseURL, apiKey, socksAddr string) *KiloUpstream {
 	return &KiloUpstream{
-		client: NewHTTPClient(baseURL, apiKey, socksAddr, nil),
+		client: NewHTTPClient(baseURL, []string{apiKey}, socksAddr, nil),
 		cache:  NewModelCache(),
 	}
 }
