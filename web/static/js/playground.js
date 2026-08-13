@@ -16,6 +16,7 @@
   var inFlight = false;
   var activeAssistantBubble = null; // reference to the live assistant <pre> being filled
   var lastFocused = null; // element that opened the modal, for focus restoration
+  var lastOpenedAt = 0; // timestamp of last open(), to ignore the ghost/repeat tap that closes an overlay right after it appears on touch devices
 
   // Pre-populate window.fgPlayground with no-op stubs so that any htmx
   // hx-on expression that fires before the rest of the IIFE completes
@@ -216,6 +217,7 @@
     load();
     lastFocused = document.activeElement;
     $('pg-overlay').style.display = 'flex';
+    lastOpenedAt = Date.now();
     document.body.classList.add('modal-open');
     $('pg-system').value = state.system;
     $('pg-stream').checked = state.stream;
@@ -624,7 +626,11 @@
     if (openBtn) openBtn.addEventListener('click', open);
 
     $('pg-overlay').addEventListener('click', function (e) {
-      if (e.target === $('pg-overlay')) close();
+      // Ignore clicks that land on the overlay right after it opens: on touch
+      // devices a second tap/click can be synthesized at the trigger button's
+      // coordinates, which are now covered by the overlay, and would close the
+      // modal the instant it opened (mobile-only bug).
+      if (e.target === $('pg-overlay') && Date.now() - lastOpenedAt > 350) close();
     });
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && $('pg-overlay').style.display === 'flex') close();
