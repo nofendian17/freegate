@@ -103,26 +103,33 @@ func NewController(host string, ctrlPort int, minInterval time.Duration) *Contro
 // Returns nil even when skipped.
 func (c *Controller) NewIP() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	elapsed := time.Since(c.lastRot)
 	if elapsed < c.minInterval {
+		c.mu.Unlock()
 		slog.Debug("vpngate: IP rotation skipped, too soon", "elapsed", elapsed.Round(time.Millisecond), "min", c.minInterval)
 		return nil
 	}
-	return c.rotateLocked()
+	c.mu.Unlock()
+	return c.rotate()
 }
 
 // ForceNewIP rotates immediately, ignoring the minimum interval.
 // Used when the upstream returns 429.
 func (c *Controller) ForceNewIP() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	slog.Info("vpngate: forcing IP rotation (bypassing interval)")
-	return c.rotateLocked()
+	return c.rotate()
 }
 
-func (c *Controller) rotateLocked() error {
+// rotate performs the HTTP call without holding a lock. It serializes
+// rotations via a tryLock so concurrent calls block instead of hammering
+// the supervisor.
+func (c *Controller) rotate() error {
+	if !c.mu.TryLock() {
+		slog.Debug("vpngate: rotation already in progress, skipping")
+		return nil
+	}
+	defer c.mu.Unlock()
+
 	resp, err := c.client.Post(c.ctrlURL+"/rotate", "application/json", nil)
 	if err != nil {
 		return fmt.Errorf("vpngate control rotate: %w", err)

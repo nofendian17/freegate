@@ -36,7 +36,7 @@ func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration)
 		k.cache.Set(models)
 		return nil
 	}, refreshInterval)
-	refresher.Start(ctx)
+	refresher.Run(ctx)
 }
 
 func (k *KiloUpstream) Match(modelID string) bool {

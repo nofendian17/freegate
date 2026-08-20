@@ -56,7 +56,7 @@ func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Durat
 		o.cache.Set(models)
 		return nil
 	}, refreshInterval)
-	refresher.Start(ctx)
+	refresher.Run(ctx)
 }
 
 func (o *OpenCodeUpstream) Match(modelID string) bool {

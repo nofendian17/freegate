@@ -139,6 +139,7 @@ type RateLimiter struct {
 	visitors map[string]*visitor
 	limit    int
 	stop     chan struct{}
+	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
@@ -177,9 +178,9 @@ func NewRateLimiter(requestsPerMinute int) *RateLimiter {
 	return rl
 }
 
-// Stop terminates the background cleanup goroutine.
+// Stop terminates the background cleanup goroutine. Safe to call multiple times.
 func (rl *RateLimiter) Stop() {
-	close(rl.stop)
+	rl.stopOnce.Do(func() { close(rl.stop) })
 }
 
 func (rl *RateLimiter) allow(ip string) bool {

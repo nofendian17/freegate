@@ -101,12 +101,9 @@ func (r *Recorder) Metrics() map[string]any {
 	return r.metricsFn()
 }
 
-// Start launches the background timeseries sampler. Cancel ctx to stop it.
+// Start blocks and runs the background timeseries sampler until ctx is
+// cancelled. Call it from a goroutine that is tracked by a WaitGroup.
 func (r *Recorder) Start(ctx context.Context) {
-	go r.sampleLoop(ctx)
-}
-
-func (r *Recorder) sampleLoop(ctx context.Context) {
 	ticker := time.NewTicker(TimeseriesInterval)
 	defer ticker.Stop()
 	for {

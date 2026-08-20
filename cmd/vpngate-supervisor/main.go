@@ -94,7 +94,12 @@ func main() {
 	}
 	slog.Info("vpngate: supervisor starting", "debug", os.Getenv("VPNGATE_LOG_LEVEL"))
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	s := &supervisor{
+		ctx:        ctx,
+		cancel:     cancel,
 		socksAddr:  "0.0.0.0:" + envStr("VPNGATE_SOCKS_PORT", "9050"),
 		ctrlAddr:   "0.0.0.0:" + envStr("VPNGATE_CTRL_PORT", "8080"),
 		country:    envStr("VPNGATE_COUNTRY", ""),
@@ -103,8 +108,16 @@ func main() {
 		refreshInt: time.Duration(envInt("VPNGATE_REFRESH_SECONDS", 300)) * time.Second,
 	}
 
-	go s.reconnectLoop()
-	go s.ipRefresher()
+	// Background goroutines — tracked by wg so shutdown waits for them.
+	s.wg.Add(2)
+	go func() {
+		defer s.wg.Done()
+		s.reconnectLoop()
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.ipRefresher()
+	}()
 
 	go func() {
 		if err := s.serveSOCKS(); err != nil {
@@ -112,24 +125,43 @@ func main() {
 		}
 	}()
 
-	srv := &http.Server{Addr: s.ctrlAddr, Handler: s.routes()}
+	httpSrv := &http.Server{Addr: s.ctrlAddr, Handler: s.routes()}
 	go func() {
 		slog.Info("vpngate: control API listening", "addr", s.ctrlAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("vpngate: control API exited", "error", err)
 		}
 	}()
 
-	// Block until told to stop, then shut down the tunnel.
+	// Block until told to stop, then shut down gracefully.
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 	<-ch
 	slog.Info("vpngate: shutting down")
+
+	// 1. Signal goroutines to stop (they check s.ctx.Done()).
+	cancel()
+
+	// 2. Stop accepting new HTTP requests and drain in-flight ones.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("vpngate: HTTP server forced to shutdown", "error", err)
+	}
+
+	// 3. Wait for background goroutines to exit.
+	s.wg.Wait()
+
+	// 4. Kill the openvpn process and clean up.
 	s.shutdown()
 }
 
 // supervisor owns the tunnel lifecycle and the current connection state.
 type supervisor struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
 	socksAddr string
 	ctrlAddr  string
 
@@ -157,6 +189,12 @@ type supervisor struct {
 // waits silently instead of logging or racing it.
 func (s *supervisor) reconnectLoop() {
 	for {
+		select {
+		case <-s.ctx.Done():
+			slog.Info("vpngate: reconnect loop stopped")
+			return
+		default:
+		}
 		if s.isConnected() {
 			time.Sleep(5 * time.Second)
 			continue
@@ -188,6 +226,13 @@ func (s *supervisor) reconnectLoop() {
 // short state reads/writes, never while a tunnel is being brought up, so
 // the control API stays responsive during a slow rotation.
 func (s *supervisor) rotate() error {
+	// Don't start a new rotation if we're shutting down.
+	select {
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	default:
+	}
+
 	end, err := s.beginRotation()
 	if err != nil {
 		return err
@@ -683,7 +728,13 @@ func waitTunnelUp(cmd *exec.Cmd) (string, error) {
 func (s *supervisor) ipRefresher() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-s.ctx.Done():
+			slog.Info("vpngate: IP refresher stopped")
+			return
+		case <-ticker.C:
+		}
 		s.mu.Lock()
 		connected := s.connected && s.cmd != nil
 		s.mu.Unlock()

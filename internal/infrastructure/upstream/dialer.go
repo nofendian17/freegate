@@ -68,5 +68,22 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	if dc, ok := socks.(proxy.ContextDialer); ok {
 		return dc.DialContext(ctx, network, addr)
 	}
-	return socks.Dial(network, addr)
+	// The SOCKS5 dialer does not implement ContextDialer; run the
+	// context-unaware Dial in a goroutine so we can still honour
+	// context cancellation from the caller.
+	type connErr struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan connErr, 1)
+	go func() {
+		conn, err := socks.Dial(network, addr)
+		ch <- connErr{conn, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case ce := <-ch:
+		return ce.conn, ce.err
+	}
 }
