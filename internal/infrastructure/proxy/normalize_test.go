@@ -135,6 +135,52 @@ func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSON_EmptyContentAssignedNull(t *testing.T) {
+	// The exact muse/kilo failure: `{role:"assistant"}` with no content
+	// and finish_reason null. Strict OpenAI clients reject the missing field.
+	input := `{"choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"content":null`) {
+		t.Errorf("expected content defaulted to null, got: %s", output)
+	}
+	if !strings.Contains(output, `"role":"assistant"`) {
+		t.Errorf("expected role preserved, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_EmptyContentWithToolCalls_Untouched(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	// tool_calls choices may omit content per the OpenAI spec; the fix must
+	// not inject a null content there.
+	if strings.Contains(output, `"content":null`) {
+		t.Errorf("expected content untouched for tool_calls message, got: %s", output)
+	}
+	if !strings.Contains(output, `"call_1"`) {
+		t.Errorf("expected tool_calls preserved, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_ExistingContentUnchanged(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"content":"hi"`) {
+		t.Errorf("expected content preserved, got: %s", output)
+	}
+	if strings.Contains(output, `"content":null`) {
+		t.Errorf("expected no content:null with real content, got: %s", output)
+	}
+}
+
 func TestNormalizeJSON_InvalidJSON(t *testing.T) {
 	input := "not json at all"
 	var buf bytes.Buffer
@@ -257,7 +303,7 @@ func TestNormalizeStream_RepairsToolArgs(t *testing.T) {
 	}, "") +
 		mk(map[string]any{
 			"tool_calls": []any{map[string]any{
-				"index": 0,
+				"index":    0,
 				"function": map[string]any{"arguments": `hello`},
 			}},
 		}, "") +

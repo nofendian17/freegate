@@ -529,6 +529,17 @@ func syncMessageReasoning(resp map[string]interface{}) {
 			continue
 		}
 		syncReasoning(msg)
+		// OpenAI chat.completion: every assistant message carries `content`
+		// (string or null). Some free-tier upstreams omit the field entirely
+		// on empty completions (e.g. `{"role":"assistant"}` with no content
+		// and no tool_calls), which strict OpenAI clients reject. Default to
+		// null when absent without tool_calls — mirroring opencode's
+		// lowerAssistantMessage (`content.length === 0 ? null : ...`).
+		if _, hasContent := msg["content"]; !hasContent {
+			if _, hasToolCalls := msg["tool_calls"]; !hasToolCalls {
+				msg["content"] = nil
+			}
+		}
 	}
 }
 
