@@ -23,10 +23,28 @@ func ToOpenAI(body []byte) ([]byte, error) {
 	copyField(claude, openai, "temperature")
 	copyField(claude, openai, "top_p")
 	copyField(claude, openai, "stream")
-	copyField(claude, openai, "metadata", "user_id", "user")
 	copyField(claude, openai, "stop_sequences", "stop")
+	// top_k isn't part of the OpenAI chat-completions schema, but several
+	// OpenAI-compatible upstreams (OpenRouter/vLLM-based providers) accept
+	// it as an extra field; pass it through rather than silently dropping
+	// a value the caller explicitly set.
+	copyField(claude, openai, "top_k")
+	// thinking (extended thinking / budget_tokens) isn't OpenAI-standard
+	// either, but it's kept as a pass-through extension field through the
+	// OpenAI-intermediate representation: prepost.NormalizeThinkingConfig
+	// and prepost.AdjustMaxTokens both read body.thinking downstream, and
+	// upstreams that support extended thinking accept this Claude-native
+	// shape directly.
+	copyField(claude, openai, "thinking")
 
-	// Convert top_k → drop (not supported by OpenAI)
+	// metadata.user_id → OpenAI's top-level "user" field (end-user
+	// identifier). Claude nests it under metadata; OpenAI expects a plain
+	// string at the top level.
+	if meta, ok := claude["metadata"].(map[string]any); ok {
+		if userID, ok := meta["user_id"].(string); ok && userID != "" {
+			openai["user"] = userID
+		}
+	}
 
 	// Convert system prompt to messages[0]
 	var messages []any
@@ -313,6 +331,36 @@ func convertToolResult(block map[string]any) any {
 	}
 }
 
+// imageBlockToURL converts a Claude image content block's `source` into a
+// URL usable by OpenAI's `image_url` content part. Claude supports two
+// source shapes: {"type":"base64","media_type":...,"data":...} and the
+// newer {"type":"url","url":...}. Returns "" if the block can't be
+// converted (e.g. an unrecognized source type).
+func imageBlockToURL(block map[string]any) string {
+	src, ok := block["source"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch srcType, _ := src["type"].(string); srcType {
+	case "url":
+		url, _ := src["url"].(string)
+		return url
+	default:
+		// "base64" (or unspecified/legacy) — build a data URI. Only do so
+		// when actual image bytes are present; otherwise there's nothing
+		// to embed.
+		data, _ := src["data"].(string)
+		if data == "" {
+			return ""
+		}
+		mediaType, _ := src["media_type"].(string)
+		if mediaType == "" {
+			mediaType = "image/png"
+		}
+		return fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+	}
+}
+
 // convertClaudeContentBlocks converts Claude content blocks (text, image) to OpenAI format.
 func convertClaudeContentBlocks(blocks []any, _ bool) any {
 	var result []any
@@ -331,16 +379,11 @@ func convertClaudeContentBlocks(blocks []any, _ bool) any {
 				"text": block["text"],
 			})
 		case "image":
-			if src, ok := block["source"].(map[string]any); ok {
-				mediaType, _ := src["media_type"].(string)
-				data, _ := src["data"].(string)
-				if mediaType == "" {
-					mediaType = "image/png"
-				}
+			if url := imageBlockToURL(block); url != "" {
 				result = append(result, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
-						"url": fmt.Sprintf("data:%s;base64,%s", mediaType, data),
+						"url": url,
 					},
 				})
 			}

@@ -58,16 +58,23 @@ func JSONToClaude(body []byte) ([]byte, error) {
 func convertOpenAIMessage(msg map[string]any) []any {
 	var content []any
 
-	// Add thinking block first (reasoning_content preferred over reasoning)
+	// Add thinking block first (reasoning_content preferred over reasoning).
+	// Real Anthropic thinking blocks carry a "signature" used to verify
+	// integrity on replay; OpenAI upstreams never provide one, so a
+	// placeholder is synthesized to keep the block shape compatible with
+	// clients that expect the field to be present (see the streaming
+	// counterpart in stream.go's closeThinkingBlock).
 	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
 		content = append(content, map[string]any{
-			"type":     "thinking",
-			"thinking": rc,
+			"type":      "thinking",
+			"thinking":  rc,
+			"signature": "unsigned",
 		})
 	} else if r, ok := msg["reasoning"].(string); ok && r != "" {
 		content = append(content, map[string]any{
-			"type":     "thinking",
-			"thinking": r,
+			"type":      "thinking",
+			"thinking":  r,
+			"signature": "unsigned",
 		})
 	}
 

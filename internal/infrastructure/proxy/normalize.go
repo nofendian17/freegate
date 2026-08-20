@@ -194,37 +194,25 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			metaCaptured = true
 		}
 
+		// Note: finish_reason is only treated as "real" when it's a
+		// non-empty string. Upstreams (and the OpenAI spec itself) send
+		// `finish_reason: null` explicitly on every non-terminal delta —
+		// that is NOT a signal that the stream is done, so it must not be
+		// mutated or treated as terminal here. If a genuinely buggy
+		// upstream never sends a real finish_reason at all (e.g. a single
+		// null/empty chunk followed by [DONE] or EOF), the fallback
+		// synthesis below and at [DONE]/EOF appends a proper terminal
+		// chunk without corrupting the chunk that carried content or
+		// tool-call fragments.
 		finishReason := ""
-		emptyFinish := false
 		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 			if c, ok := choices[0].(map[string]any); ok {
-				_, hasFR := c["finish_reason"]
 				if fr, ok := c["finish_reason"].(string); ok {
 					finishReason = fr
-					if hasFR && fr == "" {
-						emptyFinish = true
-					}
-				} else if v := c["finish_reason"]; v == nil && hasFR {
-					emptyFinish = true
 				}
 				if delta, ok := c["delta"].(map[string]any); ok {
 					bufferToolArgs(delta, toolArgs, toolSeen)
 					syncDeltaReasoning(chunk)
-				}
-			}
-		}
-
-		// Normalize the terminal semantics before the delta is re-serialized:
-		// a choice with `finish_reason:null` or `finish_reason:""` is the
-		// muse spark / kilo empty-completion bug; coalesce to "stop" so
-		// strict OpenAI clients (opencode's "missing finish_reason for
-		// choice 0") don't fail on the forwarded chunk. Missing the key
-		// entirely means a regular content delta — leave it alone.
-		if emptyFinish {
-			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
-				if c, ok := choices[0].(map[string]any); ok {
-					c["finish_reason"] = "stop"
-					finishReason = "stop"
 				}
 			}
 		}
