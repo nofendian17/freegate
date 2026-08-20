@@ -118,7 +118,12 @@ func convertClaudeMessages(claudeMsgs []any) []any {
 		case "assistant":
 			result = append(result, convertClaudeAssistantMessage(msg))
 		case "tool":
-			// Claude "tool" role → OpenAI "tool" role with tool_call_id
+			// Claude "tool" role → OpenAI "tool" role with tool_call_id.
+			// Round-tripped bodies may carry raw ids; sanitize so strict
+			// OpenAI upstreams never see unsafe characters.
+			if tid, ok := msg["tool_call_id"].(string); ok {
+				msg["tool_call_id"] = scrubToolID(tid)
+			}
 			result = append(result, msg)
 		default:
 			// Pass through unknown roles
@@ -250,7 +255,7 @@ func convertClaudeAssistantMessage(msg map[string]any) any {
 		case "tool_use":
 			toolUseFound = true
 			tc := map[string]any{
-				"id":   block["id"],
+				"id":   scrubToolID(idString(block["id"])),
 				"type": "function",
 				"function": map[string]any{
 					"name":      block["name"],
@@ -303,7 +308,7 @@ func convertToolResult(block map[string]any) any {
 
 	return map[string]any{
 		"role":         "tool",
-		"tool_call_id": toolUseID,
+		"tool_call_id": scrubToolID(toolUseID),
 		"content":      contentStr,
 	}
 }
@@ -412,6 +417,29 @@ func copyField(src, dst map[string]any, srcPath string, dstKey ...string) {
 	if v, ok := src[srcPath]; ok {
 		dst[key] = v
 	}
+}
+
+// scrubToolID sanitizes a Claude tool-call/tool-result id for OpenAI
+// upstreams that only accept [a-zA-Z0-9_-] (mirrors opencode's Claude
+// id scrub in provider/transform.ts). Claude Code occasionally emits
+// ids with dots, unicode, or other characters; leaving those verbatim
+// makes strict upstreams (e.g. MiniMax) reject the whole request.
+func scrubToolID(id string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			return r
+		}
+		return '_'
+	}, id)
+}
+
+// idString coerces a raw tool_use id (string from Claude, or a
+// non-string placeholder) to a string, preferring the original value.
+func idString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // cloneMap shallow-clones a map.
