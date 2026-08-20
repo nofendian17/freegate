@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"freegate/internal/translate/claude"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -506,14 +507,73 @@ func TestNormalizeStream_TencentHy3_TriggersFinishChunk(t *testing.T) {
 }
 
 // TestNormalizeStream_MissingFinishReasonEOF verifies that a stream that
-// closes without [DONE] still gets a terminal chunk.
+// closes without [DONE] still gets a terminal chunk, and that the
+// synthesized finish_reason lands on the choice itself (not nested
+// inside delta, which is invisible to every OpenAI-shape consumer
+// including claude.ProcessChunk's finish detection).
 func TestNormalizeStream_MissingFinishReasonEOF(t *testing.T) {
 	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n"
 	var buf bytes.Buffer
 	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
 	output := buf.String()
 
-	if !strings.Contains(output, `"finish_reason":"stop"`) {
-		t.Errorf("expected synthesized finish_reason=stop on EOF, got: %s", output)
+	var lastChunk map[string]any
+	for _, line := range strings.Split(output, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var chunk map[string]any
+		if json.Unmarshal([]byte(data), &chunk) == nil {
+			lastChunk = chunk
+		}
+	}
+	if lastChunk == nil {
+		t.Fatalf("expected at least one synthesized chunk, got: %s", output)
+	}
+	choices, _ := lastChunk["choices"].([]any)
+	if len(choices) == 0 {
+		t.Fatalf("synthesized chunk has no choices: %v", lastChunk)
+	}
+	choice, _ := choices[0].(map[string]any)
+	if fr, _ := choice["finish_reason"].(string); fr != "stop" {
+		t.Errorf("expected choice-level finish_reason=stop, got %v (chunk=%v)", choice["finish_reason"], choice)
+	}
+}
+
+// TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream is an
+// end-to-end regression test for the "muse-spark" scenario: an upstream
+// stream that sends content then closes (EOF, no [DONE], no real
+// finish_reason). It verifies the synthesized terminal chunk actually
+// terminates the Claude SSE translation (message_delta + message_stop),
+// rather than leaving the client's stream hanging forever.
+func TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream(t *testing.T) {
+	input := "data: {\"id\":\"c1\",\"model\":\"muse-spark\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+
+	state := claude.NewStreamState()
+	var events []string
+	rd := bufio.NewReader(strings.NewReader(buf.String()))
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
+			var chunk map[string]any
+			if json.Unmarshal([]byte(data), &chunk) == nil {
+				events = append(events, claude.ProcessChunk(chunk, state)...)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	joined := strings.Join(events, "")
+	if !strings.Contains(joined, "message_delta") {
+		t.Errorf("expected a message_delta event to close the message, got: %s", joined)
+	}
+	if !strings.Contains(joined, "message_stop") {
+		t.Errorf("expected a message_stop event to terminate the stream, got: %s", joined)
 	}
 }

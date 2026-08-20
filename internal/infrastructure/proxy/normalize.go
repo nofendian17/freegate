@@ -264,11 +264,30 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 // without one (e.g. muse-spark empty completion, tencent/hy3 truncation,
 // upstream close before finish_reason). Mirrors opencode's
 // llm/protocols/openai-chat.ts onHalt → finishEvents.
+//
+// finish_reason must be set on the choice itself (not nested inside
+// delta) — that's the only field downstream consumers (OpenAI clients,
+// and claude.ProcessChunk's OpenAI→Claude SSE translator) ever look at
+// to detect the terminal chunk. buildOpenAIChunk always sets the
+// choice-level finish_reason to nil, so it can't be reused here.
 func emitTerminalChunk(dst io.Writer, fl http.Flusher, id, model string, created int64, finishReason string) {
-	chunk := buildOpenAIChunk(id, model, created, map[string]any{
-		"finish_reason": finishReason,
-	})
-	if _, werr := io.WriteString(dst, chunk); werr != nil {
+	chunk := map[string]any{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": finishReason,
+		}},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		slog.Warn("stream marshal error", "error", err)
+		return
+	}
+	if _, werr := io.WriteString(dst, "data: "+string(b)+"\n\n"); werr != nil {
 		slog.Warn("stream write error", "error", werr)
 		return
 	}
