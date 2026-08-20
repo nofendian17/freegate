@@ -73,6 +73,18 @@ func NewHTTPClient(baseURL string, apiKeys []string, d *Dialer, headers map[stri
 			// from the client, so a client-side cancel still aborts the
 			// upstream call immediately.
 			ResponseHeaderTimeout: 300 * time.Second,
+			// Every connection pays for a fresh SOCKS5 handshake through
+			// the (often slow) VPN relay, so keep-alives matter far more
+			// here than for a direct client. The zero-value Transport
+			// only keeps 2 idle connections per host, which forces a new
+			// tunnel handshake for every request beyond the first couple
+			// of concurrent ones. Raise the per-host pool and cap the
+			// total, and keep idle connections short-lived so a pooled
+			// connection doesn't outlive an IP rotation (the old tunnel
+			// interface goes down and any conn still pinned to it dies).
+			MaxIdleConns:        50,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     60 * time.Second,
 		}
 		tr.DialContext = d.DialContext
 		hc.Transport = tr
