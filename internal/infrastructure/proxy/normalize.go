@@ -359,6 +359,7 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	state := claude.NewClaudeToOpenAIState()
 	var usage TokenUsage
+	stopped := false
 
 	for {
 		line, err := src.ReadString('\n')
@@ -375,6 +376,18 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 			continue
 		}
 
+		// Some free-tier upstreams (e.g. mimo) replay the final tool_use
+		// block — input_json_delta + content_block_stop, sometimes the
+		// terminal message_delta/message_stop again — AFTER the first
+		// message_stop. The client has already closed the assistant
+		// message; replaying a duplicate tool call after that is what
+		// makes the client see doubled tool input (X}{Y). message_stop is
+		// terminal: drop everything after it. This mirrors the
+		// finishSent guard in the OpenAI-stream path (stream.go).
+		if stopped {
+			continue
+		}
+
 		// Only process data: lines; skip event: and others
 		if !strings.HasPrefix(line, "data: ") {
 			continue
@@ -388,8 +401,12 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 			continue
 		}
 
-		// Extract usage from Claude events for TokenUsage reporting
 		eventType, _ := chunk["type"].(string)
+		if eventType == "message_stop" {
+			stopped = true
+		}
+
+		// Extract usage from Claude events for TokenUsage reporting
 		switch eventType {
 		case "message_start":
 			if msg, ok := chunk["message"].(map[string]any); ok {

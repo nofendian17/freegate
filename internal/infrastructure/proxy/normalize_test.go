@@ -577,3 +577,69 @@ func TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream(t *testin
 		t.Errorf("expected a message_stop event to terminate the stream, got: %s", joined)
 	}
 }
+
+// TestNormalizeClaudeStream_DropsPostStopReplay is a regression test for
+// free-tier upstreams (e.g. mimo) that replay the final tool_use block —
+// input_json_delta, content_block_stop, message_delta, message_stop —
+// a second time AFTER the first message_stop. The client has already
+// closed the assistant message; the replayed duplicate merges into the
+// first tool call and the client sees doubled tool input (X}{Y) and the
+// same tool_use id twice. message_stop is terminal: everything after it
+// must be dropped.
+func TestNormalizeClaudeStream_DropsPostStopReplay(t *testing.T) {
+	// The first message_stop terminates the stream; the second
+	// sequence is the mimo replay of the tool_use block.
+	input := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"mimo"}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_x","name":"probe_tool","input":{}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\":1}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\":1}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n"
+
+	src := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(input)),
+	}
+	w := newMockResponseWriter()
+	_, _ = copyNormalized(w, src)
+	output := w.buf.String()
+
+	// The tool call must appear exactly once: a single arguments delta
+	// with the full repaired object.
+	if got := strings.Count(output, `"arguments":"{\"n\":1}"`); got != 1 {
+		t.Fatalf("expected exactly 1 repaired arguments delta, got %d\noutput:\n%s", got, output)
+	}
+	// Drop everything after message_stop: no second tool_calls delta,
+	// no second terminal chunk.
+	if idx := strings.LastIndex(output, `"id":"chatcmpl-msg_1"`); idx >= 0 {
+		if rest := output[idx:]; strings.Contains(rest, `"arguments"`) {
+			t.Fatalf("found tool-call data after the terminal chunk:\n%s", rest)
+		}
+	}
+}
