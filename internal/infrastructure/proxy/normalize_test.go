@@ -411,3 +411,109 @@ func TestPassThroughError_CapturesAndForwards(t *testing.T) {
 		t.Errorf("content-type = %q, want application/json", got)
 	}
 }
+
+// TestNormalizeJSON_EmptyFinishReasonSynthesized verifies that a
+// non-streaming response with finish_reason:null or finish_reason:"" gets
+// a synthesized "stop" (or "tool_calls") so opencode's
+// "missing finish_reason for choice 0" validator doesn't fail.
+func TestNormalizeJSON_NullFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected finish_reason synthesized to stop, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_EmptyStringFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":""}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected finish_reason synthesized to stop, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_ToolCallsFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected finish_reason synthesized to tool_calls, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_RealFinishReasonPreserved(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"length"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"length"`) {
+		t.Errorf("expected finish_reason=length preserved, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_SynthesizesFinishChunk verifies that a stream ending
+// without any finish_reason gets a terminal chunk synthesized before
+// data:[DONE] — the tencent/hy3 truncation and muse-spark empty completion
+// bug.
+func TestNormalizeStream_SynthesizesFinishChunk(t *testing.T) {
+	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n" +
+		"data: [DONE]\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected synthesized finish_reason=stop, got: %s", output)
+	}
+	if !strings.Contains(output, "data: [DONE]") {
+		t.Errorf("expected [DONE] marker, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_TencentHy3_TriggersFinishChunk verifies the exact
+// tencent/hy3 path: streaming tool-call fragments that end with [DONE]
+// before any explicit finish_reason produces a synthesized terminal chunk
+// with finish_reason=tool_calls.
+func TestNormalizeStream_TencentHy3_TriggersFinishChunk(t *testing.T) {
+	mk := func(delta map[string]any) string {
+		chunk := map[string]any{"id": "c1", "model": "hy3-free", "choices": []any{map[string]any{"index": 0, "delta": delta}}}
+		b, _ := json.Marshal(chunk)
+		return "data: " + string(b) + "\n"
+	}
+	input := mk(map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1", "type": "function",
+			"function": map[string]any{"name": "Bash", "arguments": `{"cmd":"ls"}`},
+		}},
+	}) + "data: [DONE]\n"
+
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected synthesized finish_reason=tool_calls, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_MissingFinishReasonEOF verifies that a stream that
+// closes without [DONE] still gets a terminal chunk.
+func TestNormalizeStream_MissingFinishReasonEOF(t *testing.T) {
+	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected synthesized finish_reason=stop on EOF, got: %s", output)
+	}
+}

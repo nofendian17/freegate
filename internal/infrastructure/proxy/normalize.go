@@ -60,6 +60,8 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	var metaCreated int64
 	metaCaptured := false
 	finished := false
+	seenFinish := false
+	hasToolSeen := false
 
 	emitRepaired := func() {
 		if finished {
@@ -123,7 +125,32 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 		data := strings.TrimPrefix(trimmed, "data: ")
 		data = strings.TrimRight(data, "\r\n ")
 		if data == "[DONE]" {
-			emitRepaired()
+			if !seenFinish && (metaCaptured || hasToolSeen) {
+				fr := "stop"
+				if hasToolSeen {
+					fr = "tool_calls"
+				}
+				synth := map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": fr}}}
+				if metaID != "" {
+					synth["id"] = metaID
+				}
+				if metaModel != "" {
+					synth["model"] = metaModel
+				}
+				if metaCreated != 0 {
+					synth["created"] = metaCreated
+				}
+				synth["object"] = "chat.completion.chunk"
+				if b, err := json.Marshal(synth); err == nil {
+					emitRepaired()
+					_, _ = io.WriteString(dst, "data: "+string(b)+"\n\n")
+					if fl != nil {
+						fl.Flush()
+					}
+				}
+			} else {
+				emitRepaired()
+			}
 			if _, werr := io.WriteString(dst, "data: [DONE]\n\n"); werr != nil {
 				slog.Warn("stream write error", "error", werr)
 				break
@@ -153,6 +180,7 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			continue
 		}
 
+		// Normalize reasoning before any empty-check bookkeeping.
 		if !metaCaptured {
 			if v, ok := chunk["id"].(string); ok {
 				metaID = v
@@ -167,16 +195,45 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 		}
 
 		finishReason := ""
+		emptyFinish := false
 		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 			if c, ok := choices[0].(map[string]any); ok {
+				_, hasFR := c["finish_reason"]
 				if fr, ok := c["finish_reason"].(string); ok {
 					finishReason = fr
+					if hasFR && fr == "" {
+						emptyFinish = true
+					}
+				} else if v := c["finish_reason"]; v == nil && hasFR {
+					emptyFinish = true
 				}
 				if delta, ok := c["delta"].(map[string]any); ok {
 					bufferToolArgs(delta, toolArgs, toolSeen)
 					syncDeltaReasoning(chunk)
 				}
 			}
+		}
+
+		// Normalize the terminal semantics before the delta is re-serialized:
+		// a choice with `finish_reason:null` or `finish_reason:""` is the
+		// muse spark / kilo empty-completion bug; coalesce to "stop" so
+		// strict OpenAI clients (opencode's "missing finish_reason for
+		// choice 0") don't fail on the forwarded chunk. Missing the key
+		// entirely means a regular content delta — leave it alone.
+		if emptyFinish {
+			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
+				if c, ok := choices[0].(map[string]any); ok {
+					c["finish_reason"] = "stop"
+					finishReason = "stop"
+				}
+			}
+		}
+
+		if finishReason != "" {
+			seenFinish = true
+		}
+		if len(toolSeen) > 0 {
+			hasToolSeen = true
 		}
 
 		// Flush repaired arguments BEFORE the finish chunk so the client
@@ -201,7 +258,35 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			break
 		}
 	}
+	// If the stream ended without a terminal chunk (upstream truncated or
+	// missing finish_reason), synthesize one so opencode's
+	// "missing finish_reason for choice 0" validator doesn't reject the
+	// response. Mirrors opencode's onHalt→finishEvents fallback.
+	if !seenFinish && (metaCaptured || hasToolSeen) {
+		fr := "stop"
+		if hasToolSeen {
+			fr = "tool_calls"
+		}
+		emitTerminalChunk(dst, fl, metaID, metaModel, metaCreated, fr)
+	}
 	return usage
+}
+
+// emitTerminalChunk writes a synthetic finish chunk for streams that ended
+// without one (e.g. muse-spark empty completion, tencent/hy3 truncation,
+// upstream close before finish_reason). Mirrors opencode's
+// llm/protocols/openai-chat.ts onHalt → finishEvents.
+func emitTerminalChunk(dst io.Writer, fl http.Flusher, id, model string, created int64, finishReason string) {
+	chunk := buildOpenAIChunk(id, model, created, map[string]any{
+		"finish_reason": finishReason,
+	})
+	if _, werr := io.WriteString(dst, chunk); werr != nil {
+		slog.Warn("stream write error", "error", werr)
+		return
+	}
+	if fl != nil {
+		fl.Flush()
+	}
 }
 
 // bufferToolArgs accumulates tool-call arguments from a delta into per-index
@@ -465,6 +550,7 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	syncMessageReasoning(resp)
 	repairToolCallsJSON(resp)
+	ensureFinishReason(resp)
 
 	transformed, err := json.Marshal(resp)
 	if err != nil {
@@ -474,6 +560,44 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	dst.Write(transformed)
 	return usage
+}
+
+// ensureFinishReason synthesizes a finish_reason when the upstream omitted
+// it (or sent null / empty), so strict OpenAI clients (opencode's
+// llm/protocols/openai-chat.ts "missing finish_reason for choice 0"
+// validator) don't fail the stream. Mirrors opencode's onHalt
+// → finishEvents which defaults to "stop" when no finish was seen.
+// When a tool_calls choice is present without a finish_reason we default
+// to "tool_calls" so callers treat it as a completed tool call, matching
+// opencode's hasToolCalls → tool-calls coalescing in finishEvents.
+func ensureFinishReason(resp map[string]interface{}) {
+	choices, _ := resp["choices"].([]interface{})
+	for i, cAny := range choices {
+		choice, ok := cAny.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fr, hasFR := choice["finish_reason"]
+		if hasFR && fr != nil {
+			if s, ok := fr.(string); ok && s != "" {
+				continue
+			}
+		}
+		// Empty or absent: pick tool_calls when the synthesized choice
+		// looks like a tool call, else stop. Also stamp remaining nulls
+		// so every choice has a value — strict clients validate all.
+		synthetic := "stop"
+		if msg, _ := choice["message"].(map[string]interface{}); msg != nil {
+			if _, hasTC := msg["tool_calls"]; hasTC {
+				synthetic = "tool_calls"
+			}
+		}
+		choice["finish_reason"] = synthetic
+		choices[i] = choice
+	}
+	if len(choices) > 0 {
+		resp["choices"] = choices
+	}
 }
 
 // repairToolCallsJSON normalizes malformed tool-call arguments in a
