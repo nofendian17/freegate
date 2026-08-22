@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"html/template"
 	"io/fs"
 	"net/http"
@@ -39,21 +43,97 @@ type VPNClient interface {
 
 // Handler serves the dashboard UI.
 type Handler struct {
-	data      DataSource
-	vpn       VPNClient
-	templates *template.Template
-	staticFS  fs.FS
+	data       DataSource
+	vpn        VPNClient
+	templates  *template.Template
+	staticFS   fs.FS
+	adminToken string
 }
 
 // NewHandler creates a Handler with the given data source, VPN client,
-// parsed templates, and static FS.
-func NewHandler(data DataSource, vpn VPNClient, tpl *template.Template, staticFS fs.FS) *Handler {
-	return &Handler{
-		data:      data,
-		vpn:       vpn,
-		templates: tpl,
-		staticFS:  staticFS,
+// parsed templates, and static FS. If adminToken is non-empty, Login/Logout
+// and dashboard auth flows are enabled.
+func NewHandler(data DataSource, vpn VPNClient, tpl *template.Template, staticFS fs.FS, adminToken ...string) *Handler {
+	var tok string
+	if len(adminToken) > 0 {
+		tok = adminToken[0]
 	}
+	return &Handler{
+		data:       data,
+		vpn:        vpn,
+		templates:  tpl,
+		staticFS:   staticFS,
+		adminToken: tok,
+	}
+}
+
+func hmacForToken(token string) string {
+	h := hmac.New(sha256.New, []byte(token))
+	h.Write([]byte(token))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func isSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if r.Header.Get("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return false
+}
+
+type loginData struct {
+	Error string
+	Next  string
+}
+
+// LoginPage renders the login form. Public, no auth.
+func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
+	next := r.URL.Query().Get("next")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Next: next})
+}
+
+// Login validates admin_token from POST form, sets HMAC cookie on success.
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	token := r.FormValue("admin_token")
+	next := r.FormValue("next")
+	if next == "" {
+		next = r.URL.Query().Get("next")
+	}
+	if next == "" || next[0] != '/' {
+		next = "/"
+	}
+	if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminToken)) != 1 {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Error: "invalid token", Next: r.URL.Query().Get("next")})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "fg_admin",
+		Value:    hmacForToken(h.adminToken),
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
+	})
+	http.Redirect(w, r, next, http.StatusFound)
+}
+
+// Logout clears the admin cookie and redirects to /login.
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "fg_admin",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
 // Routes returns a chi.Router with all UI routes relative to its mount point.
