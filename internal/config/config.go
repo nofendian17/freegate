@@ -13,10 +13,19 @@ type Config struct {
 	APIKey    string
 	RateLimit int
 
+	// VPN controls the embedded VPNGate provider (single-binary mode).
+	// When enabled, freegate starts an in-process OpenVPN tunnel + SOCKS5
+	// per-OS (linux/darwin/windows) and routes upstreams via 127.0.0.1:9050.
+	// When disabled, upstreams go direct (Dialer.IsDirect).
+	VPNEnabled  bool
+	VPNProvider string // auto|vpngate|direct
+
 	// VPNGate replaces the old Tor proxy. The "vpn" sidecar container
 	// (cmd/vpngate-supervisor) keeps an OpenVPN tunnel to a VPNGate relay
 	// server, exposes a SOCKS5 proxy through it, and a small HTTP control
 	// API used for IP rotation.
+	// Deprecated: VPNGateHost/CtrlPort kept for compat with docker-compose;
+	// new single-binary uses VPNEnabled + in-process SOCKS 127.0.0.1:9050.
 	VPNGateHost           string // SOCKS5 + control host (the "vpn" compose service)
 	VPNGateSocksPort      int    // SOCKS5 port used for all upstream traffic
 	VPNGateCtrlPort       int    // control API port (POST /rotate, GET /ip)
@@ -47,6 +56,9 @@ func Load() *Config {
 		APIKey:    envStr("API_KEY", ""),
 		RateLimit: envInt("RATE_LIMIT", 60),
 
+		VPNEnabled:  envBool("VPN_ENABLED", true),
+		VPNProvider: envStr("VPN_PROVIDER", "auto"),
+
 		VPNGateHost:           envStr("VPNGATE_HOST", "127.0.0.1"),
 		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
 		VPNGateCtrlPort:       envInt("VPNGATE_CTRL_PORT", 8080),
@@ -68,7 +80,16 @@ func Load() *Config {
 		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
 	}
 
-	cfg.SOCKSAddr = cfg.VPNGateHost + ":" + strconv.Itoa(cfg.VPNGateSocksPort)
+	// Single-binary mode: in-process SOCKS on 127.0.0.1:9050 when VPN enabled,
+	// direct otherwise. Keep VPNGateHost compat: if user explicitly set
+	// VPNGATE_HOST != 127.0.0.1 (docker), honor it for backwards compat.
+	if !cfg.VPNEnabled || cfg.VPNProvider == "direct" {
+		cfg.SOCKSAddr = ""
+	} else if os.Getenv("VPNGATE_HOST") != "" {
+		cfg.SOCKSAddr = cfg.VPNGateHost + ":" + strconv.Itoa(cfg.VPNGateSocksPort)
+	} else {
+		cfg.SOCKSAddr = "127.0.0.1:" + strconv.Itoa(cfg.VPNGateSocksPort)
+	}
 	return cfg
 }
 
@@ -83,6 +104,12 @@ func (c *Config) Validate() error {
 	}
 	if c.UpstreamURLLLM7 == "" {
 		errs = append(errs, "UPSTREAM_URL_LLM7 is required")
+	}
+	if c.VPNEnabled && c.SOCKSAddr == "" {
+		errs = append(errs, "SOCKSAddr must be set when VPN_ENABLED is true")
+	}
+	if c.VPNProvider != "auto" && c.VPNProvider != "vpngate" && c.VPNProvider != "direct" {
+		errs = append(errs, fmt.Sprintf("VPN_PROVIDER must be auto, vpngate or direct, got %q", c.VPNProvider))
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("PORT must be between 1 and 65535, got %d", c.Port))
@@ -135,4 +162,19 @@ func envSlice(key, def string) []string {
 		}
 	}
 	return result
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

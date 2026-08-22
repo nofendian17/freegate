@@ -23,7 +23,7 @@ import (
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
-	"freegate/internal/infrastructure/vpngate"
+	"freegate/internal/infrastructure/vpn"
 	"freegate/web"
 )
 
@@ -32,22 +32,21 @@ const (
 	serverReadTimeout       = 30 * time.Second
 	serverIdleTimeout       = 120 * time.Second
 	shutdownTimeout         = 10 * time.Second
-	vpnMonitorInterval      = 5 * time.Minute
 )
 
 // Server owns the freegate HTTP server: configuration, dependencies,
 // and lifecycle. Build it with New, then call Run.
 type Server struct {
-	cfg       *config.Config
-	httpSrv   *http.Server
-	logger    *slog.Logger
-	tc        *vpngate.Controller
-	opencode  *upstream.OpenCodeUpstream
-	kilo      *upstream.KiloUpstream
-	llm7      *upstream.LLM7Upstream
-	rec       *recorder.Recorder
-	rateLimit *middleware.RateLimiter
-	wg        sync.WaitGroup // tracks background workers
+	cfg         *config.Config
+	httpSrv     *http.Server
+	logger      *slog.Logger
+	vpnProvider vpn.Provider
+	opencode    *upstream.OpenCodeUpstream
+	kilo        *upstream.KiloUpstream
+	llm7        *upstream.LLM7Upstream
+	rec         *recorder.Recorder
+	rateLimit   *middleware.RateLimiter
+	wg          sync.WaitGroup // tracks background workers
 }
 
 // routerAdapter wraps *upstream.Router to satisfy application.Router,
@@ -74,13 +73,21 @@ func (u *upstreamAdapter) Start(ctx context.Context) {
 	u.Upstream.Start(ctx, 0)
 }
 
-// vpnUI adapts the VPN controller for the dashboard: it embeds the
-// controller (ListServers/ConnectTo/ForceNewIP/Status/Ping/CurrentIP) and
-// adds the live direct/tunnel switch backed by the shared upstream dialer.
+// vpnUI adapts the VPN provider for the dashboard: it wraps the Provider
+// (ListServers/ConnectTo/ForceNewIP/Status/Ping/CurrentIP) and adds the live
+// direct/tunnel switch backed by the shared upstream dialer.
 type vpnUI struct {
-	*vpngate.Controller
-	dialer *upstream.Dialer
+	provider vpn.Provider
+	dialer   *upstream.Dialer
 }
+
+func (v *vpnUI) ListServers() ([]vpn.ServerInfo, error)   { return v.provider.ListServers() }
+func (v *vpnUI) RefreshServers() ([]vpn.ServerInfo, error) { return v.provider.RefreshServers() }
+func (v *vpnUI) ConnectTo(hostname string) error          { return v.provider.ConnectTo(hostname) }
+func (v *vpnUI) ForceNewIP() error                        { return v.provider.Rotate() }
+func (v *vpnUI) Status() (vpn.StatusInfo, error)          { return v.provider.Status() }
+func (v *vpnUI) Ping() (vpn.PingResult, error)            { return v.provider.Ping() }
+func (v *vpnUI) CurrentIP() string                        { return v.provider.CurrentIP() }
 
 func (v *vpnUI) SetDirect(direct bool) error {
 	v.dialer.SetDirect(direct)
@@ -101,9 +108,20 @@ func New(cfg *config.Config) (*Server, error) {
 	}))
 	slog.SetDefault(logger)
 
-	tc := vpngate.NewController(cfg.VPNGateHost, cfg.VPNGateCtrlPort, time.Duration(cfg.VPNGateRotateInterval)*time.Second)
+	vpnProvider, err := vpn.NewProvider(vpn.ProviderConfig{
+		Enabled:    cfg.VPNEnabled,
+		Provider:   cfg.VPNProvider,
+		SocksAddr:  cfg.SOCKSAddr,
+		Country:    "", // TODO: wire VPNGATE_COUNTRY filter if set
+		MinScore:   0,
+		MaxPing:    0,
+		RefreshInt: time.Duration(cfg.VPNGateRotateInterval) * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create vpn provider: %w", err)
+	}
 
-	// One shared dialer routes both upstreams; direct vs tunnel is switched
+	// One shared dialer routes upstreams; direct vs tunnel is switched
 	// live from the dashboard (replaces the old static BYPASS_PROXY env).
 	dialer := upstream.NewDialer(cfg.SOCKSAddr)
 
@@ -134,7 +152,7 @@ func New(cfg *config.Config) (*Server, error) {
 		if dialer.IsDirect() {
 			return "direct"
 		}
-		return tc.CurrentIP()
+		return vpnProvider.CurrentIP()
 	})
 	cs.WithRequestLogger(rec.RecordRequestLog)
 
@@ -143,7 +161,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.NewHandler(rec, &vpnUI{Controller: tc, dialer: dialer}, tpl, web.Static())
+	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static())
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
@@ -178,15 +196,15 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	return &Server{
-		cfg:       cfg,
-		httpSrv:   httpSrv,
-		logger:    logger,
-		tc:        tc,
-		opencode:  opencode,
-		kilo:      kilo,
-		llm7:      llm7,
-		rec:       rec,
-		rateLimit: rl,
+		cfg:         cfg,
+		httpSrv:     httpSrv,
+		logger:      logger,
+		vpnProvider: vpnProvider,
+		opencode:    opencode,
+		kilo:        kilo,
+		llm7:        llm7,
+		rec:         rec,
+		rateLimit:   rl,
 	}, nil
 }
 
@@ -216,11 +234,13 @@ func (s *Server) Run(ctx context.Context) error {
 		s.rec.Start(bgCtx)
 	}()
 
-	stopIP := make(chan struct{})
+	// VPN provider in-process (replaces external supervisor sidecar)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.tc.StartMonitor(vpnMonitorInterval, stopIP)
+		if err := s.vpnProvider.Start(bgCtx); err != nil {
+			s.logger.Error("vpn provider failed", "error", err)
+		}
 	}()
 
 	s.logger.Info("starting server", "addr", s.httpSrv.Addr)
@@ -238,9 +258,8 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		if err != nil {
 			cancelBG()
-			close(stopIP)
 			s.wg.Wait()
-			s.tc.Close()
+			_ = s.vpnProvider.Close()
 			s.rateLimit.Stop()
 			return fmt.Errorf("server failed: %w", err)
 		}
@@ -251,13 +270,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Signal background workers to stop
 	cancelBG()
-	close(stopIP)
 
 	// Wait for all background workers to finish
 	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
-		s.tc.Close()
+		_ = s.vpnProvider.Close()
 		s.rateLimit.Stop()
 		return err
 	}
@@ -265,7 +283,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Wait for background workers to complete
 	s.wg.Wait()
 
-	s.tc.Close()
+	_ = s.vpnProvider.Close()
 	s.rateLimit.Stop()
 
 	s.logger.Info("server stopped gracefully")

@@ -52,6 +52,23 @@ func TestValidate_NegativePort(t *testing.T) {
 	}
 }
 
+func TestValidate_VPNEnabledRequiresSocksAddr(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.VPNEnabled = true
+	cfg.SOCKSAddr = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty SOCKSAddr when VPN_ENABLED is true")
+	}
+}
+
+func TestValidate_VPNProviderInvalid(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.VPNProvider = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for invalid VPN_PROVIDER")
+	}
+}
+
 func TestEnvInt_Default(t *testing.T) {
 	val := envInt("NONEXISTENT_KEY", 42)
 	if val != 42 {
@@ -109,6 +126,8 @@ func TestEnvSlice_EmptyItem(t *testing.T) {
 func defaultConfig() *Config {
 	return &Config{
 		Port:                  1234,
+		VPNEnabled:            true,
+		VPNProvider:           "auto",
 		VPNGateHost:           "127.0.0.1",
 		VPNGateSocksPort:      9050,
 		VPNGateCtrlPort:       8080,
@@ -126,5 +145,6 @@ func defaultConfig() *Config {
 		UpstreamURLLLM7: "https://api.llm7.io/v1",
 
 		UpstreamDefault: "opencode",
+		SOCKSAddr:       "127.0.0.1:9050",
 	}
 }

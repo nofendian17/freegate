@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"freegate/internal/infrastructure/vpngate"
 )
 
 var execLookPath = exec.LookPath
@@ -21,38 +23,9 @@ type ProviderConfig struct {
 	RefreshInt time.Duration
 }
 
-type ServerInfo struct {
-	Hostname    string `json:"hostname"`
-	IP          string `json:"ip"`
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	Score       int    `json:"score"`
-	Ping        string `json:"ping"`
-}
-
-type StatusInfo struct {
-	Connected   bool   `json:"connected"`
-	Server      string `json:"server"`
-	Country     string `json:"country"`
-	IP          string `json:"ip"`
-	ConnectedAt int64  `json:"connected_at"`
-}
-
-type PingResult struct {
-	Connected bool   `json:"connected"`
-	Direct    bool   `json:"direct"`
-	Server    string `json:"server"`
-	Country   string `json:"country"`
-	IP        string `json:"ip"`
-	DNSOK     bool   `json:"dns_ok"`
-	DNSMS     int64  `json:"dns_ms"`
-	DNSError  string `json:"dns_error,omitempty"`
-	EgressOK  bool   `json:"egress_ok"`
-	EgressIP  string `json:"egress_ip,omitempty"`
-	HTTPMS    int64  `json:"http_ms"`
-	HTTPCode  int    `json:"http_code"`
-	EgressErr string `json:"egress_error,omitempty"`
-}
+type ServerInfo = vpngate.ServerInfo
+type StatusInfo = vpngate.StatusInfo
+type PingResult = vpngate.PingResult
 
 type Provider interface {
 	Start(ctx context.Context) error
