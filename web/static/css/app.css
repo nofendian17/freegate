@@ -633,6 +633,23 @@ button.btn-tertiary:hover {
   color: var(--error);
 }
 
+.vpn-ping-result.loading {
+  border-color: var(--warning);
+  color: var(--warning);
+  animation: vpn-pulse 1s step-start infinite;
+}
+
+@keyframes vpn-pulse {
+  50% { opacity: 0.6; }
+}
+
+.btn-primary.is-loading,
+.btn-secondary.is-loading {
+  opacity: 0.6;
+  cursor: wait;
+  pointer-events: none;
+}
+
 @media (max-width: 480px) {
   .vpn-select-row {
     flex-direction: column;

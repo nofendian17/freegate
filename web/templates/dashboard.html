@@ -417,23 +417,40 @@
     }
     document.getElementById('vpn-refresh-list').addEventListener('click', async function() {
       const btn = this;
+      const text = document.getElementById('vpn-current-text');
+      const origText = text.textContent;
       btn.disabled = true;
-      btn.textContent = 'refreshing…';
+      btn.textContent = '⏳ refreshing…';
+      btn.classList.add('is-loading');
+      text.textContent = 'refreshing server list…';
+      document.getElementById('vpn-dot').className = 'status-dot warn';
       try {
         await fetch('/api/vpn/servers/refresh', { method: 'POST' });
         await refreshVPNServers();
-      } catch (e) { /* keep the current list */ }
+        text.textContent = 'server list refreshed';
+      } catch (e) {
+        text.textContent = 'refresh failed: network error';
+      }
       btn.textContent = '> refresh list';
+      btn.classList.remove('is-loading');
       btn.disabled = false;
+      setTimeout(refreshVPNStatus, 500);
+      // restore original after 2s if not overwritten by status poll
+      setTimeout(() => { if (text.textContent.includes('refreshed') || text.textContent.includes('failed')) refreshVPNStatus(); }, 2000);
     });
     document.getElementById('vpn-server-select').addEventListener('change', async function() {
       const sel = this;
       const btn = document.getElementById('vpn-connect');
       const text = document.getElementById('vpn-current-text');
+      const dot = document.getElementById('vpn-dot');
+      // disable all vpn controls while switching
+      const controls = [document.getElementById('vpn-connect'), document.getElementById('vpn-rotate'), document.getElementById('vpn-ping'), document.getElementById('vpn-refresh-list'), sel];
+      controls.forEach(c => { if(c) c.disabled = true; });
       if (sel.value === '__direct__') {
         // Switch to direct immediately; no server connect needed.
         btn.disabled = true;
-        text.textContent = 'switching to direct…';
+        text.textContent = '⏳ switching to direct…';
+        dot.className = 'status-dot warn';
         try {
           const resp = await fetch('/api/vpn/direct', {
             method: 'POST',
@@ -441,30 +458,42 @@
             body: JSON.stringify({ direct: true })
           });
           if (!resp.ok) text.textContent = 'switch failed: ' + resp.status;
+          else text.textContent = 'switched to direct';
         } catch (e) {
           text.textContent = 'switch failed: network error';
         }
         refreshVPNStatus();
+        controls.forEach(c => { if(c) c.disabled = false; });
+        // keep connect disabled for direct
+        btn.disabled = true;
         return;
       }
       // A real server selected: disable direct mode and enable connect.
       if (sel.value !== '') {
+        text.textContent = 'selected ' + sel.value + ' — click connect';
         await fetch('/api/vpn/direct', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ direct: false })
         }).catch(function() {});
       }
-      btn.disabled = sel.value === '';
+      controls.forEach(c => { if(c) c.disabled = false; });
+      btn.disabled = sel.value === '' || sel.value === '__direct__';
     });
     document.getElementById('vpn-connect').addEventListener('click', async function() {
       const sel = document.getElementById('vpn-server-select');
       const server = sel.value;
       if (!server) return;
       const btn = this;
-      btn.disabled = true;
       const text = document.getElementById('vpn-current-text');
-      text.textContent = 'connecting to ' + server + '…';
+      const dot = document.getElementById('vpn-dot');
+      // disable all vpn controls
+      const controls = [btn, document.getElementById('vpn-rotate'), document.getElementById('vpn-ping'), document.getElementById('vpn-refresh-list'), sel];
+      controls.forEach(c => { if(c) c.disabled = true; });
+      btn.textContent = '⏳ connecting…';
+      btn.classList.add('is-loading');
+      text.textContent = '⏳ connecting to ' + server + '…';
+      dot.className = 'status-dot warn';
       try {
         const resp = await fetch('/api/vpn/connect', {
           method: 'POST',
@@ -474,21 +503,32 @@
         const data = await resp.json();
         if (!resp.ok) {
           text.textContent = 'connect failed: ' + (data.error || resp.status);
-          btn.disabled = false;
+          btn.textContent = '> connect';
+          btn.classList.remove('is-loading');
+          controls.forEach(c => { if(c) c.disabled = false; });
+          btn.disabled = sel.value === '';
           return;
         }
+        text.textContent = 'connected to ' + server;
       } catch (e) {
         text.textContent = 'connect failed: network error';
       }
-      btn.disabled = false;
+      btn.textContent = '> connect';
+      btn.classList.remove('is-loading');
+      controls.forEach(c => { if(c) c.disabled = false; });
+      btn.disabled = sel.value === '';
       refreshVPNStatus();
     });
     document.getElementById('vpn-ping').addEventListener('click', async function() {
       const btn = this;
       const box = document.getElementById('vpn-ping-result');
+      const origLabel = btn.textContent;
       btn.disabled = true;
+      btn.textContent = '⏳ pinging…';
+      btn.classList.add('is-loading');
       box.style.display = 'block';
-      box.textContent = '// pinging…';
+      box.textContent = '⏳ pinging… (dns + egress via tunnel, ~3s)';
+      box.className = 'vpn-ping-result loading';
       const t0 = Date.now();
       try {
         const resp = await fetch('/api/vpn/ping', { method: 'POST' });
@@ -510,6 +550,8 @@
             ? '! tunnel disconnected (direct mode — live traffic unaffected)'
             : '! tunnel disconnected — nothing to ping';
           box.className = 'vpn-ping-result';
+          btn.textContent = origLabel;
+          btn.classList.remove('is-loading');
           btn.disabled = false;
           return;
         }
@@ -531,13 +573,20 @@
         box.textContent = '! ping failed: network error';
         box.className = 'vpn-ping-result';
       }
+      btn.textContent = origLabel;
+      btn.classList.remove('is-loading');
       btn.disabled = false;
     });
     document.getElementById('vpn-rotate').addEventListener('click', async function() {
       const btn = this;
-      btn.disabled = true;
       const text = document.getElementById('vpn-current-text');
-      text.textContent = 'rotating to a random server…';
+      const dot = document.getElementById('vpn-dot');
+      const controls = [btn, document.getElementById('vpn-connect'), document.getElementById('vpn-ping'), document.getElementById('vpn-refresh-list'), document.getElementById('vpn-server-select')];
+      controls.forEach(c => { if(c) c.disabled = true; });
+      btn.textContent = '⏳ rotating…';
+      btn.classList.add('is-loading');
+      text.textContent = '⏳ rotating to a random server…';
+      dot.className = 'status-dot warn';
       // Rotating implies using the tunnel again.
       await fetch('/api/vpn/direct', {
         method: 'POST',
@@ -548,10 +597,13 @@
         const resp = await fetch('/api/vpn/rotate', { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok && data.error) text.textContent = 'rotate failed: ' + data.error;
+        else if (resp.ok) text.textContent = 'rotated — reconnecting…';
       } catch (e) {
         text.textContent = 'rotate failed: network error';
       }
-      btn.disabled = false;
+      btn.textContent = '> rotate random';
+      btn.classList.remove('is-loading');
+      controls.forEach(c => { if(c) c.disabled = false; });
       refreshVPNStatus();
     });
     document.addEventListener('DOMContentLoaded', () => {
