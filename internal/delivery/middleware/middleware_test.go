@@ -239,3 +239,47 @@ func TestLogger_SkipsDashboardAndProbeNoise(t *testing.T) {
 		})
 	}
 }
+
+func TestApiAuth_MultiKey(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	m := ApiAuth([]string{"k1", "k2"}, "admin12345678901234")
+	for _, k := range []string{"k1", "k2"} {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		req.Header.Set("X-API-Key", k)
+		rec := httptest.NewRecorder()
+		m(h).ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("key %s should pass, got %d", k, rec.Code)
+		}
+	}
+	// admin superset
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer admin12345678901234")
+	rec := httptest.NewRecorder()
+	m(h).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("admin should pass api, got %d", rec.Code)
+	}
+}
+
+func TestAdminAuth_Cookie(t *testing.T) {
+	admin := "0123456789abcdef0123456789abcdef"
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	m := AdminAuth(admin)
+	// no cookie -> redirect
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(h).ServeHTTP(rec, req)
+	if rec.Code != 302 {
+		t.Fatalf("expected 302, got %d", rec.Code)
+	}
+	// with valid cookie
+	cookieVal := hmacForToken(admin) // same logic as login
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.AddCookie(&http.Cookie{Name: "fg_admin", Value: cookieVal})
+	rec2 := httptest.NewRecorder()
+	m(h).ServeHTTP(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("valid cookie should pass, got %d", rec2.Code)
+	}
+}

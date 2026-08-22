@@ -187,13 +187,13 @@ func New(cfg *config.Config) (*Server, error) {
 	// API (OpenAI-compatible) — rate limit + auth apply to these only.
 	// These specific routes are registered on the root mux and are checked
 	// BEFORE the default handler set by Mount("/").
-	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Route("/v1", func(r chi.Router) {
+	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Route("/v1", func(r chi.Router) {
 		r.Get("/models", apiHandler.ListModels)
 		r.Get("/metrics", apiHandler.Metrics)
 		r.Post("/chat/completions", apiHandler.Chat)
 	})
-	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Post("/v1/messages", apiHandler.Chat)
-	r.With(rl.Middleware, middleware.Auth(cfg.APIKey)).Get("/ready", apiHandler.Ready)
+	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Post("/v1/messages", apiHandler.Chat)
+	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Get("/ready", apiHandler.Ready)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpSrv := &http.Server{

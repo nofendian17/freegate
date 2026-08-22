@@ -1,11 +1,15 @@
 package middleware
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,7 +112,73 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
+func hmacForToken(token string) string {
+	h := hmac.New(sha256.New, []byte(token))
+	h.Write([]byte(token))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(apiKeys) == 0 && adminToken == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			key := r.Header.Get("X-API-Key")
+			if key == "" {
+				if auth := r.Header.Get("Authorization"); len(auth) > 7 && auth[:7] == "Bearer " {
+					key = auth[7:]
+				}
+			}
+			for _, k := range apiKeys {
+				if subtle.ConstantTimeCompare([]byte(key), []byte(k)) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
+		})
+	}
+}
+
+func AdminAuth(adminToken string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// check cookie
+			if c, err := r.Cookie("fg_admin"); err == nil {
+				exp := hmacForToken(adminToken)
+				if subtle.ConstantTimeCompare([]byte(c.Value), []byte(exp)) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			// check header
+			key := r.Header.Get("X-Admin-Token")
+			if key == "" {
+				if auth := r.Header.Get("Authorization"); len(auth) > 7 && auth[:7] == "Bearer " {
+					key = auth[7:]
+				}
+			}
+			if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if r.Header.Get("HX-Request") == "true" || strings.Contains(r.Header.Get("Accept"), "application/json") {
+				respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "admin authentication required")
+				return
+			}
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusFound)
+		})
+	}
+}
+
 // Auth validates the API key if configured. Skips validation if no API key is set.
+// Deprecated: use ApiAuth instead.
 func Auth(requiredKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
