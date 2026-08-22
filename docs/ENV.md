@@ -13,7 +13,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
 | `API_KEY` | No | (empty) | If non-empty, every `/v1/*` and `/ready` request must send a matching `Authorization: Bearer <key>` or `X-API-Key: <key>` header. Empty = no auth. |
-| `RATE_LIMIT` | No | `60` | Requests per minute per client IP. Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
+| `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
 ## VPN (single-binary per-OS)
 
@@ -28,9 +28,9 @@ freegate now runs as a **single binary** with embedded VPNGate per OS (linux/dar
 | `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
 | `VPNGATE_HOST` | No | `127.0.0.1` | Deprecated: docker sidecar host. If set (e.g. `vpn` in compose), `SOCKSAddr` honors it; otherwise 127.0.0.1. |
 
-The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true` (or `VPNGATE_HOST:VPNGATE_SOCKS_PORT` if `VPNGATE_HOST` is explicitly set for docker compat); empty when direct.
+The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true` (or `VPNGATE_HOST:VPNGATE_SOCKS_PORT` if `VPNGATE_HOST` is explicitly set for docker compat); empty when direct. Helpers `Config.IsDirect()` and `Config.IsSidecarMode()` centralize this check (replaces scattered `CurrentIP()=="direct"` string compares).
 
-`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are now applied in-process by the Provider; no sidecar env needed.
+`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are now applied in-process by the Provider (`vpn/registry.go` via `matchCountry`/`pickWeighted`); no sidecar env needed.
 
 `VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
 
@@ -70,17 +70,20 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 
 `config.Validate()` is called at startup. It rejects:
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
-- Empty `SOCKSAddr` when `VPN_ENABLED=true`
+- Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)
 - Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
-- `PORT`, `VPNGATE_SOCKS_PORT`, or `VPNGATE_CTRL_PORT` outside `1–65535`
-- Non-positive `VPNGATE_ROTATE_INTERVAL` or `RATE_LIMIT`
+- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `VPNGATE_CTRL_PORT` outside `1–65535` only in sidecar mode (`IsSidecarMode()`); `VPNGATE_ROTATE_INTERVAL` non-positive only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
 
 A failure prints a multi-line error and exits 1.
 
 ## Source-of-truth files
 
-- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`
-- `internal/infrastructure/vpn/` — Provider per-OS + SOCKS in-process
+- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`, helpers `IsDirect()`/`IsSidecarMode()`
+- `internal/infrastructure/vpn/` — `provider.go` + `registry.go` (server list cache) + `tunnel.go` (OpenVPN lifecycle) + `socks.go` per-OS
+- `internal/infrastructure/upstream/` — `client.go` (`NewTransport` shared, `NewHTTPClientWithTransport`), `cache.go` (O(1) `Has`), `upstream.go` (`Upstream = domain.Upstream`)
+- `internal/domain/` — `upstream.go` + `response.go` (`UpstreamResponse` decouples `net/http`), `model.go` canonical
+- `internal/translate/internal/prepost/prepare_upstream.go` — one-pass `PrepareUpstream` (roles+reasoning+stream_options)
+- `internal/infrastructure/proxy/normalize.go` — `NormalizeDomainResponseWithContext` (ctx-aware streaming), `RateLimiter` sharded 32-way in `internal/delivery/middleware`
 - `.env.example` — annotated example
 - `docker-compose.yml` — legacy containerized path (proxy + vpn sidecar)
 - `cmd/vpngate-supervisor/main.go` — legacy sidecar (deprecated, kept for docker compat)
