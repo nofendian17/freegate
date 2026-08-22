@@ -19,39 +19,41 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
-- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`) — **recommended for VPN** (full `tun0` + relay `vpn ip` muncul)
-- **Single binary** — `freegate` per OS (linux/darwin/windows) — **saat ini direct-first** (fallback `direct` kalau `openvpn` belum ada); `tun` embedded masih roadmap, VPN penuh via Docker
+- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`)
+- **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
 
 ## Quick Start
 
-**Docker (recommended untuk VPN — `vpn ip` muncul):**
+**Single binary (no Docker):**
 ```bash
-docker compose up -d
-# cek tunnel
-curl http://127.0.0.1:1234/api/vpn/status | jq
-# {"connected":true,"ip":"<relay ip>","server":"..."}
+# linux / macOS (embedded VPN, needs sudo for tun)
+sudo ./freegate --port 1234
+# direct without VPN
+./freegate --vpn=false --port 1234
+# windows (Admin PowerShell)
+.\freegate.exe --port 1234
 ```
 
-**Single binary (no Docker — saat ini direct-first):**
+**Docker:**
 ```bash
-# direct tanpa VPN (tanpa dependency, tanpa sudo — 34 model tetap jalan)
-./freegate --vpn=false --port 1234
-VPN_ENABLED=false ./freegate
-
-# embedded VPN (roadmap — saat ini masih direct fallback, tun belum aktif)
-# linux: sudo apt install openvpn && sudo ./freegate --port 1234
-# darwin: brew install openvpn && sudo ./freegate --port 1234
-# windows: winget install OpenVPNTechnologies.OpenVPN → Run as Administrator
+docker compose up -d
 ```
 
 The proxy will be available at `http://localhost:1234`.
 
-### Prerequisites for VPN mode
+### Prerequisites for VPN mode (single binary)
 
-* **Docker:** butuh `cap_add: NET_ADMIN`, `devices: /dev/net/tun` (sudah di `docker-compose.yml:9`) — `vpn ip` muncul setelah `vpn` health `healthy`.
-* **Single binary:** probe `openvpn` per OS (`runtime.GOOS`) → kalau missing fallback `direct` + `install_hint` (`GET /api/vpn/status 200 {"direct":true,"install_hint":"sudo apt install openvpn …"}`) tampil di dashboard `# VPN Server: direct — openvpn not found: …` dan tetap serve `34` model via `direct`. `tun` embedded masih stub — **VPN penuh untuk binary adalah roadmap**, untuk sekarang pakai Docker jika butuh `vpn ip`.
+Direct binary embeds VPNGate per OS (`runtime.GOOS` → `openvpn` probe) and falls back to `direct` if dependency missing. Dashboard `/api/vpn/status` returns `install_hint` when binary not found.
 
-To force direct: `./freegate --vpn=false` atau `VPN_ENABLED=false`.
+| OS | Dependency | Install | Notes |
+|----|------------|---------|-------|
+| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` (`Needs `sudo ./freegate`) |
+| **darwin** | `openvpn` via Homebrew | `brew install openvpn` | Probes `openvpn`, `/opt/homebrew/bin/openvpn`, `/usr/local/bin/openvpn`; needs `sudo` for `utun` |
+| **windows** | `OpenVPN` + TAP-Windows6 | `winget install OpenVPNTechnologies.OpenVPN` <br> `choco install openvpn` | Run `.\freegate.exe` as **Administrator** for TAP |
+
+If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves `34` models via direct.
+
+To force direct without VPN: `./freegate --vpn=false` or `VPN_ENABLED=false`.
 
 A read-only terminal-style dashboard is served at **`http://localhost:1234/`** — see [Dashboard](#dashboard) below.
 
