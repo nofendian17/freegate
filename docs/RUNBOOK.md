@@ -46,6 +46,13 @@ Both services are `restart: unless-stopped` and live on the `fg-net` compose net
 
 The `vpn` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN): the compose file passes the device through and grants `NET_ADMIN` / `NET_RAW`. Docker Desktop (macOS/Windows) does not support TUN/TAP.
 
+**Architecture post-optimization (2026-08-23):**
+- **Upstream routing O(1):** `cache.go` maintains `index map` + `Has()`, `kilo`/`llm7` `Match` no longer `O(n)` `Get()` copy; `opencode` remains `true` fallback.
+- **Shared transport:** `upstream.NewTransport` single tuned `http.Transport` (50/20 idle, 60 s) shared by all upstreams via `server/wire.go` — avoids per-upstream dial handshake blow-up.
+- **One-pass request prep:** `translate/prepare_upstream.go:PrepareUpstream` merges `NormalizeRoles`+`Reasoning`+`stream_options` in one `Unmarshal/Marshal` (was 3).
+- **Domain decoupling:** `domain.UpstreamResponse{StatusCode,Header,Body}` (`domain/response.go`), `Upstream.ChatCompletion` no longer leaks `*http.Response`; `proxy.NormalizeDomainResponseWithContext` respects `ctx` cancellation (stream loops check `ctx.Done()`).
+- **Sharded limiter & registry:** `RateLimiter` 32 shards, `vpn/registry.go` isolates server list cache (`getServers`/`pickWeighted`/`matchCountry`) from `provider.go` tunnel lifecycle (`tunnel.go`).
+
 ### Exposing beyond `127.0.0.1`
 
 The default port binding is local-only. To expose:
@@ -116,9 +123,11 @@ curl -s http://127.0.0.1:8080/status  # via docker exec fg-vpn if needed
 
 ### `429 Too Many Requests` on the proxy
 
-The rate limiter is per-IP. Symptoms: a client gets `{"error":{"type":"rate_limit","message":"rate limit exceeded, try again later"}}` with `Retry-After: 60`. Tune via `RATE_LIMIT` (default 60 / min).
+The rate limiter is per-IP, sharded 32-way (`middleware.RateLimiter` 32 `shard{mu,map}`, FNV-1a `shardFor`). Symptoms: a client gets `{"error":{"type":"rate_limit","message":"rate limit exceeded, try again later"}}` with `Retry-After: 60`. Tune via `RATE_LIMIT` (default 60 / min, `allow()` per shard, cleanup 5 min per shard).
 
-The rate limiter is **in-memory only**; restarting the proxy clears all counters.### Upstream returns 429 → pass-through
+The rate limiter is **in-memory only**; restarting the proxy clears all counters.
+
+### Upstream returns 429 → pass-through
 The `ChatService` forwards upstream responses — including 429 — to the client verbatim. There is no automatic retry or IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button). The client sees the provider's original 429 body and status.
 
 ### Switch between VPN and direct
@@ -135,12 +144,13 @@ Routing could not find a free upstream for the model. Verify:
 
 ### Dashboard shows `vpn ip: —`
 
-The VPN IP monitor (`internal/infrastructure/vpngate/controller.go::StartMonitor`) is unable to reach `https://api.ipify.org?format=json` through the SOCKS5 proxy. Common causes:
+The VPN IP monitor (`internal/infrastructure/vpn/provider.go::ipRefresher` + `tunnel.go::fetchPublicIP`, server list via `registry.go::getServers`/`pickWeighted`) is unable to reach `https://api.ipify.org?format=json` through the SOCKS5 proxy. Common causes:
 
-- `vpn` container not healthy (check `make logs svc=vpn`)
-- SOCKS5 port mismatch (verify `VPNGATE_SOCKS_PORT`)
+- `vpn` container not healthy (check `make logs svc=vpn`) or embedded `openvpn` missing (check `InstallHint()` / `provider.CurrentIP()=="direct"`)
+- SOCKS5 port mismatch (verify `VPNGATE_SOCKS_PORT`; `Config.IsDirect()` is single source, `Dialer.IsDirect()`)
+- Shared `http.Transport` pool exhausted (check `upstream.NewTransport` 50/20 idle settings)
 
-The monitor logs the current IP every 5 minutes. The dashboard polls `/api/health` every 3 s.
+The monitor refreshes IP every 15 s (`ipRefresher`) and logs. The dashboard polls `/api/health` every 3 s.
 
 ### `panic recovered` in logs
 
