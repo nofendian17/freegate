@@ -3,12 +3,14 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/translate/claude"
 )
@@ -20,18 +22,30 @@ type TokenUsage struct {
 	Total      int
 }
 
-func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
+func copyNormalizedWithContext(ctx context.Context, w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
 
 	if isStreaming {
 		rd := bufio.NewReader(resp.Body)
 		if isAnthropicSSE(rd) {
-			return normalizeClaudeStream(w, rd), nil
+			return normalizeClaudeStreamWithContext(ctx, w, rd), nil
 		}
-		return normalizeOpenAIStream(w, rd), nil
+		return normalizeOpenAIStreamWithContext(ctx, w, rd), nil
 	}
 	return normalizeJSON(w, resp.Body), nil
+}
+
+func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
+	return normalizeOpenAIStreamWithContext(context.Background(), dst, rd)
+}
+
+func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
+	return normalizeClaudeStreamWithContext(context.Background(), dst, src)
+}
+
+func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
+	return copyNormalizedWithContext(context.Background(), w, resp)
 }
 
 // isAnthropicSSE peeks at the stream to check if it starts with "event:",
@@ -44,7 +58,7 @@ func isAnthropicSSE(rd *bufio.Reader) bool {
 	return bytes.HasPrefix(peek, []byte("event:"))
 }
 
-func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
+func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	var usage TokenUsage
 
@@ -91,6 +105,12 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	}
 
 	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("stream cancelled", "error", ctx.Err())
+			return usage
+		default:
+		}
 		line, err := rd.ReadString('\n')
 		if err != nil && err != io.EOF {
 			slog.Warn("stream read error", "error", err)
@@ -355,13 +375,19 @@ func buildOpenAIChunk(id, model string, created int64, delta map[string]any) str
 // normalizeClaudeStream translates Anthropic/Claude SSE events into
 // OpenAI chat.completion.chunk SSE lines using the existing claude
 // streaming translator and writes them to dst.
-func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
+func normalizeClaudeStreamWithContext(ctx context.Context, dst io.Writer, src *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	state := claude.NewClaudeToOpenAIState()
 	var usage TokenUsage
 	stopped := false
 
 	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("claude stream cancelled", "error", ctx.Err())
+			return usage
+		default:
+		}
 		line, err := src.ReadString('\n')
 		if err != nil && err != io.EOF {
 			slog.Warn("claude stream read error", "error", err)
@@ -717,9 +743,14 @@ func syncReasoning(m map[string]interface{}) {
 // normalization. It owns the response body and closes it before
 // returning. TokenUsage is reported so callers can update metrics.
 func NormalizeResponse(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
+	return NormalizeResponseWithContext(context.Background(), w, resp)
+}
+
+// NormalizeResponseWithContext is context-aware variant that respects cancellation.
+func NormalizeResponseWithContext(ctx context.Context, w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	httputil.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	return copyNormalized(w, resp)
+	return copyNormalizedWithContext(ctx, w, resp)
 }
 
 // PassThroughError copies an upstream error response (429/5xx) to the
@@ -776,4 +807,33 @@ func truncateMessage(s string) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// Domain-aware variants — decouple application from net/http.
+
+func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
+	ct := resp.Header.Get("Content-Type")
+	isStreaming := strings.Contains(ct, "text/event-stream")
+	if isStreaming {
+		rd := bufio.NewReader(resp.Body)
+		if isAnthropicSSE(rd) {
+			return normalizeClaudeStreamWithContext(ctx, w, rd), nil
+		}
+		return normalizeOpenAIStreamWithContext(ctx, w, rd), nil
+	}
+	return normalizeJSON(w, resp.Body), nil
+}
+
+func NormalizeDomainResponseWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
+	httputil.CopyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	return copyNormalizedDomainWithContext(ctx, w, resp)
+}
+
+func PassThroughDomainError(w http.ResponseWriter, resp *domain.UpstreamResponse) string {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+	httputil.CopyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+	return extractErrorMessage(body)
 }

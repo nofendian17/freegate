@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/model"
 )
@@ -21,8 +22,12 @@ type LLM7Upstream struct {
 }
 
 func NewLLM7Upstream(baseURL string, d *Dialer) *LLM7Upstream {
+	return NewLLM7UpstreamWithTransport(baseURL, NewTransport(d))
+}
+
+func NewLLM7UpstreamWithTransport(baseURL string, tr *http.Transport) *LLM7Upstream {
 	return &LLM7Upstream{
-		client: NewHTTPClient(baseURL, []string{"unused"}, d, nil),
+		client: NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr),
 		cache:  NewModelCache(),
 	}
 }
@@ -45,12 +50,7 @@ func (u *LLM7Upstream) Match(modelID string) bool {
 	if modelID == "" {
 		return false
 	}
-	for _, m := range u.cache.Get() {
-		if m.ID == modelID {
-			return true
-		}
-	}
-	return false
+	return u.cache.Has(modelID)
 }
 
 // llm7Free reports whether the catalog entry is usable anonymously without a
@@ -93,6 +93,10 @@ func (u *LLM7Upstream) ListModels(ctx context.Context) ([]model.Model, error) {
 
 func (u *LLM7Upstream) Models() []model.Model { return u.cache.Get() }
 
-func (u *LLM7Upstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
-	return u.client.Post(ctx, "/chat/completions", body)
+func (u *LLM7Upstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
+	resp, err := u.client.Post(ctx, "/chat/completions", body)
+	if err != nil {
+		return nil, err
+	}
+	return domain.NewUpstreamResponse(resp), nil
 }

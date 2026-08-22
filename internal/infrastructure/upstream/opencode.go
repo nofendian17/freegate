@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/model"
 )
@@ -20,6 +21,10 @@ type OpenCodeUpstream struct {
 }
 
 func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
+	return NewOpenCodeUpstreamWithTransport(baseURL, apiKeys, NewTransport(d), freeAllowlist)
+}
+
+func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http.Transport, freeAllowlist []string) *OpenCodeUpstream {
 	// Mimic the headers the official OpenCode client sends for opencode
 	// provider models so the upstream treats requests as first-party.
 	headers := map[string]string{
@@ -37,7 +42,7 @@ func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowl
 		}
 	}
 	return &OpenCodeUpstream{
-		client:    NewHTTPClient(baseURL, apiKeys, d, headers),
+		client:    NewHTTPClientWithTransport(baseURL, apiKeys, headers, tr),
 		cache:     NewModelCache(),
 		allowlist: al,
 	}
@@ -107,8 +112,12 @@ func (o *OpenCodeUpstream) Models() []model.Model {
 	return o.cache.Get()
 }
 
-func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
-	return o.client.Post(ctx, "/chat/completions", body)
+func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
+	resp, err := o.client.Post(ctx, "/chat/completions", body)
+	if err != nil {
+		return nil, err
+	}
+	return domain.NewUpstreamResponse(resp), nil
 }
 
 // genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.

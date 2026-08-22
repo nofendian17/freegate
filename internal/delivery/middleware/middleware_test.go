@@ -58,10 +58,11 @@ func TestRateLimiter_ResetAfterMinute(t *testing.T) {
 	}
 
 	// Manually set lastSeen to 61 seconds ago
-	rl.mu.Lock()
-	v := rl.visitors[ip]
+	sh := rl.shardFor(ip)
+	sh.mu.Lock()
+	v := sh.visitors[ip]
 	v.lastSeen = time.Now().Add(-61 * time.Second)
-	rl.mu.Unlock()
+	sh.mu.Unlock()
 
 	if !rl.allow(ip) {
 		t.Fatal("expected request after reset to be allowed")

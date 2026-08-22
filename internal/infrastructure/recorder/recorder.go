@@ -25,9 +25,25 @@ type Recorder struct {
 }
 
 // NewRecorder creates a Recorder bound to a metrics-snapshot function.
+// Deprecated: use NewRecorderWithDeps for explicit wiring.
 func NewRecorder(metricsFn func() map[string]any) *Recorder {
+	return NewRecorderWithDeps(Deps{Metrics: metricsFn})
+}
+
+// Deps groups Recorder dependencies for constructor injection.
+type Deps struct {
+	Metrics func() map[string]any
+	Models  func() []model.Model
+	VPNIP   func() string
+}
+
+// NewRecorderWithDeps creates a Recorder with all dependencies wired at
+// construction time, avoiding temporal coupling via Set* setters.
+func NewRecorderWithDeps(d Deps) *Recorder {
 	return &Recorder{
-		metricsFn:  metricsFn,
+		metricsFn:  d.Metrics,
+		modelsFn:   d.Models,
+		vpnIPFn:    d.VPNIP,
 		requests:   ringbuffer.New[model.RequestLogEntry](100),
 		timeseries: ringbuffer.New[model.TimeseriesEntry](TimeseriesCapacity),
 		startedAt:  time.Now(),

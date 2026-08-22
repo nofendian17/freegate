@@ -1,10 +1,9 @@
 package upstream
 
 import (
-	"context"
-	"net/http"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/model"
 )
 
@@ -14,28 +13,21 @@ const (
 	MaxBackoff           = 5 * time.Minute
 )
 
-type Upstream interface {
-	Name() string
-	Match(modelID string) bool
-	ListModels(ctx context.Context) ([]model.Model, error)
-	ChatCompletion(ctx context.Context, body []byte) (*http.Response, error)
-	Models() []model.Model
-	Start(ctx context.Context, refreshInterval time.Duration)
-}
+type Upstream = domain.Upstream
 
 type Router struct {
-	upstreams       []Upstream
-	defaultUpstream Upstream
+	upstreams       []domain.Upstream
+	defaultUpstream domain.Upstream
 }
 
-func NewRouter(defaultUpstream Upstream, upstreams ...Upstream) *Router {
+func NewRouter(defaultUpstream domain.Upstream, upstreams ...domain.Upstream) *Router {
 	return &Router{
 		upstreams:       upstreams,
 		defaultUpstream: defaultUpstream,
 	}
 }
 
-func (r *Router) Select(modelID string) Upstream {
+func (r *Router) Select(modelID string) domain.Upstream {
 	for _, u := range r.upstreams {
 		if u.Match(modelID) {
 			return u

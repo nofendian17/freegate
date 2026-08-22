@@ -118,6 +118,13 @@ func EnsureStreamOptions(body []byte) ([]byte, error) {
 	return prepost.EnsureStreamOptions(body)
 }
 
+// PrepareForUpstream is the one-pass equivalent of NormalizeRoles +
+// NormalizeRequestReasoning + EnsureStreamOptions. It performs a single
+// JSON unmarshal/marshal instead of three, reducing allocs on the hot path.
+func PrepareForUpstream(body []byte) ([]byte, error) {
+	return prepost.PrepareUpstream(body)
+}
+
 func sourceToOpenAI(body []byte, source Format) ([]byte, error) {
 	switch source {
 	case FormatClaude:

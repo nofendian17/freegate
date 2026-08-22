@@ -49,6 +49,15 @@ type Config struct {
 	SOCKSAddr string
 }
 
+// IsDirect reports whether upstreams should bypass the VPN tunnel.
+func (c *Config) IsDirect() bool { return c.SOCKSAddr == "" }
+
+// IsSidecarMode reports whether docker sidecar mode is active (VPNGATE_HOST
+// set to non-loopback), kept for compat with docker-compose.
+func (c *Config) IsSidecarMode() bool {
+	return os.Getenv("VPNGATE_HOST") != "" && c.VPNGateHost != "127.0.0.1"
+}
+
 func Load() *Config {
 	cfg := &Config{
 		Port:      envInt("PORT", 1234),
@@ -105,7 +114,7 @@ func (c *Config) Validate() error {
 	if c.UpstreamURLLLM7 == "" {
 		errs = append(errs, "UPSTREAM_URL_LLM7 is required")
 	}
-	if c.VPNEnabled && c.SOCKSAddr == "" {
+	if c.VPNEnabled && c.SOCKSAddr == "" && c.VPNProvider != "direct" {
 		errs = append(errs, "SOCKSAddr must be set when VPN_ENABLED is true")
 	}
 	if c.VPNProvider != "auto" && c.VPNProvider != "vpngate" && c.VPNProvider != "direct" {
@@ -114,14 +123,17 @@ func (c *Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("PORT must be between 1 and 65535, got %d", c.Port))
 	}
-	if c.VPNGateSocksPort <= 0 || c.VPNGateSocksPort > 65535 {
-		errs = append(errs, fmt.Sprintf("VPNGATE_SOCKS_PORT must be between 1 and 65535, got %d", c.VPNGateSocksPort))
-	}
-	if c.VPNGateCtrlPort <= 0 || c.VPNGateCtrlPort > 65535 {
-		errs = append(errs, fmt.Sprintf("VPNGATE_CTRL_PORT must be between 1 and 65535, got %d", c.VPNGateCtrlPort))
-	}
-	if c.VPNGateRotateInterval <= 0 {
-		errs = append(errs, fmt.Sprintf("VPNGATE_ROTATE_INTERVAL must be positive, got %d", c.VPNGateRotateInterval))
+	// Deprecated VPN ports — only validate when VPN is enabled.
+	if c.VPNEnabled {
+		if c.VPNGateSocksPort <= 0 || c.VPNGateSocksPort > 65535 {
+			errs = append(errs, fmt.Sprintf("VPNGATE_SOCKS_PORT must be between 1 and 65535, got %d", c.VPNGateSocksPort))
+		}
+		if c.IsSidecarMode() && (c.VPNGateCtrlPort <= 0 || c.VPNGateCtrlPort > 65535) {
+			errs = append(errs, fmt.Sprintf("VPNGATE_CTRL_PORT must be between 1 and 65535, got %d", c.VPNGateCtrlPort))
+		}
+		if c.VPNGateRotateInterval <= 0 {
+			errs = append(errs, fmt.Sprintf("VPNGATE_ROTATE_INTERVAL must be positive, got %d", c.VPNGateRotateInterval))
+		}
 	}
 	if c.RateLimit <= 0 {
 		errs = append(errs, "RATE_LIMIT must be positive")

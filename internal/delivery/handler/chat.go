@@ -58,28 +58,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		body = translated
 	}
 
-	// Normalize roles for upstream compatibility (e.g., developer → system).
-	// This runs for all formats — the normalization is a no-op when no
-	// unsupported roles are present.
-	body, err = translate.NormalizeRoles(body)
-	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-
-	// Normalize reasoning fields: copy reasoning → reasoning_content for
-	// assistant messages that are missing reasoning_content. Required for
-	// DeepSeek thinking mode (deepseek-reasoner).
-	body, err = translate.NormalizeRequestReasoning(body)
-	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-
-	// Ensure stream_options is set alongside stream=true. Some providers
-	// (e.g. DeepSeek) require stream_options to be explicitly included
-	// when streaming is enabled.
-	body, err = translate.EnsureStreamOptions(body)
+	// One-pass upstream preparation: roles (developer→system),
+	// reasoning → reasoning_content, and stream_options. Previously three
+	// sequential JSON Marshal passes; now a single pass.
+	body, err = translate.PrepareForUpstream(body)
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
