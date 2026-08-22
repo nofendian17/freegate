@@ -12,7 +12,8 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 |----------|----------|---------|-------------|
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
-| `API_KEY` | No | (empty) | If non-empty, every `/v1/*` and `/ready` request must send a matching `Authorization: Bearer <key>` or `X-API-Key: <key>` header. Empty = no auth. |
+| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=16 chars. Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` and `/ready`. Generate: `openssl rand -hex 32`. Compared with `subtle.ConstantTimeCompare`. |
+| `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/ready`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). Empty = no API auth (admin still required for dashboard). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
 ## VPN (single-binary per-OS)
@@ -69,12 +70,16 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 ## Validation
 
 `config.Validate()` is called at startup. It rejects:
+- Empty or `<16 chars` `ADMIN_TOKEN` (`ADMIN_TOKEN is required`, `ADMIN_TOKEN must be at least 16 characters`)
+- `API_KEY` entries that are empty/whitespace after comma-split (`API_KEY entries must be non-empty`)
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
 - Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)
 - Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
 - `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `VPNGATE_CTRL_PORT` outside `1–65535` only in sidecar mode (`IsSidecarMode()`); `VPNGATE_ROTATE_INTERVAL` non-positive only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
 
 A failure prints a multi-line error and exits 1.
+
+Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, ADMIN_TOKEN)` hex (or header `X-Admin-Token`/`Bearer`); API auth is via `ApiAuth(apiKeys, adminToken)` checking each `API_KEY` entry then `ADMIN_TOKEN` superset with `subtle.ConstantTimeCompare`. Unauthenticated dashboard HTML redirects `302 /login?next=...`; HTMX/JSON gets `401 {"error":{"type":"unauthorized"}}`.
 
 ## Source-of-truth files
 

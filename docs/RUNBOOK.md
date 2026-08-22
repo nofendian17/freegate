@@ -22,10 +22,13 @@ docker compose build
 cat > .env <<EOF
 VPNGATE_COUNTRY=
 VPNGATE_MIN_SCORE=0
-API_KEY=$(openssl rand -hex 32)
+ADMIN_TOKEN=$(openssl rand -hex 32)
+API_KEY=$(openssl rand -hex 32),$(openssl rand -hex 32)
 LOG_LEVEL=info
 RATE_LIMIT=60
 EOF
+# ADMIN_TOKEN is required, >=16 chars — protects dashboard (/, /partials/*, /api/*) and is also valid for /v1/* (superset).
+# API_KEY is comma-separated, e.g. key1,key2 — any entry valid for /v1/*; empty = no API auth (dashboard still gated by ADMIN_TOKEN).
 
 # 3. Start
 docker compose up -d
@@ -58,12 +61,12 @@ The `vpn` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN): the 
 The default port binding is local-only. To expose:
 
 1. Edit `docker-compose.yml` and change the `ports:` mapping to your public interface (or remove `127.0.0.1:` prefix)
-2. Set `API_KEY` in `.env` — **the dashboard does not require auth, but the API does when `API_KEY` is set**
-3. Put a reverse proxy (Caddy, nginx, traefik) in front for TLS
+2. Set `ADMIN_TOKEN` in `.env` (required, >=16 chars, `openssl rand -hex 32`) — **the dashboard (`/`, `/partials/*`, `/api/*`) is always admin-only** (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`). For API access set `API_KEY` as comma-separated list, e.g. `key1,key2` — any entry valid for `/v1/*`; `ADMIN_TOKEN` also valid there (superset).
+3. Put a reverse proxy (Caddy, nginx, traefik) in front for TLS (cookie `Secure` when `X-Forwarded-Proto: https` or `r.TLS != nil`, `SameSite=Lax`, `HttpOnly`)
 
 ## Health checks
 
-Three layered endpoints, all `GET`, all unauthenticated by default (auth is on `/v1/*` and `/ready` only when `API_KEY` is set):
+Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/healthz` public; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/vpn/*` require `AdminAuth` cookie/header; `/v1/*` and `/ready` require `ApiAuth` API key list or `ADMIN_TOKEN` superset):
 
 | Endpoint | Used by | Returns |
 |----------|---------|---------|
@@ -79,9 +82,20 @@ Docker healthchecks:
 Quick manual probe:
 
 ```bash
-curl -s http://localhost:1234/ready | jq
-curl -s http://localhost:1234/api/health | jq
-curl -s http://localhost:1234/v1/models | jq '.data | length'  # should be > 0
+# Public login (no auth):
+curl -s http://localhost:1234/login | head
+# Dashboard requires admin (cookie or header), else 302 to /login:
+curl -i http://localhost:1234/ | head -n 5          # 302 /login?next=%2F
+curl -s -H "X-Admin-Token: $ADMIN_TOKEN" http://localhost:1234/api/health | jq
+# Or browser: GET /login → POST /login {admin_token} → Set-Cookie fg_admin=HMAC(ADMIN_TOKEN) → 302 / → dashboard
+# Login via curl (sets cookie):
+curl -i -X POST -d "admin_token=$ADMIN_TOKEN" http://localhost:1234/login
+
+# API requires API_KEY list or ADMIN_TOKEN (superset):
+curl -s -H "X-API-Key: key1" http://localhost:1234/v1/models | jq '.data | length'  # any of key1,key2
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:1234/v1/models | jq '.data | length'
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:1234/ready | jq
+curl -s http://localhost:1234/api/health | jq        # requires admin header/cookie above
 ```
 
 ## Metrics
@@ -245,9 +259,10 @@ docker compose up -d
 
 ## Security checklist (production)
 
-- [ ] `API_KEY` is set to a high-entropy random value
+- [ ] `ADMIN_TOKEN` is set (required, >=16 chars, `openssl rand -hex 32`) — dashboard (`/`, `/partials/*`, `/api/*`) is admin-only via `AdminAuth` (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`)
+- [ ] `API_KEY` is comma-separated high-entropy values (e.g. `key1,key2`), `ADMIN_TOKEN` also valid for `/v1/*` (superset); do not log tokens or cookie values
 - [ ] `VPNGATE_MIN_SCORE` is set high enough to prefer reputable relays
-- [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS
+- [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS (cookie `Secure` when TLS, `HttpOnly`, `SameSite=Lax`)
 - [ ] `vpn` container is on an internal network (`fg-net`); SOCKS port is not exposed to the host
 - [ ] `LOG_LEVEL` is `info` (not `debug`) in production
 - [ ] Docker socket is not mounted into either container
