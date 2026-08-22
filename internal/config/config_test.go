@@ -28,6 +28,14 @@ func TestValidate_EmptyKiloURL(t *testing.T) {
 	}
 }
 
+func TestValidate_EmptyLLM7URL(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.UpstreamURLLLM7 = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty UPSTREAM_URL_LLM7")
+	}
+}
+
 func TestValidate_InvalidPort(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Port = 99999
@@ -114,6 +122,8 @@ func defaultConfig() *Config {
 
 		UpstreamURLKilo: "https://api.kilo.ai/api/openrouter",
 		UpstreamKeyKilo: "anonymous",
+
+		UpstreamURLLLM7: "https://api.llm7.io/v1",
 
 		UpstreamDefault: "opencode",
 	}

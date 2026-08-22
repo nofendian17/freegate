@@ -81,6 +81,9 @@ func (c *Config) Validate() error {
 	if c.UpstreamURLKilo == "" {
 		errs = append(errs, "UPSTREAM_URL_KILO is required")
 	}
+	if c.UpstreamURLLLM7 == "" {
+		errs = append(errs, "UPSTREAM_URL_LLM7 is required")
+	}
 	if c.Port <= 0 || c.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("PORT must be between 1 and 65535, got %d", c.Port))
 	}

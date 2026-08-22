@@ -51,6 +51,13 @@ The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`
 | `UPSTREAM_KEY_KILO` | No | `anonymous` | Bearer token attached to every Kilo request |
 | `UPSTREAM_REFRESH_KILO` | No | `60` | How often to refresh the Kilo `/models` catalog (seconds) |
 
+### LLM7 (keyless gateway)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `UPSTREAM_URL_LLM7` | No | `https://api.llm7.io/v1` | LLM7 keyless gateway base URL (`api.llm7.io/v1`). Any non-empty bearer works; freegate sends `unused`. |
+| `UPSTREAM_REFRESH_LLM7` | No | `300` | How often to refresh the LLM7 `/models` catalog (seconds). Last-known models stay cached on failure. Frequency is lower (300s) to reduce pressure on free relays. |
+
 ### Routing
 
 | Variable | Required | Default | Description |
@@ -60,7 +67,7 @@ The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`
 ## Validation
 
 `config.Validate()` is called at startup. It rejects:
-- Empty `UPSTREAM_URL_OPENCODE` or `UPSTREAM_URL_KILO`
+- Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
 - `PORT`, `VPNGATE_SOCKS_PORT`, or `VPNGATE_CTRL_PORT` outside `1–65535`
 - Non-positive `VPNGATE_ROTATE_INTERVAL` or `RATE_LIMIT`
 

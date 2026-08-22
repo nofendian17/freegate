@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"freegate/internal/infrastructure/upstream/types"
@@ -12,8 +13,8 @@ import (
 )
 
 // LLM7 (api.llm7.io) is a keyless free gateway: any non-empty bearer token
-// works, "unused" by convention. The live catalog replaces the seeded list
-// on every refresh; an unreachable catalog keeps the last-known models.
+// works, "unused" by convention. The live catalog replaces the last-known
+// list on every refresh; an unreachable catalog keeps the last-known models.
 type LLM7Upstream struct {
 	client *HTTPClient
 	cache  *ModelCache
@@ -58,7 +59,7 @@ func llm7Free(m types.LLM7Model) bool {
 	if m.UsageBasedOnly != nil {
 		return !*m.UsageBasedOnly
 	}
-	return m.Tier == "turbo"
+	return strings.EqualFold(m.Tier, "turbo")
 }
 
 func (u *LLM7Upstream) ListModels(ctx context.Context) ([]model.Model, error) {
