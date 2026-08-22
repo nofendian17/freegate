@@ -6,12 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"net"
 	"net/http"
 	"strings"
-
-	"golang.org/x/net/proxy"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,23 +56,38 @@ func (k *keyCooldown) isLimited(key string) bool {
 	return true
 }
 
-func NewHTTPClient(baseURL string, apiKeys []string, socksAddr string, headers map[string]string) *HTTPClient {
+func NewHTTPClient(baseURL string, apiKeys []string, d *Dialer, headers map[string]string) *HTTPClient {
 	hc := &http.Client{Timeout: 0}
-	if socksAddr != "" {
-		dialer, err := proxy.SOCKS5("tcp", socksAddr, nil, proxy.Direct)
-		if err != nil {
-			slog.Warn("SOCKS5 dialer failed, using direct connection", "error", err)
-		} else {
-			tr := &http.Transport{ForceAttemptHTTP2: false}
-			if dc, ok := dialer.(proxy.ContextDialer); ok {
-				tr.DialContext = dc.DialContext
-			} else {
-				tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				}
-			}
-			hc.Transport = tr
+	if d != nil {
+		tr := &http.Transport{
+			ForceAttemptHTTP2: false,
+			// Bound only the connection phase: a dead VPN tunnel or a
+			// slow relay should fail fast instead of hanging client
+			// requests. Streaming responses are unaffected because the
+			// body streams after the header arrives.
+			TLSHandshakeTimeout: 10 * time.Second,
+			// Non-streaming completions send no data until the provider
+			// has generated the whole response, and free relays are slow —
+			// 30s routinely had to be cut short. Keep a wide safety cap:
+			// the http.Client.Timeout is 0 and the request context comes
+			// from the client, so a client-side cancel still aborts the
+			// upstream call immediately.
+			ResponseHeaderTimeout: 300 * time.Second,
+			// Every connection pays for a fresh SOCKS5 handshake through
+			// the (often slow) VPN relay, so keep-alives matter far more
+			// here than for a direct client. The zero-value Transport
+			// only keeps 2 idle connections per host, which forces a new
+			// tunnel handshake for every request beyond the first couple
+			// of concurrent ones. Raise the per-host pool and cap the
+			// total, and keep idle connections short-lived so a pooled
+			// connection doesn't outlive an IP rotation (the old tunnel
+			// interface goes down and any conn still pinned to it dies).
+			MaxIdleConns:        50,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     60 * time.Second,
 		}
+		tr.DialContext = d.DialContext
+		hc.Transport = tr
 	}
 	if headers == nil {
 		headers = make(map[string]string)

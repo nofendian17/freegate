@@ -1,6 +1,6 @@
 # Environment Variables
 
-freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `TOR_HOST:PORT`), or simply unset.
+freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `VPNGATE_HOST:VPNGATE_SOCKS_PORT`), or simply unset.
 
 The authoritative list lives in `internal/config/config.go::Load`; this file is generated from it and `.env.example`. If you change one, change the other.
 
@@ -15,16 +15,24 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `API_KEY` | No | (empty) | If non-empty, every `/v1/*` and `/ready` request must send a matching `Authorization: Bearer <key>` or `X-API-Key: <key>` header. Empty = no auth. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP. Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
-## Tor
+## VPN (single-binary per-OS)
+
+freegate now runs as a **single binary** with embedded VPNGate per OS (linux/darwin/windows). The binary auto-detects `runtime.GOOS`, probes for `openvpn` (`openvpn.exe` on Windows, `/opt/homebrew/bin/openvpn` on macOS) and starts an in-process OpenVPN tunnel + SOCKS5 on `127.0.0.1:9050`. If `openvpn` is missing or `tun` permission fails, it falls back to **direct** automatically. Toggle live from the dashboard or via `VPN_ENABLED=false` / `--vpn=false`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TOR_HOST` | No | `127.0.0.1` | SOCKS5 / control host. In docker-compose this is set to the `tor` service name. |
-| `TOR_PORT` | No | `9050` | SOCKS5 port used for all upstream traffic |
-| `TOR_CTRL_PORT` | No | `9051` | Tor control port (used for `SIGNAL NEWNYM` on 429 retries) |
-| `TOR_PASS` | No | (empty) | Tor control password. The `entrypoint-tor.sh` script generates one randomly if unset. |
+| `VPN_ENABLED` | No | `true` | Enable embedded VPN. `false` = direct connections, no tunnel. Also overridable via `--vpn=false` flag. |
+| `VPN_PROVIDER` | No | `auto` | VPN provider: `auto` (GOOS-aware), `vpngate`, or `direct`. |
+| `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port for in-process tunnel (127.0.0.1:9050) |
+| `VPNGATE_CTRL_PORT` | No | `8080` | Deprecated: legacy sidecar control port (kept for docker compat) |
+| `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
+| `VPNGATE_HOST` | No | `127.0.0.1` | Deprecated: docker sidecar host. If set (e.g. `vpn` in compose), `SOCKSAddr` honors it; otherwise 127.0.0.1. |
 
-The internal `SOCKSAddr` field is derived as `TOR_HOST:TOR_PORT`.
+The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true` (or `VPNGATE_HOST:VPNGATE_SOCKS_PORT` if `VPNGATE_HOST` is explicitly set for docker compat); empty when direct.
+
+`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are now applied in-process by the Provider; no sidecar env needed.
+
+`VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
 
 ## Upstreams
 
@@ -45,6 +53,13 @@ The internal `SOCKSAddr` field is derived as `TOR_HOST:TOR_PORT`.
 | `UPSTREAM_KEY_KILO` | No | `anonymous` | Bearer token attached to every Kilo request |
 | `UPSTREAM_REFRESH_KILO` | No | `60` | How often to refresh the Kilo `/models` catalog (seconds) |
 
+### LLM7 (keyless gateway)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `UPSTREAM_URL_LLM7` | No | `https://api.llm7.io/v1` | LLM7 keyless gateway base URL (`api.llm7.io/v1`). Any non-empty bearer works; freegate sends `unused`. |
+| `UPSTREAM_REFRESH_LLM7` | No | `300` | How often to refresh the LLM7 `/models` catalog (seconds). Last-known models stay cached on failure. Frequency is lower (300s) to reduce pressure on free relays. |
+
 ### Routing
 
 | Variable | Required | Default | Description |
@@ -54,17 +69,20 @@ The internal `SOCKSAddr` field is derived as `TOR_HOST:TOR_PORT`.
 ## Validation
 
 `config.Validate()` is called at startup. It rejects:
-- Empty `UPSTREAM_URL_OPENCODE` or `UPSTREAM_URL_KILO`
-- `PORT`, `TOR_PORT`, or `TOR_CTRL_PORT` outside `1–65535`
-- Non-positive `RATE_LIMIT`
+- Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
+- Empty `SOCKSAddr` when `VPN_ENABLED=true`
+- Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
+- `PORT`, `VPNGATE_SOCKS_PORT`, or `VPNGATE_CTRL_PORT` outside `1–65535`
+- Non-positive `VPNGATE_ROTATE_INTERVAL` or `RATE_LIMIT`
 
 A failure prints a multi-line error and exits 1.
 
 ## Source-of-truth files
 
 - `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`
+- `internal/infrastructure/vpn/` — Provider per-OS + SOCKS in-process
 - `.env.example` — annotated example
-- `docker-compose.yml` — wires these into the `proxy` and `tor` services
-- `entrypoint-tor.sh` — auto-generates a `TOR_PASS` if none is provided
+- `docker-compose.yml` — legacy containerized path (proxy + vpn sidecar)
+- `cmd/vpngate-supervisor/main.go` — legacy sidecar (deprecated, kept for docker compat)
 
 <!-- /AUTO-GENERATED -->

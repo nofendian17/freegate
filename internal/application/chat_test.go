@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"freegate/internal/domain"
 )
@@ -22,10 +21,10 @@ func (m *mockRouter) Select(modelID string) (domain.Upstream, error) {
 }
 
 type mockUpstream struct {
-	name      string
-	responses []*http.Response
-	errors    []error
-	calls     int
+	name     string
+	response *http.Response
+	err      error
+	calls    int
 }
 
 func (m *mockUpstream) Name() string { return m.name }
@@ -36,26 +35,14 @@ func (m *mockUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	return nil, nil
 }
 func (m *mockUpstream) ChatCompletion(ctx context.Context, req domain.ChatRequest) (*http.Response, error) {
-	i := m.calls
 	m.calls++
-	if i < len(m.errors) && m.errors[i] != nil {
-		return nil, m.errors[i]
+	if m.err != nil {
+		return nil, m.err
 	}
-	return m.responses[i], nil
+	return m.response, nil
 }
 func (m *mockUpstream) Models() []domain.Model    { return nil }
 func (m *mockUpstream) Start(ctx context.Context) {}
-
-type mockIPRotator struct {
-	forceNewIPCalls int
-}
-
-func (m *mockIPRotator) NewIP() error { return nil }
-func (m *mockIPRotator) ForceNewIP() error {
-	m.forceNewIPCalls++
-	return nil
-}
-func (m *mockIPRotator) CurrentIP() string { return "127.0.0.1" }
 
 func TestChatServiceProxyChatSuccess(t *testing.T) {
 	resp := &http.Response{
@@ -63,11 +50,10 @@ func TestChatServiceProxyChatSuccess(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader("{}")),
 		Header:     http.Header{},
 	}
-	upstream := &mockUpstream{name: "test", responses: []*http.Response{resp}}
+	upstream := &mockUpstream{name: "test", response: resp}
 	router := &mockRouter{upstream: upstream}
-	ipRotator := &mockIPRotator{}
 
-	cs := NewChatService(router, ipRotator, nil, 0, 0)
+	cs := NewChatService(router, nil)
 	w := &recordingResponseWriter{header: http.Header{}}
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
@@ -80,25 +66,20 @@ func TestChatServiceProxyChatSuccess(t *testing.T) {
 	}
 }
 
-func TestChatServiceProxyChatRetriesOn429(t *testing.T) {
-	resp429 := &http.Response{
+// TestChatServiceProxyChatPassesThrough429 verifies that a 429 from the
+// upstream is forwarded to the client unchanged (no automatic retry or IP
+// rotation — the user picks the VPN server manually).
+func TestChatServiceProxyChatPassesThrough429(t *testing.T) {
+	body := `{"error":{"message":"Rate limit exceeded. Please try again later."}}`
+	resp := &http.Response{
 		StatusCode: 429,
-		Body:       io.NopCloser(strings.NewReader("")),
-		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
 	}
-	resp200 := &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(strings.NewReader("{}")),
-		Header:     http.Header{},
-	}
-	upstream := &mockUpstream{
-		name:      "test",
-		responses: []*http.Response{resp429, resp200},
-	}
+	upstream := &mockUpstream{name: "test", response: resp}
 	router := &mockRouter{upstream: upstream}
-	ipRotator := &mockIPRotator{}
 
-	cs := NewChatService(router, ipRotator, nil, 1, 10*time.Millisecond)
+	cs := NewChatService(router, nil)
 	w := &recordingResponseWriter{header: http.Header{}}
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
@@ -106,77 +87,32 @@ func TestChatServiceProxyChatRetriesOn429(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProxyChat failed: %v", err)
 	}
-	if upstream.calls != 2 {
-		t.Errorf("expected 2 upstream calls, got %d", upstream.calls)
+	if upstream.calls != 1 {
+		t.Errorf("expected exactly 1 upstream call (no retry), got %d", upstream.calls)
 	}
-	if ipRotator.forceNewIPCalls != 1 {
-		t.Errorf("expected 1 ForceNewIP call, got %d", ipRotator.forceNewIPCalls)
+	if w.status != 429 {
+		t.Errorf("expected status 429 written to client, got %d", w.status)
 	}
-}
-
-func TestChatServiceProxyChatClosesBodyOn429(t *testing.T) {
-	closed := false
-	body := &closeTracker{ReadCloser: io.NopCloser(strings.NewReader("")), onClose: func() { closed = true }}
-	resp429 := &http.Response{StatusCode: 429, Body: body, Header: http.Header{}}
-	resp200 := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("{}")), Header: http.Header{}}
-	upstream := &mockUpstream{name: "test", responses: []*http.Response{resp429, resp200}}
-	router := &mockRouter{upstream: upstream}
-	ipRotator := &mockIPRotator{}
-
-	cs := NewChatService(router, ipRotator, nil, 1, 10*time.Millisecond)
-	w := &recordingResponseWriter{header: http.Header{}}
-	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	_ = cs.ProxyChat(context.Background(), w, r, "test-model", []byte("{}"))
-
-	if !closed {
-		t.Error("expected 429 response body to be closed before retry")
+	if !strings.Contains(string(w.body), "Rate limit exceeded") {
+		t.Errorf("expected provider 429 body to pass through, got %q", string(w.body))
 	}
 }
 
-// TestChatServiceProxyChatBypassProxy verifies that with a nil ipRotator
-// (bypass-proxy mode), 429 retries still occur but ForceNewIP is never called.
-func TestChatServiceProxyChatBypassProxy(t *testing.T) {
-	resp429 := &http.Response{
-		StatusCode: 429,
-		Body:       io.NopCloser(strings.NewReader("")),
-		Header:     http.Header{},
-	}
-	resp200 := &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(strings.NewReader("{}")),
-		Header:     http.Header{},
-	}
-	upstream := &mockUpstream{
-		name:      "test",
-		responses: []*http.Response{resp429, resp200},
-	}
+func TestChatServiceProxyChatUpstreamError(t *testing.T) {
+	upstream := &mockUpstream{name: "test", err: context.DeadlineExceeded}
 	router := &mockRouter{upstream: upstream}
 
-	// nil ipRotator = bypass proxy mode
-	cs := NewChatService(router, nil, nil, 1, 10*time.Millisecond)
+	cs := NewChatService(router, nil)
 	w := &recordingResponseWriter{header: http.Header{}}
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
 	err := cs.ProxyChat(context.Background(), w, r, "test-model", []byte("{}"))
-	if err != nil {
-		t.Fatalf("ProxyChat failed: %v", err)
+	if err == nil {
+		t.Fatal("expected error from transport failure")
 	}
-	// Retry on 429 should still work
-	if upstream.calls != 2 {
-		t.Errorf("expected 2 upstream calls (retry without IP rotation), got %d", upstream.calls)
+	if upstream.calls != 1 {
+		t.Errorf("expected 1 upstream call, got %d", upstream.calls)
 	}
-}
-
-type closeTracker struct {
-	io.ReadCloser
-	onClose func()
-}
-
-func (c *closeTracker) Close() error {
-	if c.onClose != nil {
-		c.onClose()
-	}
-	return c.ReadCloser.Close()
 }
 
 type recordingResponseWriter struct {

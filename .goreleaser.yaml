@@ -15,6 +15,9 @@ builds:
     goarch:
       - amd64
       - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
@@ -49,14 +52,25 @@ release:
     owner: nofendian17
     name: freegate
   footer: |
-    ## Running without Tor
+    ## Single binary (no Docker)
 
-    freegate routes all upstream traffic through a Tor SOCKS5 proxy by default.
-    If you are **not** running a Tor proxy, set:
+    freegate is now a single binary with embedded VPNGate per OS
+    (linux/darwin/windows). No `vpn` sidecar is required. The binary
+    auto-detects `runtime.GOOS` and probes for `openvpn` (`openvpn.exe` on
+    Windows). If `openvpn` is missing or `tun` permission fails, it falls
+    back to direct mode automatically.
 
     ```bash
-    BYPASS_PROXY=true
+    # single binary (embedded VPN, requires sudo/Admin for tun)
+    sudo ./freegate --port 1234
+    sudo ./freegate --vpn=false --port 1234   # direct, no VPN
+
+    # env alternative
+    VPN_ENABLED=false ./freegate
+    VPN_PROVIDER=direct ./freegate
     ```
 
-    (in your environment or `.env`) so freegate connects directly to the
-    upstreams. When `BYPASS_PROXY=true`, IP rotation on `429` is also disabled.
+    ## Docker (legacy)
+
+    `docker-compose.yml` (proxy + vpn sidecar) still works for containerized
+    deployments. Set `VPNGATE_HOST=vpn` to keep the sidecar path.

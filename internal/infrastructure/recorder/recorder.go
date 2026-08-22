@@ -20,7 +20,7 @@ type Recorder struct {
 	requests   *ringbuffer.RingBuffer[model.RequestLogEntry]
 	timeseries *ringbuffer.RingBuffer[model.TimeseriesEntry]
 	modelsFn   func() []model.Model
-	torIPFn    func() string
+	vpnIPFn    func() string
 	startedAt  time.Time
 }
 
@@ -72,9 +72,9 @@ func (r *Recorder) SetModelsFunc(fn func() []model.Model) {
 	r.modelsFn = fn
 }
 
-// SetTorIPFunc wires a callback that returns the current Tor exit IP.
-func (r *Recorder) SetTorIPFunc(fn func() string) {
-	r.torIPFn = fn
+// SetVPNIPFunc wires a callback that returns the current VPN tunnel IP.
+func (r *Recorder) SetVPNIPFunc(fn func() string) {
+	r.vpnIPFn = fn
 }
 
 // Models returns the current model list, or empty if no callback is set.
@@ -85,12 +85,12 @@ func (r *Recorder) Models() []model.Model {
 	return r.modelsFn()
 }
 
-// TorIP returns the current Tor exit IP, or empty if no callback is set.
-func (r *Recorder) TorIP() string {
-	if r.torIPFn == nil {
+// VPNIP returns the current VPN tunnel IP, or empty if no callback is set.
+func (r *Recorder) VPNIP() string {
+	if r.vpnIPFn == nil {
 		return ""
 	}
-	return r.torIPFn()
+	return r.vpnIPFn()
 }
 
 // Metrics returns the current metrics snapshot.
@@ -101,12 +101,9 @@ func (r *Recorder) Metrics() map[string]any {
 	return r.metricsFn()
 }
 
-// Start launches the background timeseries sampler. Cancel ctx to stop it.
+// Start blocks and runs the background timeseries sampler until ctx is
+// cancelled. Call it from a goroutine that is tracked by a WaitGroup.
 func (r *Recorder) Start(ctx context.Context) {
-	go r.sampleLoop(ctx)
-}
-
-func (r *Recorder) sampleLoop(ctx context.Context) {
 	ticker := time.NewTicker(TimeseriesInterval)
 	defer ticker.Stop()
 	for {

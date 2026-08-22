@@ -72,6 +72,38 @@ func TestProcessChunkReasoning(t *testing.T) {
 	}
 }
 
+// TestProcessChunkReasoning_SignatureOnClose verifies that closing a
+// thinking block (by switching to text content) emits a signature_delta
+// event before the content_block_stop, matching Anthropic's documented
+// streaming shape (a thinking block always gets a signature_delta right
+// before it closes).
+func TestProcessChunkReasoning_SignatureOnClose(t *testing.T) {
+	state := NewStreamState()
+
+	ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{
+			"reasoning_content": "thinking step by step",
+		}}},
+	}, state)
+
+	// Switching to text content closes the open thinking block.
+	events := ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{
+			"content": "The answer is 42.",
+		}}},
+	}, state)
+
+	joined := strings.Join(events, "")
+	sigIdx := strings.Index(joined, "signature_delta")
+	stopIdx := strings.Index(joined, "content_block_stop")
+	if sigIdx == -1 {
+		t.Fatalf("expected a signature_delta event before closing the thinking block, got: %s", joined)
+	}
+	if stopIdx == -1 || sigIdx > stopIdx {
+		t.Errorf("expected signature_delta to precede content_block_stop, got: %s", joined)
+	}
+}
+
 func TestProcessChunkFinishStop(t *testing.T) {
 	state := NewStreamState()
 
@@ -579,7 +611,6 @@ func TestProcessChunk_DuplicateToolCalls(t *testing.T) {
 		t.Errorf("expected second tool call to have id = dup_id_1, events: %v", events2)
 	}
 }
-
 
 func TestRepairToolArgs_NormalJSON(t *testing.T) {
 	in := `{"a":1}`

@@ -7,7 +7,7 @@ import (
 )
 
 func TestKilo_Match_PrefixInCache(t *testing.T) {
-	k := NewKiloUpstream("", "", "")
+	k := NewKiloUpstream("", "", nil)
 	k.cache.Set([]model.Model{
 		{ID: "kilo-auto/free", Provider: "kilo"},
 		{ID: "openrouter/owl-alpha", Provider: "kilo"},
@@ -36,7 +36,7 @@ func TestKilo_Match_PrefixInCache(t *testing.T) {
 }
 
 func TestKilo_Match_FreeSuffixInCache(t *testing.T) {
-	k := NewKiloUpstream("", "", "")
+	k := NewKiloUpstream("", "", nil)
 	k.cache.Set([]model.Model{
 		{ID: "nvidia/nemotron-3-super-120b-a12b:free", Provider: "kilo"},
 		{ID: "poolside/laguna-m.1:free", Provider: "kilo"},
@@ -67,7 +67,7 @@ func TestKilo_Match_FreeSuffixInCache(t *testing.T) {
 }
 
 func TestKilo_Match_EmptyCache(t *testing.T) {
-	k := NewKiloUpstream("", "", "")
+	k := NewKiloUpstream("", "", nil)
 
 	if k.Match("kilo-auto/free") {
 		t.Error("expected no match when cache is empty")

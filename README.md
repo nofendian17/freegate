@@ -1,32 +1,59 @@
 # freegate
 
-Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Tor.
+Multi-upstream OpenAI-compatible API proxy for free AI models, routed through a rotating VPNGate tunnel.
 
-freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All traffic goes through Tor SOCKS5 for anonymity. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
 - **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
-- **Tor by default** — all upstream traffic through Tor SOCKS5 (`:9050`); 429 retries rotate Tor IP. Set `BYPASS_PROXY=true` to disable Tor and go direct
+- **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); pick any relay server from the dashboard (or rotate to a random one), or switch to **direct** (no tunnel) with one click — no automatic IP rotation on 429
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
 - **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
-- **Tor IP monitoring** — current Tor circuit exit IP shown in dashboard header, refreshed every 3s
+- **VPN IP monitoring** — current tunnel exit IP shown in dashboard header, refreshed every 3s
+- **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button and a **direct** (no-VPN) option
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Optional auth** — API key validation via `Authorization: Bearer <key>` or `X-API-Key: <key>` header
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
-- **Docker Compose** — single command to start both proxy and Tor
+- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`) — legacy, still works
+- **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
 
 ## Quick Start
 
+**Single binary (no Docker):**
+```bash
+# linux / macOS (embedded VPN, needs sudo for tun)
+sudo ./freegate --port 1234
+# direct without VPN
+./freegate --vpn=false --port 1234
+# windows (Admin PowerShell)
+.\freegate.exe --port 1234
+```
+
+**Docker (legacy):**
 ```bash
 docker compose up -d
 ```
 
 The proxy will be available at `http://localhost:1234`.
+
+### Prerequisites for VPN mode (single binary)
+
+Direct binary embeds VPNGate per OS (`runtime.GOOS` → `openvpn` probe) and falls back to `direct` if dependency missing. Dashboard `/api/vpn/status` returns `install_hint` when binary not found.
+
+| OS | Dependency | Install | Notes |
+|----|------------|---------|-------|
+| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` (`Needs `sudo ./freegate`) |
+| **darwin** | `openvpn` via Homebrew | `brew install openvpn` | Probes `openvpn`, `/opt/homebrew/bin/openvpn`, `/usr/local/bin/openvpn`; needs `sudo` for `utun` |
+| **windows** | `OpenVPN` + TAP-Windows6 | `winget install OpenVPNTechnologies.OpenVPN` <br> `choco install openvpn` | Run `.\freegate.exe` as **Administrator** for TAP |
+
+If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves `34` models via direct.
+
+To force direct without VPN: `./freegate --vpn=false` or `VPN_ENABLED=false`.
 
 A read-only terminal-style dashboard is served at **`http://localhost:1234/`** — see [Dashboard](#dashboard) below.
 
@@ -67,16 +94,18 @@ by upstream truth, not by a hard-coded prefix list.
 
 ## Configuration
 
-All settings are environment variables:
+All settings are environment variables (`internal/config/config.go:Load` is source of truth):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `1234` | Server port |
-| `TOR_HOST` | `127.0.0.1` | Tor SOCKS host |
-| `TOR_PORT` | `9050` | Tor SOCKS port |
-| `TOR_CTRL_PORT` | `9051` | Tor control port |
-| `TOR_PASS` | (empty) | Tor control password |
-| `BYPASS_PROXY` | `false` | Set to `true` to bypass Tor entirely — direct connections, no IP rotation on 429 |
+| `VPN_ENABLED` | `true` | Enable embedded VPN per OS. `false` = direct connections. Also `--vpn=false` flag. |
+| `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
+| `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
+| `VPNGATE_CTRL_PORT` | `8080` | Deprecated: legacy sidecar control port (kept for `docker-compose` compat) |
+| `VPNGATE_HOST` | `127.0.0.1` | Deprecated: sidecar host (`vpn` in compose → `vpn:9050`); if set, `SOCKSAddr` honors it, else `127.0.0.1:9050` |
+| `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
+| — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `API_KEY` | (empty) | Optional auth key; empty = no auth |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
@@ -157,7 +186,7 @@ The dashboard follows the **TerminalUI** design system:
 - **Upstream split** — opencode and kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
 - **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
-- **Tor exit IP** — current Tor circuit IP displayed in header, refreshed every 3s
+- **VPN exit IP** — current tunnel IP displayed in header, refreshed every 3s
 - **API Endpoints card** — quick reference for available REST endpoints
 - **Health badge** — green square dot when models are loaded, amber when empty
 - **Mobile responsive** — adapts layout for small screens (compact nav grid, 2-col metrics, tighter spacing)
@@ -171,7 +200,7 @@ The dashboard follows the **TerminalUI** design system:
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
 | `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo` |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
-| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, tor_ip}` |
+| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
 | `GET /index.html` | Redirects to `/` |
 
@@ -211,9 +240,9 @@ flowchart TB
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 
-    subgraph Tor["Tor SOCKS5 (:9050)"]
-        Tor1["Circuit A"]
-        Tor2["Circuit B"]
+    subgraph VPN["VPNGate (per-OS single binary: SOCKS5 127.0.0.1:9050) / legacy vpn sidecar"]
+        S1["OpenVPN relay A"]
+        S2["OpenVPN relay B"]
     end
 
     subgraph Upstreams["Upstreams"]
@@ -223,10 +252,10 @@ flowchart TB
 
     CLI --> Router
     Router --> Proxy
-    Proxy --> Tor1
-    Proxy --> Tor2
-    Tor1 --> OC
-    Tor2 --> Kilo
+    Proxy --> S1
+    Proxy --> S2
+    S1 --> OC
+    S2 --> Kilo
     Proxy -.->|"log entry"| Recorder
     Recorder -.->|"reads"| Dashboard
     Browser --> Dashboard
@@ -253,7 +282,7 @@ freegate
 │   │   ├── proxy/            # Upstream-agnostic normalization helpers
 │   │   ├── recorder/         # Request log + timeseries sampler
 │   │   ├── ringbuffer/       # Generic typed ring buffer
-│   │   ├── tor/              # Tor controller for IP rotation + monitoring
+│   │   ├── vpngate/          # VPNGate controller (IP rotation via supervisor API)
 │   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo)
 │   ├── model/                # Shared data types (request log entries, timeseries entries)
 │   ├── server/               # HTTP server bootstrap (wiring + lifecycle)
@@ -268,9 +297,11 @@ freegate
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
-├── docker-compose.yml        # Proxy + Tor containers
-├── Dockerfile                # Multi-stage Go build
-├── Dockerfile.tor            # Tor daemon with health check
+├── internal/infrastructure/vpn/ # Embedded VPN per OS (provider.go + provider_{linux,darwin,windows}.go + SOCKS in-process)
+├── cmd/vpngate-supervisor/   # Legacy VPN sidecar: openvpn tunnel + SOCKS5 + control API (docker only)
+├── docker-compose.yml        # Proxy + VPN containers (legacy, still works)
+├── Dockerfile                # Multi-stage Go build (proxy)
+├── Dockerfile.vpn            # VPNGate/OpenVPN sidecar with health check (legacy)
 ├── Makefile                  # test, build, docker compose targets
 └── .env.example              # Environment variable reference
 ```
@@ -323,7 +354,7 @@ docker compose build
 
 - **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
-- **[Tor](https://www.torproject.org/)** — SOCKS5 proxy + IP rotation on 429
+- **[VPNGate](https://www.vpngate.net/)** + OpenVPN — tunnel + SOCKS5 proxy + manual server selection
 - **Docker Compose** — orchestration
 - **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)
 - **JetBrains Mono** — terminal-inspired monospace typeface (self-hosted WOFF2)

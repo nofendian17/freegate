@@ -27,7 +27,7 @@
         <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
         <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
         <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
-        <span><span class="label">tor ip</span><span id="tor-ip">{{if .TorIP}}{{.TorIP}}{{else}}—{{end}}</span></span>
+        <span><span class="label">vpn ip</span><span id="vpn-ip">{{if .VPNIP}}{{.VPNIP}}{{else}}—{{end}}</span></span>
       </div>
     </nav>
 
@@ -60,20 +60,15 @@
           <span class="card-title"># Upstreams</span>
         </div>
         <div class="upstream-list">
+          {{range .Upstream}}
           <div class="upstream-row">
-            <span class="upstream-label">opencode</span>
-            <span class="upstream-count tone-blue">{{.OpenCodeCount}}</span>
+            <span class="upstream-label">{{.Name}}</span>
+            <span class="upstream-count tone-{{.Tone}}">{{.Count}}</span>
           </div>
           <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.UpstreamPct.OpenCode}}%"></div>
+            <div class="upstream-fill" style="background:var(--info);width:{{.Pct}}%"></div>
           </div>
-          <div class="upstream-row">
-            <span class="upstream-label">kilo</span>
-            <span class="upstream-count tone-purple">{{.KiloCount}}</span>
-          </div>
-          <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.UpstreamPct.Kilo}}%"></div>
-          </div>
+          {{end}}
         </div>
       </div>
     </div>
@@ -107,6 +102,34 @@
       </div>
     </div>
 
+    <!-- VPN Server Picker -->
+    <div class="card section-block section-gap">
+      <div class="card-header">
+        <span class="card-title"># VPN Server</span>
+        <div class="filter-bar">
+          <span id="vpn-status-label" class="vpn-status-label">—</span>
+          <button id="vpn-ping" class="btn-secondary" type="button">> ping</button>
+          <button id="vpn-rotate" class="btn-secondary" type="button">> rotate random</button>
+        </div>
+      </div>
+      <div class="vpn-picker">
+        <div class="vpn-current" id="vpn-current">
+          <span class="status-dot" id="vpn-dot"></span>
+          <span id="vpn-current-text">loading…</span>
+        </div>
+        <div class="vpn-select-row">
+          <select id="vpn-server-select" aria-label="Choose a VPN server or direct">
+            <option value="">$ select server…</option>
+            <option value="__direct__">$ direct (no VPN)</option>
+          </select>
+          <button id="vpn-connect" class="btn-primary" type="button" disabled>> connect</button>
+          <button id="vpn-refresh-list" class="btn-secondary" type="button">> refresh list</button>
+        </div>
+        <div class="vpn-note">// pick any relay manually, or go direct — no automatic IP rotation on 429</div>
+        <div id="vpn-ping-result" class="vpn-ping-result" style="display:none"></div>
+      </div>
+    </div>
+
     <!-- Free Models -->
     <div class="card section-block section-gap">
       <div class="card-header">
@@ -122,6 +145,7 @@
             <option value="all">$ all</option>
             <option value="opencode">$ opencode</option>
             <option value="kilo">$ kilo</option>
+            <option value="llm7">$ llm7</option>
           </select>
         </div>
       </div>
@@ -132,6 +156,7 @@
               <th>model</th>
               <th style="width:120px">provider</th>
               <th style="width:80px">free</th>
+              <th style="width:80px">test</th>
             </tr>
           </thead>
           <tbody id="models-body"
@@ -188,6 +213,17 @@
         <span class="modal-close" role="button" tabindex="0" aria-label="Close error modal">x</span>
       </div>
       <pre id="error-detail" class="modal-body"></pre>
+    </div>
+  </div>
+
+  <!-- Model Test Result Modal -->
+  <div id="test-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="test-title" aria-describedby="test-detail">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <span class="modal-title" id="test-title">// model test</span>
+        <span class="modal-close" id="test-close" role="button" tabindex="0" aria-label="Close test modal">x</span>
+      </div>
+      <pre id="test-detail" class="modal-body test-body"></pre>
     </div>
   </div>
 
@@ -278,12 +314,358 @@
         if (u && h.uptime) u.textContent = h.uptime;
         const mc = document.getElementById('model-count');
         if (mc) mc.textContent = h.model_count;
-        const tip = document.getElementById('tor-ip');
-        if (tip) tip.textContent = h.tor_ip || '—';
+        const tip = document.getElementById('vpn-ip');
+        if (tip) tip.textContent = h.vpn_direct ? 'direct' : (h.vpn_ip || '—');
       } catch (e) { /* ignore */ }
     }
     setInterval(refreshHealth, 3000);
     document.addEventListener('DOMContentLoaded', refreshHealth);
+
+    // ----- VPN Server Picker -----
+    // Last known route mode from /api/vpn/status (direct vs tunnel). The
+    // picker is kept in sync with it so it never silently claims to be in
+    // direct mode while the tunnel is the active route.
+    let vpnRouteDirect = false;
+    // Aligns the picker's selection to the real route without clobbering an
+    // in-progress manual server pick: a chosen server is left alone; only the
+    // "" placeholder and "__direct__" are auto-corrected.
+    function syncVPNSelectToRoute(direct) {
+      const sel = document.getElementById('vpn-server-select');
+      if (!sel) return;
+      const v = sel.value;
+      if (v !== '' && v !== '__direct__') return;
+      const want = direct ? '__direct__' : '';
+      if (v === want) return;
+      sel.value = want;
+      const btn = document.getElementById('vpn-connect');
+      if (btn) btn.disabled = want === '' || want === '__direct__';
+    }
+    async function refreshVPNStatus() {
+      try {
+        const resp = await fetch('/api/vpn/status');
+        if (!resp.ok) return;
+        const st = await resp.json();
+        vpnRouteDirect = !!st.direct;
+        syncVPNSelectToRoute(vpnRouteDirect);
+        const dot = document.getElementById('vpn-dot');
+        const text = document.getElementById('vpn-current-text');
+        const label = document.getElementById('vpn-status-label');
+        if (st.direct) {
+          dot.className = 'status-dot ok';
+          if (st.install_hint) {
+            text.textContent = 'direct — openvpn not found: ' + st.install_hint;
+            label.textContent = 'direct (install vpn)';
+          } else {
+            text.textContent = 'direct — no VPN tunnel (host IP)';
+            label.textContent = 'direct';
+          }
+        } else if (st.connected) {
+          dot.className = 'status-dot ok';
+          text.textContent = (st.country ? st.country + ' — ' : '') + (st.server || '?') + ' @ ' + (st.ip || '…');
+          label.textContent = 'connected';
+        } else {
+          dot.className = 'status-dot warn';
+          if (st.install_hint) {
+            text.textContent = 'openvpn not found: ' + st.install_hint;
+            label.textContent = 'missing vpn';
+          } else {
+            text.textContent = 'disconnected — reconnect loop active';
+            label.textContent = 'disconnected';
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    function escapeHTML(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+    // Renders a country flag emoji from its two-letter ISO code (regional
+    // indicator symbols), or "" when the code is unavailable/invalid.
+    function flagEmoji(code) {
+      if (!code || code.length !== 2) return '';
+      const a = code.charCodeAt(0), b = code.charCodeAt(1);
+      if (a < 0x41 || a > 0x5A || b < 0x41 || b > 0x5A) return '';
+      return String.fromCodePoint(0x1F1E6 + (a - 0x41)) + String.fromCodePoint(0x1F1E6 + (b - 0x41));
+    }
+    async function refreshVPNServers() {
+      const sel = document.getElementById('vpn-server-select');
+      const btn = document.getElementById('vpn-connect');
+      try {
+        const resp = await fetch('/api/vpn/servers');
+        if (!resp.ok) { btn.disabled = true; return; }
+        const data = await resp.json();
+        const servers = data.servers || [];
+        const current = sel.value;
+        sel.innerHTML = '<option value="">$ select server…</option>' +
+          '<option value="__direct__">$ direct (no VPN)</option>' + servers.map(s => {
+          const host = escapeHTML(s.hostname);
+          const flag = flagEmoji(s.country_code);
+          const country = escapeHTML((flag ? flag + ' ' : '') + (s.country || ''));
+          const ping = escapeHTML(s.ping || '?');
+          return '<option value="' + host + '">' + host +
+            '  [' + country + ' · score ' + s.score + ' · ping ' + ping + 'ms]</option>';
+        }).join('');
+        // Preserve a valid selection; otherwise fall back to the real route
+        // mode instead of the rebuild's first option (never claim direct
+        // while the tunnel is active).
+        let next = current;
+        if (!(next === '__direct__' || servers.some(s => s.hostname === next))) {
+          next = vpnRouteDirect ? '__direct__' : '';
+        }
+        sel.value = next;
+        btn.disabled = sel.value === '' || sel.value === '__direct__';
+      } catch (e) { /* ignore */ }
+    }
+    document.getElementById('vpn-refresh-list').addEventListener('click', async function() {
+      const btn = this;
+      btn.disabled = true;
+      btn.textContent = 'refreshing…';
+      try {
+        await fetch('/api/vpn/servers/refresh', { method: 'POST' });
+        await refreshVPNServers();
+      } catch (e) { /* keep the current list */ }
+      btn.textContent = '> refresh list';
+      btn.disabled = false;
+    });
+    document.getElementById('vpn-server-select').addEventListener('change', async function() {
+      const sel = this;
+      const btn = document.getElementById('vpn-connect');
+      const text = document.getElementById('vpn-current-text');
+      if (sel.value === '__direct__') {
+        // Switch to direct immediately; no server connect needed.
+        btn.disabled = true;
+        text.textContent = 'switching to direct…';
+        try {
+          const resp = await fetch('/api/vpn/direct', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ direct: true })
+          });
+          if (!resp.ok) text.textContent = 'switch failed: ' + resp.status;
+        } catch (e) {
+          text.textContent = 'switch failed: network error';
+        }
+        refreshVPNStatus();
+        return;
+      }
+      // A real server selected: disable direct mode and enable connect.
+      if (sel.value !== '') {
+        await fetch('/api/vpn/direct', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direct: false })
+        }).catch(function() {});
+      }
+      btn.disabled = sel.value === '';
+    });
+    document.getElementById('vpn-connect').addEventListener('click', async function() {
+      const sel = document.getElementById('vpn-server-select');
+      const server = sel.value;
+      if (!server) return;
+      const btn = this;
+      btn.disabled = true;
+      const text = document.getElementById('vpn-current-text');
+      text.textContent = 'connecting to ' + server + '…';
+      try {
+        const resp = await fetch('/api/vpn/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ server: server })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          text.textContent = 'connect failed: ' + (data.error || resp.status);
+          btn.disabled = false;
+          return;
+        }
+      } catch (e) {
+        text.textContent = 'connect failed: network error';
+      }
+      btn.disabled = false;
+      refreshVPNStatus();
+    });
+    document.getElementById('vpn-ping').addEventListener('click', async function() {
+      const btn = this;
+      const box = document.getElementById('vpn-ping-result');
+      btn.disabled = true;
+      box.style.display = 'block';
+      box.textContent = '// pinging…';
+      const t0 = Date.now();
+      try {
+        const resp = await fetch('/api/vpn/ping', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+          box.textContent = '! ping failed: ' + (data.error || resp.status);
+          box.className = 'vpn-ping-result';
+          btn.disabled = false;
+          return;
+        }
+        const wall = ((Date.now() - t0) / 1000).toFixed(1);
+        // In direct mode the tunnel is idle: the ping below checks the
+        // tunnel, not the route live traffic actually uses.
+        const directNote = data.direct
+          ? '// route: direct — ping checks the tunnel, live traffic bypasses VPN'
+          : null;
+        if (!data.connected) {
+          box.textContent = data.direct
+            ? '! tunnel disconnected (direct mode — live traffic unaffected)'
+            : '! tunnel disconnected — nothing to ping';
+          box.className = 'vpn-ping-result';
+          btn.disabled = false;
+          return;
+        }
+        const lines = [];
+        lines.push(data.dns_ok
+          ? '  dns: ok (' + data.dns_ms + 'ms)'
+          : '  dns: FAIL (' + (data.dns_error || data.dns_ms + 'ms') + ')');
+        if (data.egress_ok) {
+          lines.push('  egress: ok @ ' + data.egress_ip + ' (' + data.http_ms + 'ms, HTTP ' + data.http_code + ')');
+        } else {
+          lines.push('  egress: FAIL (' + (data.egress_error || ('HTTP ' + data.http_code)) + ')');
+        }
+        const allOK = data.dns_ok && data.egress_ok;
+        const mode = data.direct ? ' (direct mode — tunnel only)' : '';
+        box.textContent = (allOK ? 'vpn healthy' : 'vpn PROBLEM') + mode + ' [' + wall + 's wall]\n' +
+          (directNote ? directNote + '\n' : '') + lines.join('\n');
+        box.className = 'vpn-ping-result ' + (allOK ? 'ok' : 'bad');
+      } catch (e) {
+        box.textContent = '! ping failed: network error';
+        box.className = 'vpn-ping-result';
+      }
+      btn.disabled = false;
+    });
+    document.getElementById('vpn-rotate').addEventListener('click', async function() {
+      const btn = this;
+      btn.disabled = true;
+      const text = document.getElementById('vpn-current-text');
+      text.textContent = 'rotating to a random server…';
+      // Rotating implies using the tunnel again.
+      await fetch('/api/vpn/direct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direct: false })
+      }).catch(function() {});
+      try {
+        const resp = await fetch('/api/vpn/rotate', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok && data.error) text.textContent = 'rotate failed: ' + data.error;
+      } catch (e) {
+        text.textContent = 'rotate failed: network error';
+      }
+      btn.disabled = false;
+      refreshVPNStatus();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshVPNStatus();
+      refreshVPNServers();
+    });
+    setInterval(refreshVPNStatus, 5000);
+    setInterval(refreshVPNServers, 30000);
+
+    // ----- Model Test (HTMX-safe delegation) -----
+    var testInFlight = false;
+    var testLastFocused = null;
+    function openTestModal() {
+      testLastFocused = document.activeElement;
+      document.getElementById('test-modal').style.display = 'flex';
+      document.body.classList.add('modal-open');
+      var closeBtn = document.getElementById('test-close');
+      if (closeBtn) closeBtn.focus();
+    }
+    function closeTestModal() {
+      document.getElementById('test-modal').style.display = 'none';
+      document.body.classList.remove('modal-open');
+      if (testLastFocused && typeof testLastFocused.focus === 'function') {
+        testLastFocused.focus();
+      }
+      testLastFocused = null;
+    }
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest('.test-btn');
+      if (!btn) return;
+      e.preventDefault();
+      // Guard against concurrent tests: the models tbody is swapped by HTMX
+      // every 10s, so a disabled state on a specific button does not survive
+      // the swap. A module-level flag prevents double-firing while a test
+      // (which can take 30–90s on free relays) is still in flight.
+      if (testInFlight) return;
+      testInFlight = true;
+      var model = btn.dataset.model;
+      btn.disabled = true;
+      var orig = btn.textContent;
+      btn.textContent = '…';
+      var detail = document.getElementById('test-detail');
+      var title = document.getElementById('test-title');
+      title.textContent = '// testing: ' + model;
+      detail.textContent = '// sending completion…';
+      detail.className = 'modal-body test-body';
+      openTestModal();
+
+      var t0 = Date.now();
+      fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+          max_tokens: 20
+        })
+      })
+      .then(function(resp) {
+        return resp.text().then(function(text) { return { status: resp.status, body: text }; });
+      })
+      .then(function(result) {
+        var ms = Date.now() - t0;
+        var status = result.status;
+        var raw = result.body || '';
+        var lines = ['status: ' + status + ' [' + ms + 'ms]'];
+        var ok = status >= 200 && status < 300;
+        var content = '';
+        try {
+          var data = JSON.parse(raw);
+          if (data.error && data.error.message) {
+            lines.push('error: ' + data.error.message);
+            ok = false;
+          } else if (data.choices && data.choices[0] && data.choices[0].message) {
+            var msg = data.choices[0].message;
+            content = msg.content || msg.reasoning || '';
+            if (content) lines.push('content: ' + content);
+            if (data.usage) {
+              lines.push('tokens: ' + (data.usage.total_tokens || '?') +
+                ' (in ' + (data.usage.prompt_tokens || 0) + ' / out ' + (data.usage.completion_tokens || 0) + ')');
+            }
+            if (msg.reasoning && msg.content) lines.push('reasoning: ' + msg.reasoning);
+          } else if (!content) {
+            lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
+          }
+        } catch (err) {
+          lines.push('parse error: ' + err.message);
+          if (raw) lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
+        }
+        detail.textContent = lines.join('\n');
+        detail.className = 'modal-body test-body ' + (ok ? 'tone-ok' : 'tone-err');
+      })
+      .catch(function(err) {
+        var ms = Date.now() - t0;
+        detail.textContent = 'status: network error [' + ms + 'ms]\nerror: ' + (err && err.message ? err.message : String(err));
+        detail.className = 'modal-body test-body tone-err';
+      })
+      .finally(function() {
+        testInFlight = false;
+        // The tbody may have been swapped by HTMX since the click; the
+        // detached node is safe to mutate regardless.
+        btn.disabled = false;
+        btn.textContent = orig;
+      });
+    });
+    document.getElementById('test-close').addEventListener('click', closeTestModal);
+    document.getElementById('test-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeTestModal();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && document.getElementById('test-modal').style.display === 'flex') {
+        closeTestModal();
+      }
+    });
 
     // ----- Error Modal (HTMX-safe delegation) -----
     let lastFocused = null;

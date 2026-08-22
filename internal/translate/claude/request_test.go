@@ -180,6 +180,44 @@ func TestClaudeToOpenAI_ToolUseAndResult(t *testing.T) {
 	}
 }
 
+// TestClaudeToOpenAI_ScrubsUnsafeToolIDs mirrors opencode's transform.ts
+// Claude id scrub: ids may only contain [a-zA-Z0-9_-]. Claude Code emits
+// ids like "toolu_01x.y.z" or with unicode; strict OpenAI upstreams
+// (MiniMax et al.) reject those, so the translator normalizes them. The
+// assistant tool_call id and the matching tool_result id must stay in
+// sync after scrubbing.
+func TestClaudeToOpenAI_ScrubsUnsafeToolIDs(t *testing.T) {
+	body := `{
+		"model":"claude","max_tokens":100,
+		"messages":[
+			{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01A.b-c:d/e!é","name":"get_weather","input":{"city":"NYC"}}]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01A.b-c:d/e!é","content":"sunny"}]}
+		]
+	}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var openai map[string]any
+	json.Unmarshal(result, &openai)
+	msgs := openai["messages"].([]any)
+
+	assistant := msgs[0].(map[string]any)
+	tcs := assistant["tool_calls"].([]any)
+	tc := tcs[0].(map[string]any)
+	id, _ := tc["id"].(string)
+	if id != "toolu_01A_b-c_d_e__" {
+		t.Errorf("assistant tool_call id not scrubbed: got %q", id)
+	}
+
+	tool := msgs[1].(map[string]any)
+	tid, _ := tool["tool_call_id"].(string)
+	if tid != id {
+		t.Errorf("tool_call_id %q != assistant id %q (must stay in sync)", tid, id)
+	}
+}
+
 func TestClaudeToOpenAI_UserMessageWithTextAndToolResult(t *testing.T) {
 	body := `{
 		"model":"claude","max_tokens":100,

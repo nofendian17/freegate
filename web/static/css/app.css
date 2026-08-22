@@ -560,6 +560,88 @@ button.btn-tertiary:hover {
   margin-left: auto;
 }
 
+/* ----- VPN Server Picker ----- */
+.vpn-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.vpn-current {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.vpn-select-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.vpn-select-row select {
+  flex: 1 1 auto;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  border: 1px solid var(--border);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.vpn-select-row select:hover {
+  border-color: var(--border-hover);
+}
+
+.vpn-select-row select:focus-visible {
+  border-color: var(--primary);
+}
+
+.vpn-status-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.vpn-note {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.vpn-ping-result {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.vpn-ping-result.ok {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.vpn-ping-result.bad {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+@media (max-width: 480px) {
+  .vpn-select-row {
+    flex-direction: column;
+  }
+  .vpn-select-row .btn-primary {
+    width: 100%;
+  }
+}
+
 /* ----- HTMX Indicator ----- */
 .htmx-indicator {
   display: none;
@@ -857,6 +939,61 @@ button.btn-tertiary:hover {
 /* Body scroll-lock (toggled via JS when modal opens) */
 body.modal-open {
   overflow: hidden;
+}
+
+/* ----- Model Test button + result modal ----- */
+button.test-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0 var(--space-2);
+  height: 24px;
+  vertical-align: middle;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--easing),
+              border-color var(--duration-fast) var(--easing);
+}
+button.test-btn:hover {
+  border-color: var(--tertiary);
+  color: var(--tertiary);
+}
+button.test-btn:disabled {
+  color: var(--text-faint);
+  border-color: var(--border);
+  cursor: wait;
+}
+
+/* Free-models table: compact rows with pill + test button on one line,
+   same 24px height so the columns stay aligned and tidy. */
+#models-body td {
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  vertical-align: middle;
+}
+#models-body .pill {
+  height: 24px;
+  line-height: 1;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.modal-body.test-body {
+  color: var(--text);
+}
+.modal-body.test-body.tone-ok {
+  color: var(--success);
+}
+.modal-body.test-body.tone-err {
+  color: var(--error);
 }
 
 /* ----- Error Link (clickable truncated error) ----- */

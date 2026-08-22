@@ -60,6 +60,8 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	var metaCreated int64
 	metaCaptured := false
 	finished := false
+	seenFinish := false
+	hasToolSeen := false
 
 	emitRepaired := func() {
 		if finished {
@@ -123,7 +125,32 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 		data := strings.TrimPrefix(trimmed, "data: ")
 		data = strings.TrimRight(data, "\r\n ")
 		if data == "[DONE]" {
-			emitRepaired()
+			if !seenFinish && (metaCaptured || hasToolSeen) {
+				fr := "stop"
+				if hasToolSeen {
+					fr = "tool_calls"
+				}
+				synth := map[string]any{"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": fr}}}
+				if metaID != "" {
+					synth["id"] = metaID
+				}
+				if metaModel != "" {
+					synth["model"] = metaModel
+				}
+				if metaCreated != 0 {
+					synth["created"] = metaCreated
+				}
+				synth["object"] = "chat.completion.chunk"
+				if b, err := json.Marshal(synth); err == nil {
+					emitRepaired()
+					_, _ = io.WriteString(dst, "data: "+string(b)+"\n\n")
+					if fl != nil {
+						fl.Flush()
+					}
+				}
+			} else {
+				emitRepaired()
+			}
 			if _, werr := io.WriteString(dst, "data: [DONE]\n\n"); werr != nil {
 				slog.Warn("stream write error", "error", werr)
 				break
@@ -153,6 +180,7 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			continue
 		}
 
+		// Normalize reasoning before any empty-check bookkeeping.
 		if !metaCaptured {
 			if v, ok := chunk["id"].(string); ok {
 				metaID = v
@@ -166,6 +194,16 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			metaCaptured = true
 		}
 
+		// Note: finish_reason is only treated as "real" when it's a
+		// non-empty string. Upstreams (and the OpenAI spec itself) send
+		// `finish_reason: null` explicitly on every non-terminal delta —
+		// that is NOT a signal that the stream is done, so it must not be
+		// mutated or treated as terminal here. If a genuinely buggy
+		// upstream never sends a real finish_reason at all (e.g. a single
+		// null/empty chunk followed by [DONE] or EOF), the fallback
+		// synthesis below and at [DONE]/EOF appends a proper terminal
+		// chunk without corrupting the chunk that carried content or
+		// tool-call fragments.
 		finishReason := ""
 		if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
 			if c, ok := choices[0].(map[string]any); ok {
@@ -177,6 +215,13 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 					syncDeltaReasoning(chunk)
 				}
 			}
+		}
+
+		if finishReason != "" {
+			seenFinish = true
+		}
+		if len(toolSeen) > 0 {
+			hasToolSeen = true
 		}
 
 		// Flush repaired arguments BEFORE the finish chunk so the client
@@ -201,7 +246,54 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 			break
 		}
 	}
+	// If the stream ended without a terminal chunk (upstream truncated or
+	// missing finish_reason), synthesize one so opencode's
+	// "missing finish_reason for choice 0" validator doesn't reject the
+	// response. Mirrors opencode's onHalt→finishEvents fallback.
+	if !seenFinish && (metaCaptured || hasToolSeen) {
+		fr := "stop"
+		if hasToolSeen {
+			fr = "tool_calls"
+		}
+		emitTerminalChunk(dst, fl, metaID, metaModel, metaCreated, fr)
+	}
 	return usage
+}
+
+// emitTerminalChunk writes a synthetic finish chunk for streams that ended
+// without one (e.g. muse-spark empty completion, tencent/hy3 truncation,
+// upstream close before finish_reason). Mirrors opencode's
+// llm/protocols/openai-chat.ts onHalt → finishEvents.
+//
+// finish_reason must be set on the choice itself (not nested inside
+// delta) — that's the only field downstream consumers (OpenAI clients,
+// and claude.ProcessChunk's OpenAI→Claude SSE translator) ever look at
+// to detect the terminal chunk. buildOpenAIChunk always sets the
+// choice-level finish_reason to nil, so it can't be reused here.
+func emitTerminalChunk(dst io.Writer, fl http.Flusher, id, model string, created int64, finishReason string) {
+	chunk := map[string]any{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": finishReason,
+		}},
+	}
+	b, err := json.Marshal(chunk)
+	if err != nil {
+		slog.Warn("stream marshal error", "error", err)
+		return
+	}
+	if _, werr := io.WriteString(dst, "data: "+string(b)+"\n\n"); werr != nil {
+		slog.Warn("stream write error", "error", werr)
+		return
+	}
+	if fl != nil {
+		fl.Flush()
+	}
 }
 
 // bufferToolArgs accumulates tool-call arguments from a delta into per-index
@@ -267,6 +359,7 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	state := claude.NewClaudeToOpenAIState()
 	var usage TokenUsage
+	stopped := false
 
 	for {
 		line, err := src.ReadString('\n')
@@ -283,6 +376,18 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 			continue
 		}
 
+		// Some free-tier upstreams (e.g. mimo) replay the final tool_use
+		// block — input_json_delta + content_block_stop, sometimes the
+		// terminal message_delta/message_stop again — AFTER the first
+		// message_stop. The client has already closed the assistant
+		// message; replaying a duplicate tool call after that is what
+		// makes the client see doubled tool input (X}{Y). message_stop is
+		// terminal: drop everything after it. This mirrors the
+		// finishSent guard in the OpenAI-stream path (stream.go).
+		if stopped {
+			continue
+		}
+
 		// Only process data: lines; skip event: and others
 		if !strings.HasPrefix(line, "data: ") {
 			continue
@@ -296,8 +401,12 @@ func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
 			continue
 		}
 
-		// Extract usage from Claude events for TokenUsage reporting
 		eventType, _ := chunk["type"].(string)
+		if eventType == "message_stop" {
+			stopped = true
+		}
+
+		// Extract usage from Claude events for TokenUsage reporting
 		switch eventType {
 		case "message_start":
 			if msg, ok := chunk["message"].(map[string]any); ok {
@@ -465,6 +574,7 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	syncMessageReasoning(resp)
 	repairToolCallsJSON(resp)
+	ensureFinishReason(resp)
 
 	transformed, err := json.Marshal(resp)
 	if err != nil {
@@ -474,6 +584,44 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	dst.Write(transformed)
 	return usage
+}
+
+// ensureFinishReason synthesizes a finish_reason when the upstream omitted
+// it (or sent null / empty), so strict OpenAI clients (opencode's
+// llm/protocols/openai-chat.ts "missing finish_reason for choice 0"
+// validator) don't fail the stream. Mirrors opencode's onHalt
+// → finishEvents which defaults to "stop" when no finish was seen.
+// When a tool_calls choice is present without a finish_reason we default
+// to "tool_calls" so callers treat it as a completed tool call, matching
+// opencode's hasToolCalls → tool-calls coalescing in finishEvents.
+func ensureFinishReason(resp map[string]interface{}) {
+	choices, _ := resp["choices"].([]interface{})
+	for i, cAny := range choices {
+		choice, ok := cAny.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fr, hasFR := choice["finish_reason"]
+		if hasFR && fr != nil {
+			if s, ok := fr.(string); ok && s != "" {
+				continue
+			}
+		}
+		// Empty or absent: pick tool_calls when the synthesized choice
+		// looks like a tool call, else stop. Also stamp remaining nulls
+		// so every choice has a value — strict clients validate all.
+		synthetic := "stop"
+		if msg, _ := choice["message"].(map[string]interface{}); msg != nil {
+			if _, hasTC := msg["tool_calls"]; hasTC {
+				synthetic = "tool_calls"
+			}
+		}
+		choice["finish_reason"] = synthetic
+		choices[i] = choice
+	}
+	if len(choices) > 0 {
+		resp["choices"] = choices
+	}
 }
 
 // repairToolCallsJSON normalizes malformed tool-call arguments in a
@@ -529,6 +677,17 @@ func syncMessageReasoning(resp map[string]interface{}) {
 			continue
 		}
 		syncReasoning(msg)
+		// OpenAI chat.completion: every assistant message carries `content`
+		// (string or null). Some free-tier upstreams omit the field entirely
+		// on empty completions (e.g. `{"role":"assistant"}` with no content
+		// and no tool_calls), which strict OpenAI clients reject. Default to
+		// null when absent without tool_calls — mirroring opencode's
+		// lowerAssistantMessage (`content.length === 0 ? null : ...`).
+		if _, hasContent := msg["content"]; !hasContent {
+			if _, hasToolCalls := msg["tool_calls"]; !hasToolCalls {
+				msg["content"] = nil
+			}
+		}
 	}
 }
 
@@ -561,4 +720,60 @@ func NormalizeResponse(w http.ResponseWriter, resp *http.Response) (TokenUsage, 
 	httputil.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	return copyNormalized(w, resp)
+}
+
+// PassThroughError copies an upstream error response (429/5xx) to the
+// client verbatim and returns a short readable message captured from the
+// body, so the request log can record what the upstream actually said
+// instead of only the bare status code. Returns "" when no usable message
+// is present.
+func PassThroughError(w http.ResponseWriter, resp *http.Response) string {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+	httputil.CopyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+	return extractErrorMessage(body)
+}
+
+// maxErrorBodySize caps how much of an upstream error body is buffered:
+// real error payloads are a few KB, so this prevents a misbehaving
+// upstream from ballooning memory while still passing the body through.
+const maxErrorBodySize = 1 << 20
+
+// extractErrorMessage pulls a short message out of a typical upstream
+// error body: OpenAI-style {"error":{"message":"…"}}, a top-level
+// "message", or a small plain-text body. Returns "" if nothing usable.
+func extractErrorMessage(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return ""
+	}
+	var v struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &v); err == nil {
+		if v.Error.Message != "" {
+			return truncateMessage(v.Error.Message)
+		}
+		if v.Message != "" {
+			return truncateMessage(v.Message)
+		}
+	}
+	if len(body) <= 512 {
+		return truncateMessage(string(body))
+	}
+	return ""
+}
+
+// truncateMessage caps a logged error message so one noisy upstream error
+// cannot flood the dashboard table.
+func truncateMessage(s string) string {
+	const max = 300
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }

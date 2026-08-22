@@ -181,7 +181,7 @@ func TestLogger_LogsNormalRequest(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
 	Logger(handler).ServeHTTP(rec, req)
 
@@ -196,30 +196,45 @@ func TestLogger_LogsNormalRequest(t *testing.T) {
 	}
 }
 
-func TestLogger_SkipsHXRequest(t *testing.T) {
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	defer slog.SetDefault(old)
-
-	ran := false
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ran = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("HX-Request", "true")
-	rec := httptest.NewRecorder()
-	Logger(handler).ServeHTTP(rec, req)
-
-	if !ran {
-		t.Fatal("expected the handler to run for HX request")
+func TestLogger_SkipsDashboardAndProbeNoise(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"dashboard root", "/"},
+		{"htmx stats partial", "/partials/stats"},
+		{"dashboard json api", "/api/health"},
+		{"vpn status poll", "/api/vpn/status"},
+		{"static asset", "/static/css/app.css"},
+		{"metrics endpoint", "/v1/metrics"},
+		{"ready probe", "/v1/ready"},
 	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if strings.Contains(buf.String(), "request") {
-		t.Fatalf("expected no request log line for HX request, got: %q", buf.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+			defer slog.SetDefault(old)
+
+			ran := false
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ran = true
+				w.WriteHeader(http.StatusOK)
+			})
+
+			req := httptest.NewRequest("GET", tt.path, nil)
+			rec := httptest.NewRecorder()
+			Logger(handler).ServeHTTP(rec, req)
+
+			if !ran {
+				t.Fatal("expected the handler to run for the request")
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec.Code)
+			}
+			if strings.Contains(buf.String(), "request") {
+				t.Fatalf("expected no request log line for %q, got: %q", tt.path, buf.String())
+			}
+		})
 	}
 }

@@ -193,7 +193,7 @@ Model discovery is off by default (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`)
 `openai_base_url` changes where requests go but does not auto-discover models. Set `model` explicitly in config or use `-m`.
 
 **Rate limited (429)**
-freegate's default rate limit is 60 req/min per IP. Check `RATE_LIMIT` env var. Tor IP rotation retries 429s from upstreams automatically.
+freegate's default rate limit is 60 req/min per IP. Check `RATE_LIMIT` env var. Upstream 429s are passed through to the client unchanged — there is no automatic retry or IP rotation. To change the exit IP, pick a different relay server manually from the dashboard (or rotate to a random one).
 
 **Slow first request**
-Tor circuit establishment adds latency on the first request. Subsequent requests reuse the circuit.
+VPN tunnel establishment adds latency on the first request. Subsequent requests reuse the tunnel.

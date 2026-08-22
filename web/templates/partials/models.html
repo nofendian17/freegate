@@ -11,9 +11,12 @@
     {{else}}<span class="pill tone-gray">—</span>
     {{end}}
   </td>
+  <td>
+    <button type="button" class="btn-tertiary test-btn" data-model="{{.ID}}">> test</button>
+  </td>
 </tr>
 {{end}}
 {{else}}
-<tr><td colspan="3" class="dim">no models loaded</td></tr>
+<tr><td colspan="4" class="dim">no models loaded</td></tr>
 {{end}}
 {{end}}

@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"freegate/internal/translate/claude"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -134,6 +136,52 @@ func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSON_EmptyContentAssignedNull(t *testing.T) {
+	// The exact muse/kilo failure: `{role:"assistant"}` with no content
+	// and finish_reason null. Strict OpenAI clients reject the missing field.
+	input := `{"choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"content":null`) {
+		t.Errorf("expected content defaulted to null, got: %s", output)
+	}
+	if !strings.Contains(output, `"role":"assistant"`) {
+		t.Errorf("expected role preserved, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_EmptyContentWithToolCalls_Untouched(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	// tool_calls choices may omit content per the OpenAI spec; the fix must
+	// not inject a null content there.
+	if strings.Contains(output, `"content":null`) {
+		t.Errorf("expected content untouched for tool_calls message, got: %s", output)
+	}
+	if !strings.Contains(output, `"call_1"`) {
+		t.Errorf("expected tool_calls preserved, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_ExistingContentUnchanged(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"content":"hi"`) {
+		t.Errorf("expected content preserved, got: %s", output)
+	}
+	if strings.Contains(output, `"content":null`) {
+		t.Errorf("expected no content:null with real content, got: %s", output)
+	}
+}
+
 func TestNormalizeJSON_InvalidJSON(t *testing.T) {
 	input := "not json at all"
 	var buf bytes.Buffer
@@ -256,7 +304,7 @@ func TestNormalizeStream_RepairsToolArgs(t *testing.T) {
 	}, "") +
 		mk(map[string]any{
 			"tool_calls": []any{map[string]any{
-				"index": 0,
+				"index":    0,
 				"function": map[string]any{"arguments": `hello`},
 			}},
 		}, "") +
@@ -308,5 +356,290 @@ func TestNormalizeJSON_RepairsToolArgs(t *testing.T) {
 
 	if !strings.Contains(output, `"arguments":"{\"cmd\":\"echo hello\"}"`) {
 		t.Errorf("expected repaired arguments in JSON output, got %s", output)
+	}
+}
+
+func TestExtractErrorMessage_OpenAI(t *testing.T) {
+	body := []byte(`{"error":{"message":"rate limit exceeded for model","type":"rate_limit"}}`)
+	if got := extractErrorMessage(body); got != "rate limit exceeded for model" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_TopLevelMessage(t *testing.T) {
+	body := []byte(`{"message":"provider overloaded"}`)
+	if got := extractErrorMessage(body); got != "provider overloaded" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_PlainTextSmall(t *testing.T) {
+	body := []byte("Bad Gateway for upstream")
+	if got := extractErrorMessage(body); got != "Bad Gateway for upstream" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestExtractErrorMessage_EmptyAndLarge(t *testing.T) {
+	if got := extractErrorMessage(nil); got != "" {
+		t.Errorf("nil body got %q, want empty", got)
+	}
+	big := bytes.Repeat([]byte("x"), 600)
+	if got := extractErrorMessage(big); got != "" {
+		t.Errorf("large non-JSON body got %q, want empty", got)
+	}
+}
+
+func TestPassThroughError_CapturesAndForwards(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"slow down"}}`)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+	rec := httptest.NewRecorder()
+	msg := PassThroughError(rec, resp)
+
+	if msg != "slow down" {
+		t.Errorf("captured msg = %q, want %q", msg, "slow down")
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "slow down") {
+		t.Errorf("body not forwarded verbatim: %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content-type = %q, want application/json", got)
+	}
+}
+
+// TestNormalizeJSON_EmptyFinishReasonSynthesized verifies that a
+// non-streaming response with finish_reason:null or finish_reason:"" gets
+// a synthesized "stop" (or "tool_calls") so opencode's
+// "missing finish_reason for choice 0" validator doesn't fail.
+func TestNormalizeJSON_NullFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected finish_reason synthesized to stop, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_EmptyStringFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":""}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected finish_reason synthesized to stop, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_ToolCallsFinishReasonSynthesized(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected finish_reason synthesized to tool_calls, got: %s", output)
+	}
+}
+
+func TestNormalizeJSON_RealFinishReasonPreserved(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"length"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"length"`) {
+		t.Errorf("expected finish_reason=length preserved, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_SynthesizesFinishChunk verifies that a stream ending
+// without any finish_reason gets a terminal chunk synthesized before
+// data:[DONE] — the tencent/hy3 truncation and muse-spark empty completion
+// bug.
+func TestNormalizeStream_SynthesizesFinishChunk(t *testing.T) {
+	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n" +
+		"data: [DONE]\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"stop"`) {
+		t.Errorf("expected synthesized finish_reason=stop, got: %s", output)
+	}
+	if !strings.Contains(output, "data: [DONE]") {
+		t.Errorf("expected [DONE] marker, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_TencentHy3_TriggersFinishChunk verifies the exact
+// tencent/hy3 path: streaming tool-call fragments that end with [DONE]
+// before any explicit finish_reason produces a synthesized terminal chunk
+// with finish_reason=tool_calls.
+func TestNormalizeStream_TencentHy3_TriggersFinishChunk(t *testing.T) {
+	mk := func(delta map[string]any) string {
+		chunk := map[string]any{"id": "c1", "model": "hy3-free", "choices": []any{map[string]any{"index": 0, "delta": delta}}}
+		b, _ := json.Marshal(chunk)
+		return "data: " + string(b) + "\n"
+	}
+	input := mk(map[string]any{
+		"tool_calls": []any{map[string]any{
+			"index": 0, "id": "call_1", "type": "function",
+			"function": map[string]any{"name": "Bash", "arguments": `{"cmd":"ls"}`},
+		}},
+	}) + "data: [DONE]\n"
+
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
+		t.Errorf("expected synthesized finish_reason=tool_calls, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_MissingFinishReasonEOF verifies that a stream that
+// closes without [DONE] still gets a terminal chunk, and that the
+// synthesized finish_reason lands on the choice itself (not nested
+// inside delta, which is invisible to every OpenAI-shape consumer
+// including claude.ProcessChunk's finish detection).
+func TestNormalizeStream_MissingFinishReasonEOF(t *testing.T) {
+	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	var lastChunk map[string]any
+	for _, line := range strings.Split(output, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var chunk map[string]any
+		if json.Unmarshal([]byte(data), &chunk) == nil {
+			lastChunk = chunk
+		}
+	}
+	if lastChunk == nil {
+		t.Fatalf("expected at least one synthesized chunk, got: %s", output)
+	}
+	choices, _ := lastChunk["choices"].([]any)
+	if len(choices) == 0 {
+		t.Fatalf("synthesized chunk has no choices: %v", lastChunk)
+	}
+	choice, _ := choices[0].(map[string]any)
+	if fr, _ := choice["finish_reason"].(string); fr != "stop" {
+		t.Errorf("expected choice-level finish_reason=stop, got %v (chunk=%v)", choice["finish_reason"], choice)
+	}
+}
+
+// TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream is an
+// end-to-end regression test for the "muse-spark" scenario: an upstream
+// stream that sends content then closes (EOF, no [DONE], no real
+// finish_reason). It verifies the synthesized terminal chunk actually
+// terminates the Claude SSE translation (message_delta + message_stop),
+// rather than leaving the client's stream hanging forever.
+func TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream(t *testing.T) {
+	input := "data: {\"id\":\"c1\",\"model\":\"muse-spark\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+
+	state := claude.NewStreamState()
+	var events []string
+	rd := bufio.NewReader(strings.NewReader(buf.String()))
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if data, ok := strings.CutPrefix(line, "data: "); ok && data != "[DONE]" {
+			var chunk map[string]any
+			if json.Unmarshal([]byte(data), &chunk) == nil {
+				events = append(events, claude.ProcessChunk(chunk, state)...)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	joined := strings.Join(events, "")
+	if !strings.Contains(joined, "message_delta") {
+		t.Errorf("expected a message_delta event to close the message, got: %s", joined)
+	}
+	if !strings.Contains(joined, "message_stop") {
+		t.Errorf("expected a message_stop event to terminate the stream, got: %s", joined)
+	}
+}
+
+// TestNormalizeClaudeStream_DropsPostStopReplay is a regression test for
+// free-tier upstreams (e.g. mimo) that replay the final tool_use block —
+// input_json_delta, content_block_stop, message_delta, message_stop —
+// a second time AFTER the first message_stop. The client has already
+// closed the assistant message; the replayed duplicate merges into the
+// first tool call and the client sees doubled tool input (X}{Y) and the
+// same tool_use id twice. message_stop is terminal: everything after it
+// must be dropped.
+func TestNormalizeClaudeStream_DropsPostStopReplay(t *testing.T) {
+	// The first message_stop terminates the stream; the second
+	// sequence is the mimo replay of the tool_use block.
+	input := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_1","model":"mimo"}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_x","name":"probe_tool","input":{}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\":1}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\":1}"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n"
+
+	src := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(input)),
+	}
+	w := newMockResponseWriter()
+	_, _ = copyNormalized(w, src)
+	output := w.buf.String()
+
+	// The tool call must appear exactly once: a single arguments delta
+	// with the full repaired object.
+	if got := strings.Count(output, `"arguments":"{\"n\":1}"`); got != 1 {
+		t.Fatalf("expected exactly 1 repaired arguments delta, got %d\noutput:\n%s", got, output)
+	}
+	// Drop everything after message_stop: no second tool_calls delta,
+	// no second terminal chunk.
+	if idx := strings.LastIndex(output, `"id":"chatcmpl-msg_1"`); idx >= 0 {
+		if rest := output[idx:]; strings.Contains(rest, `"arguments"`) {
+			t.Fatalf("found tool-call data after the terminal chunk:\n%s", rest)
+		}
 	}
 }

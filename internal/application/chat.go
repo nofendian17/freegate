@@ -2,12 +2,9 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"freegate/internal/domain"
@@ -16,42 +13,28 @@ import (
 	proxyinfra "freegate/internal/infrastructure/proxy"
 )
 
-const (
-	DefaultMaxRetries = 2
-	DefaultRetryDelay = 3 * time.Second
-)
-
 // Router selects an Upstream for a given model ID.
 type Router interface {
 	Select(modelID string) (domain.Upstream, error)
 }
 
-// ChatService orchestrates chat-completion requests: routing, retries with
-// IP rotation, request logging, and metrics.
+// ChatService orchestrates chat-completion requests: routing, request
+// logging, and metrics. Upstream responses — including 4xx/5xx statuses
+// such as 429 — are passed through to the client verbatim. There is no
+// automatic retry or IP rotation here: the user picks the VPN exit server
+// manually from the dashboard.
 type ChatService struct {
-	router     Router
-	ipRotator  domain.IPRotator
-	metrics    *metrics.Metrics
-	logger     domain.RequestLogger
-	maxRetries int
-	retryDelay time.Duration
+	router  Router
+	metrics *metrics.Metrics
+	logger  domain.RequestLogger
 }
 
-// NewChatService constructs a ChatService. Pass nil for ipRotator to
-// disable IP rotation. Pass nil for m to disable metrics.
-func NewChatService(
-	router Router,
-	ipRotator domain.IPRotator,
-	m *metrics.Metrics,
-	maxRetries int,
-	retryDelay time.Duration,
-) *ChatService {
+// NewChatService constructs a ChatService. Pass nil for m to disable
+// metrics.
+func NewChatService(router Router, m *metrics.Metrics) *ChatService {
 	return &ChatService{
-		router:     router,
-		ipRotator:  ipRotator,
-		metrics:    m,
-		maxRetries: maxRetries,
-		retryDelay: retryDelay,
+		router:  router,
+		metrics: m,
 	}
 }
 
@@ -62,18 +45,10 @@ func (s *ChatService) WithRequestLogger(fn domain.RequestLogger) *ChatService {
 	return s
 }
 
-// MaxRetriesExceededError is returned when all retry attempts on a 429
-// response have been exhausted.
-type MaxRetriesExceededError struct {
-	ModelID string
-}
-
-func (e *MaxRetriesExceededError) Error() string {
-	return fmt.Sprintf("max retries exceeded for model %s", e.ModelID)
-}
-
-// ProxyChat routes the request to the appropriate upstream, retries on
-// 429 with Tor IP rotation, and streams the response back to w.
+// ProxyChat routes the request to the appropriate upstream and streams the
+// response back to w. Whatever the upstream returns — success or an error
+// status like 429 — is forwarded to the client unchanged; the function
+// only returns an error for transport/selection failures.
 func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error {
 	start := time.Now()
 	requestID := ""
@@ -148,74 +123,16 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalUpstream = u.Name()
 	slog.Info("upstream selected", "request_id", requestID, "model", modelID, "upstream", u.Name())
 
-	var resp *http.Response
-	for attempt := 0; attempt <= s.maxRetries; attempt++ {
-		if attempt > 0 {
-			if s.ipRotator != nil {
-				if torErr := s.ipRotator.ForceNewIP(); torErr != nil {
-					slog.Warn("tor: forced IP rotation failed", "request_id", requestID, "attempt", attempt, "error", torErr)
-				} else {
-					slog.Info("tor: IP rotated for retry", "request_id", requestID, "attempt", attempt)
-				}
-			}
-			if s.metrics != nil {
-				s.metrics.RetryCount.Add(1)
-			}
-			select {
-			case <-ctx.Done():
-				finalStatus = http.StatusGatewayTimeout
-				finalErr = fmt.Errorf("client disconnected during retry")
-				return finalErr
-			case <-time.After(s.retryDelay):
-			}
-		}
-
-		resp, err = u.ChatCompletion(ctx, domain.ChatRequest{Body: body, OriginalReq: r})
-		if err != nil {
-			wrappedErr := fmt.Errorf("upstream request: %w", err)
-			if s.metrics != nil {
-				s.metrics.UpstreamErrors.Add(1)
-			}
-			finalStatus = http.StatusBadGateway
-			finalErr = wrappedErr
-			slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
-			return wrappedErr
-		}
-
-		if resp.StatusCode != http.StatusTooManyRequests {
-			if resp.StatusCode >= 400 {
-				if s.metrics != nil {
-					s.metrics.UpstreamErrors.Add(1)
-				}
-				finalStatus = resp.StatusCode
-
-				// Read provider error body for a more descriptive message
-				errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
-				resp.Body.Close()
-				if readErr == nil && len(errBody) > 0 {
-					finalErr = fmt.Errorf("provider %d: %s", resp.StatusCode, extractProviderErr(errBody))
-				} else {
-					finalErr = fmt.Errorf("provider returned HTTP %d", resp.StatusCode)
-				}
-			}
-			break
-		}
-
-		resp.Body.Close()
-		slog.Warn("upstream returned 429, rotating IP and retrying",
-			"request_id", requestID,
-			"upstream", u.Name(),
-			"attempt", attempt+1,
-			"max_retry", s.maxRetries,
-		)
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
+	resp, err := u.ChatCompletion(ctx, domain.ChatRequest{Body: body, OriginalReq: r})
+	if err != nil {
+		wrappedErr := fmt.Errorf("upstream request: %w", err)
 		if s.metrics != nil {
 			s.metrics.UpstreamErrors.Add(1)
 		}
-		finalStatus = resp.StatusCode
-		finalErr = &MaxRetriesExceededError{ModelID: modelID}
-		return finalErr
+		finalStatus = http.StatusBadGateway
+		finalErr = wrappedErr
+		slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
+		return wrappedErr
 	}
 	defer resp.Body.Close()
 
@@ -223,6 +140,15 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalStatus = resp.StatusCode
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Upstream HTTP errors (429/5xx) are passed through verbatim; capture
+	// the upstream's own error message so the record log shows why it
+	// failed instead of only the bare status code.
+	if resp.StatusCode >= 400 {
+		if msg := proxyinfra.PassThroughError(w, resp); msg != "" {
+			finalErr = fmt.Errorf("upstream: %s", msg)
+		}
+		return nil
+	}
 	usage, err := proxyinfra.NormalizeResponse(w, resp)
 	if err != nil {
 		slog.Warn("normalize response failed", "request_id", requestID, "upstream", u.Name(), "error", err)
@@ -236,31 +162,4 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		}
 	}
 	return nil
-}
-
-// extractProviderErr attempts to extract a human-readable error message from a
-// provider's JSON error response body. Falls back to the raw body on failure.
-func extractProviderErr(body []byte) string {
-	trimmed := strings.TrimSpace(string(body))
-	// Try to parse {"error": {"message": "..."}} (OpenAI-style)
-	var errResp struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
-		return errResp.Error.Message
-	}
-	// Try {"message": "..."} (some providers)
-	var msgResp struct {
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(body, &msgResp); err == nil && msgResp.Message != "" {
-		return msgResp.Message
-	}
-	// Truncate raw body
-	if len(trimmed) > 120 {
-		trimmed = trimmed[:120] + "…"
-	}
-	return trimmed
 }

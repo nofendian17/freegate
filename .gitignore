@@ -11,3 +11,4 @@
 
 # Claude
 .claude/dist/
+/vpngate-supervisor

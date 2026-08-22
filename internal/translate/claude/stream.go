@@ -197,6 +197,29 @@ func (s *StreamState) closeOpenToolBlocks() []string {
 	return events
 }
 
+// closeThinkingBlock closes the currently-open thinking block. Anthropic
+// sends a signature_delta event just before content_block_stop on a
+// thinking block, used to verify the block's integrity on replay. OpenAI
+// upstreams never provide a real signature, so a placeholder is
+// synthesized: freegate's own request-side translation (see
+// convertClaudeAssistantMessage in request.go) doesn't validate it either,
+// but emitting a non-empty signature keeps the event shape compatible with
+// clients that expect the field to be present.
+func (s *StreamState) closeThinkingBlock() []string {
+	var events []string
+	events = append(events, formatSSE("content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": s.thinkingIdx,
+		"delta": map[string]any{
+			"type":      "signature_delta",
+			"signature": "unsigned",
+		},
+	})...)
+	events = append(events, contentBlockStop(s.thinkingIdx)...)
+	s.thinkingOpen = false
+	return events
+}
+
 func handleReasoningContent(text string, state *StreamState) []string {
 	var events []string
 
@@ -220,7 +243,9 @@ func handleReasoningContent(text string, state *StreamState) []string {
 			"type":  "content_block_start",
 			"index": state.thinkingIdx,
 			"content_block": map[string]any{
-				"type": "thinking",
+				"type":      "thinking",
+				"thinking":  "",
+				"signature": "",
 			},
 		})...)
 	}
@@ -244,8 +269,7 @@ func handleTextContent(text string, state *StreamState) []string {
 
 	// Close any open thinking block
 	if state.thinkingOpen {
-		events = append(events, contentBlockStop(state.thinkingIdx)...)
-		state.thinkingOpen = false
+		events = append(events, state.closeThinkingBlock()...)
 	}
 
 	// Close any open tool_use block before opening text
@@ -314,8 +338,7 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 					state.textOpen = false
 				}
 				if state.thinkingOpen {
-					events = append(events, contentBlockStop(state.thinkingIdx)...)
-					state.thinkingOpen = false
+					events = append(events, state.closeThinkingBlock()...)
 				}
 
 				fn, _ := tc["function"].(map[string]any)
@@ -682,8 +705,7 @@ func handleFinish(state *StreamState) []string {
 		state.textOpen = false
 	}
 	if state.thinkingOpen {
-		events = append(events, contentBlockStop(state.thinkingIdx)...)
-		state.thinkingOpen = false
+		events = append(events, state.closeThinkingBlock()...)
 	}
 
 	// Close any open tool_use blocks, repairing each accumulated arg buffer before stop.

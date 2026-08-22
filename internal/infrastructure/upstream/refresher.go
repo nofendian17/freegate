@@ -29,11 +29,11 @@ func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refreshe
 	}
 }
 
-func (r *Refresher) Start(ctx context.Context) {
-	go r.loop(ctx)
-}
-
-func (r *Refresher) loop(ctx context.Context) {
+// Run blocks and runs the refresh loop until ctx is cancelled.
+// Call it from a goroutine that is tracked by a WaitGroup.
+func (r *Refresher) Run(ctx context.Context) {
+	t := time.NewTimer(r.backoff)
+	defer t.Stop()
 	backoff := r.backoff
 	for {
 		select {
@@ -45,10 +45,11 @@ func (r *Refresher) loop(ctx context.Context) {
 
 		if err := r.refresh(ctx); err != nil {
 			slog.Warn("model refresh failed", "upstream", r.name, "error", err)
+			t.Reset(backoff)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(backoff):
+			case <-t.C:
 			}
 			backoff = min(backoff*2, r.maxBack)
 			continue
@@ -57,10 +58,11 @@ func (r *Refresher) loop(ctx context.Context) {
 		slog.Info("models refreshed", "upstream", r.name)
 		backoff = r.backoff
 
+		t.Reset(r.interval)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(r.interval):
+		case <-t.C:
 		}
 	}
 }

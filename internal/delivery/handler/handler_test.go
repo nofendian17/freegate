@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,12 +17,16 @@ type mockChat struct {
 	chatCalled  bool
 	lastModelID string
 	lastBody    []byte
+	err         error
 }
 
 func (m *mockChat) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error {
 	m.chatCalled = true
 	m.lastModelID = modelID
 	m.lastBody = body
+	if m.err != nil {
+		return m.err
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"choices":[]}`))
 	return nil
@@ -169,6 +174,28 @@ func TestHandler_Chat_Success(t *testing.T) {
 	}
 	if chat.lastModelID != "deepseek-v4-flash-free" {
 		t.Errorf("expected model ID 'deepseek-v4-flash-free', got %q", chat.lastModelID)
+	}
+}
+
+func TestHandler_Chat_UpstreamError_Returns502(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	chat.err = fmt.Errorf("upstream request: dial failed")
+	body := `{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d", w.Code)
+	}
+	var errResp map[string]map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to unmarshal error body: %v", err)
+	}
+	if errResp["error"]["type"] != "upstream_error" {
+		t.Errorf("unexpected error type: %v", errResp["error"]["type"])
 	}
 }
 

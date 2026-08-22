@@ -16,7 +16,7 @@ func TestPostSetsAcceptHeaderForStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-client := NewHTTPClient(srv.URL, []string{"key"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":true}`))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestPostOmitsAcceptForNonStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-client := NewHTTPClient(srv.URL, []string{"key"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestPostOmitsAcceptWhenStreamFieldMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-client := NewHTTPClient(srv.URL, []string{"key"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"foo"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestPostRotatesApiKeyAcrossRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	for i := 0; i < 4; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -101,7 +101,7 @@ func TestPostUsesSingleKeyWhenOneConfigured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a"}, nil, nil)
 	for i := 0; i < 3; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -130,7 +130,7 @@ func TestPostRetriesWithNextKeyOn429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestPostReturns429WhenAllKeysLimited(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ func TestPostSkipsLimitedKeyOnSubsequentRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	for i := 0; i < 3; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -215,7 +215,7 @@ func TestPostDoesNotRetry429WithSingleKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a"}, "", nil)
+	client := NewHTTPClient(srv.URL, []string{"key-a"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)

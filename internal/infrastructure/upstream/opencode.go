@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,8 +19,16 @@ type OpenCodeUpstream struct {
 	allowlist map[string]bool
 }
 
-func NewOpenCodeUpstream(baseURL string, apiKeys []string, socksAddr string, freeAllowlist []string) *OpenCodeUpstream {
-	headers := map[string]string{"x-opencode-client": "desktop"}
+func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
+	// Mimic the headers the official OpenCode client sends for opencode
+	// provider models so the upstream treats requests as first-party.
+	headers := map[string]string{
+		"x-opencode-client":  "desktop",
+		"x-opencode-session": genUUID(),
+		"x-opencode-request": genUUID(),
+		"x-opencode-project": genUUID(),
+		"User-Agent":         "opencode/latest/1.0.0/desktop",
+	}
 	al := make(map[string]bool, len(freeAllowlist))
 	for _, id := range freeAllowlist {
 		id = strings.TrimSpace(id)
@@ -28,7 +37,7 @@ func NewOpenCodeUpstream(baseURL string, apiKeys []string, socksAddr string, fre
 		}
 	}
 	return &OpenCodeUpstream{
-		client:    NewHTTPClient(baseURL, apiKeys, socksAddr, headers),
+		client:    NewHTTPClient(baseURL, apiKeys, d, headers),
 		cache:     NewModelCache(),
 		allowlist: al,
 	}
@@ -47,7 +56,7 @@ func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Durat
 		o.cache.Set(models)
 		return nil
 	}, refreshInterval)
-	refresher.Start(ctx)
+	refresher.Run(ctx)
 }
 
 func (o *OpenCodeUpstream) Match(modelID string) bool {
@@ -100,4 +109,15 @@ func (o *OpenCodeUpstream) Models() []model.Model {
 
 func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
 	return o.client.Post(ctx, "/chat/completions", body)
+}
+
+// genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.
+func genUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	b[6] = (b[6] & 3) | 8<<4 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

@@ -16,9 +16,9 @@ type KiloUpstream struct {
 	cache  *ModelCache
 }
 
-func NewKiloUpstream(baseURL, apiKey, socksAddr string) *KiloUpstream {
+func NewKiloUpstream(baseURL, apiKey string, d *Dialer) *KiloUpstream {
 	return &KiloUpstream{
-		client: NewHTTPClient(baseURL, []string{apiKey}, socksAddr, nil),
+		client: NewHTTPClient(baseURL, []string{apiKey}, d, nil),
 		cache:  NewModelCache(),
 	}
 }
@@ -36,7 +36,7 @@ func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration)
 		k.cache.Set(models)
 		return nil
 	}, refreshInterval)
-	refresher.Start(ctx)
+	refresher.Run(ctx)
 }
 
 func (k *KiloUpstream) Match(modelID string) bool {

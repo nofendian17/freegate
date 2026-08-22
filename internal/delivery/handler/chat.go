@@ -90,11 +90,23 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if format != translate.FormatOpenAI {
 		wr := translate.NewResponseWriter(w, format)
 		defer wr.Close()
-		_ = h.chat.ProxyChat(r.Context(), wr, r, modelID, body)
+		if err := h.chat.ProxyChat(r.Context(), wr, r, modelID, body); err != nil {
+			h.writeChatError(w, err)
+		}
 		return
 	}
 
-	_ = h.chat.ProxyChat(r.Context(), w, r, modelID, body)
+	if err := h.chat.ProxyChat(r.Context(), w, r, modelID, body); err != nil {
+		h.writeChatError(w, err)
+	}
+}
+
+// writeChatError maps a ProxyChat error to an HTTP status and writes an
+// OpenAI-compatible error response. Upstream HTTP errors (including 429)
+// are passed through verbatim by ProxyChat, so errors reaching this
+// function are transport/selection failures: always a 502 gateway error.
+func (h *Handler) writeChatError(w http.ResponseWriter, err error) {
+	respond.JSONError(w, http.StatusBadGateway, "upstream_error", err.Error())
 }
 
 func extractModelID(body []byte) (string, error) {
