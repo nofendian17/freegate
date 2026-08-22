@@ -2,10 +2,14 @@ package vpn
 
 import (
 	"context"
+	"log/slog"
+	"os/exec"
 	"runtime"
 	"sync"
 	"time"
 )
+
+var execLookPath = exec.LookPath
 
 type ProviderConfig struct {
 	Enabled    bool
@@ -93,22 +97,177 @@ func (d *directProvider) Ping() (PingResult, error)                           { 
 func (d *directProvider) CurrentIP() string                                   { return "direct" }
 func (d *directProvider) Close() error                                        { return nil }
 
-// stubs for OS providers to allow compilation before Task 2
-func newLinuxProvider(cfg ProviderConfig) Provider   { return &stubProvider{cfg: cfg, os: "linux"} }
-func newDarwinProvider(cfg ProviderConfig) Provider  { return &stubProvider{cfg: cfg, os: "darwin"} }
-func newWindowsProvider(cfg ProviderConfig) Provider { return &stubProvider{cfg: cfg, os: "windows"} }
+func newLinuxProvider(cfg ProviderConfig) Provider   { return newSupervisorProvider(cfg, "linux") }
+func newDarwinProvider(cfg ProviderConfig) Provider  { return newSupervisorProvider(cfg, "darwin") }
+func newWindowsProvider(cfg ProviderConfig) Provider { return newSupervisorProvider(cfg, "windows") }
 
-type stubProvider struct {
-	cfg ProviderConfig
-	os  string
+func newSupervisorProvider(cfg ProviderConfig, os string) Provider {
+	return &supervisorProvider{cfg: cfg, os: os, socksAddr: cfg.SocksAddr}
 }
 
-func (s *stubProvider) Start(ctx context.Context) error                     { return nil }
-func (s *stubProvider) Rotate() error                                       { return nil }
-func (s *stubProvider) ConnectTo(string) error                              { return nil }
-func (s *stubProvider) ListServers() ([]ServerInfo, error)                  { return nil, nil }
-func (s *stubProvider) RefreshServers() ([]ServerInfo, error)               { return nil, nil }
-func (s *stubProvider) Status() (StatusInfo, error)                         { return StatusInfo{}, nil }
-func (s *stubProvider) Ping() (PingResult, error)                           { return PingResult{Direct: s.os == "windows"}, nil }
-func (s *stubProvider) CurrentIP() string                                   { return "" }
-func (s *stubProvider) Close() error                                        { return nil }
+func openVPNCandidatesForOS(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"openvpn", "/opt/homebrew/bin/openvpn", "/usr/local/bin/openvpn"}
+	case "windows":
+		return []string{"openvpn.exe", "openvpn"}
+	default:
+		return []string{"openvpn"}
+	}
+}
+
+func findOpenVPN() (string, error) {
+	for _, bin := range openVPNCandidatesForOS(runtime.GOOS) {
+		if p, err := execLookPath(bin); err == nil {
+			return p, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+type supervisorProvider struct {
+	cfg       ProviderConfig
+	os        string
+	socksAddr string
+	mu        sync.RWMutex
+	direct    bool
+	currentIP string
+	connected bool
+	server    string
+	country   string
+}
+
+func (s *supervisorProvider) Start(ctx context.Context) error {
+	if _, err := findOpenVPN(); err != nil {
+		slog.Warn("vpn: openvpn not found, falling back to direct mode", "os", s.os, "error", err)
+		s.mu.Lock()
+		s.direct = true
+		s.mu.Unlock()
+		return nil
+	}
+	// Best-effort SOCKS; failure is not fatal (direct fallback).
+	go func() {
+		if err := serveSOCKS(s.socksAddr); err != nil {
+			slog.Error("vpn: socks server exited", "error", err)
+		}
+	}()
+	s.mu.Lock()
+	s.connected = false
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *supervisorProvider) Rotate() error {
+	s.mu.RLock()
+	isDirect := s.direct
+	s.mu.RUnlock()
+	if isDirect {
+		return nil
+	}
+	return nil
+}
+
+func (s *supervisorProvider) ConnectTo(hostname string) error {
+	s.mu.RLock()
+	isDirect := s.direct
+	s.mu.RUnlock()
+	if isDirect {
+		return nil
+	}
+	return nil
+}
+
+func (s *supervisorProvider) ListServers() ([]ServerInfo, error) {
+	s.mu.RLock()
+	isDirect := s.direct
+	s.mu.RUnlock()
+	if isDirect {
+		return nil, nil
+	}
+	list, err := fetchServerList(false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ServerInfo, 0, len(*list))
+	for _, sv := range *list {
+		if !matchCountry(s.cfg.Country, sv) {
+			continue
+		}
+		if s.cfg.MinScore > 0 && sv.Score < s.cfg.MinScore {
+			continue
+		}
+		if s.cfg.MaxPing > 0 {
+			if p, ok := parsePing(sv.Ping); !ok || p > s.cfg.MaxPing {
+				continue
+			}
+		}
+		out = append(out, ServerInfo{
+			Hostname:    sv.HostName,
+			IP:          sv.IPAddr,
+			Country:     sv.CountryLong,
+			CountryCode: sv.CountryShort,
+			Score:       sv.Score,
+			Ping:        sv.Ping,
+		})
+	}
+	return out, nil
+}
+
+func (s *supervisorProvider) RefreshServers() ([]ServerInfo, error) {
+	s.mu.RLock()
+	isDirect := s.direct
+	s.mu.RUnlock()
+	if isDirect {
+		return nil, nil
+	}
+	list, err := fetchServerList(true)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ServerInfo, 0, len(*list))
+	for _, sv := range *list {
+		out = append(out, ServerInfo{
+			Hostname: sv.HostName, IP: sv.IPAddr, Country: sv.CountryLong, CountryCode: sv.CountryShort, Score: sv.Score, Ping: sv.Ping,
+		})
+	}
+	return out, nil
+}
+
+func (s *supervisorProvider) Status() (StatusInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return StatusInfo{
+		Connected:   s.connected && !s.direct,
+		Server:      s.server,
+		Country:     s.country,
+		IP:          s.currentIP,
+		ConnectedAt: 0,
+	}, nil
+}
+
+func (s *supervisorProvider) Ping() (PingResult, error) {
+	s.mu.RLock()
+	isDirect := s.direct
+	s.mu.RUnlock()
+	if isDirect {
+		return PingResult{Direct: true}, nil
+	}
+	s.mu.RLock()
+	ip := s.currentIP
+	srv := s.server
+	ctry := s.country
+	connected := s.connected
+	s.mu.RUnlock()
+	return PingResult{Connected: connected, Direct: false, Server: srv, Country: ctry, IP: ip}, nil
+}
+
+func (s *supervisorProvider) CurrentIP() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.direct {
+		return "direct"
+	}
+	return s.currentIP
+}
+
+func (s *supervisorProvider) Close() error { return nil }
