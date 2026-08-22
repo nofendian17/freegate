@@ -184,7 +184,7 @@ make test-race     # run with -race if you touched any concurrency code
 
 This proxy is anonymous-by-design but ships with sensible defaults:
 
-- `API_KEY` defaults to empty (no auth). Set it before exposing past `127.0.0.1`.
+- `ADMIN_TOKEN` is required (dashboard login + admin superset for `/v1/*`). `API_KEY` is comma-separated for external clients; empty keeps `/v1/*` admin-gated. Set both before exposing past `127.0.0.1`.
 - Rate limiter is per-IP, in-memory; it does not survive restart.
 - All upstream traffic goes through the VPN; don't add direct-connect code paths.
 - Upstream responses (including 429) are passed through to the client unchanged; the operator picks a relay server manually from the dashboard (`POST /connect` on the supervisor) or rotates to a random one (`POST /rotate`).

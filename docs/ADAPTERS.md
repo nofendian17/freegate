@@ -20,7 +20,7 @@ freegate exposes `/v1/messages` which accepts the Claude Messages API format and
 # Base URL — no /v1 suffix, freegate handles routing
 export ANTHROPIC_BASE_URL="http://localhost:1234"
 
-# Auth token — required if freegate has API_KEY set; omit if empty
+# Auth token — any `API_KEY` entry, or the ADMIN_TOKEN itself
 export ANTHROPIC_AUTH_TOKEN="your-api-key"
 
 # Model mapping — tell Claude Code which free model to use for each tier
@@ -174,7 +174,7 @@ If freegate is configured with `API_KEY`, both Claude Code and Codex CLI must in
 | **Claude Code** | `ANTHROPIC_AUTH_TOKEN` env var |
 | **Codex CLI** | `OPENAI_API_KEY` env var (or the `env_key` configured in `[model_providers]`) |
 
-If `API_KEY` is empty (default), no auth is needed. The dashboard at `/` is always open regardless of auth.
+`/v1/*` always requires auth: pass any `API_KEY` entry, or the `ADMIN_TOKEN`. If `API_KEY` is empty (default), use the `ADMIN_TOKEN` as the bearer — there is no open API. The dashboard at `/` requires admin login (`ADMIN_TOKEN`) regardless.
 
 ---
 

@@ -15,7 +15,7 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **VPN IP monitoring** — current tunnel exit IP shown in dashboard header, refreshed every 3s
 - **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button and a **direct** (no-VPN) option
 - **Rate limiting** — per-IP rate limiter, configurable via env
-- **Optional auth** — API key validation via `Authorization: Bearer <key>` or `X-API-Key: <key>` header
+- **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
@@ -107,7 +107,8 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
 | — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `API_KEY` | (empty) | Optional auth key; empty = no auth |
+| `ADMIN_TOKEN` | — | **Required** (>=6 chars). Admin password: gates the dashboard (login form at `/login`, cookie `fg_admin` or `X-Admin-Token`/`Bearer` header) and also works as a superset key for `/v1/*`. Generate: `openssl rand -hex 32` |
+| `API_KEY` | (empty) | Comma-separated keys for `/v1/*` (`X-API-Key` / Bearer); any entry valid, admin token is superset. **Empty = `/v1/*` stays admin-gated** (login cookie or admin token header only — no open API) |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode upstream URL |
 | `UPSTREAM_KEY_OPENCODE` | `public` | OpenCode API key |
@@ -206,7 +207,7 @@ The dashboard follows the **TerminalUI** design system:
 
 ### Notes
 
-- **No login, no auth.** The dashboard is open. The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default.
+- **Admin login required.** The dashboard (and VPN switching) is behind `ADMIN_TOKEN` (`/login`). The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default; `GET /ready` stays public for health probes.
 - **In-memory only.** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
 - **No persistence layer.** A future revision could add SQLite for historical requests; for now, this is a live-only monitoring surface.
 
@@ -220,7 +221,7 @@ The dashboard includes an embedded **chat playground** — a modal chat UI serve
 - **Multi-turn thread** — keep the conversation going; full history is sent with each request
 - **Persistence** — the thread survives page reloads via `localStorage` (key: `freegate.playground.v1`); "clear" wipes it
 - **Shortcuts** — `Enter` sends, `Shift+Enter` inserts a newline
-- **No auth on the dashboard mount** — the playground honors the same `API_KEY` as the API: the modal calls `/v1/chat/completions`, so if `API_KEY` is set the browser will need to include the same `Authorization: Bearer <key>` / `X-API-Key: <key>` header (e.g. via a browser extension)
+- **Admin-only dashboard** — the dashboard (and VPN switching) requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use any `API_KEY` entry or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
 
 Internally the playground is **HTMX-driven** with a small JS shim for client-side state. The form posts to `/v1/chat/completions` via `hx-post`, the model picker loads via `hx-get="/partials/playground/models"`, and event hooks (`hx-on:htmx:after-request`, etc.) hand responses off to the shim. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the option-list partial in `web/templates/partials/playground_models.html`, the server route at `internal/delivery/ui/handler.go` (`/partials/playground/models`), and the shim in `web/static/js/playground.js`. **Streaming is not yet implemented** in this version — the form sends `stream: false` and waits for the full response. A streaming follow-up is tracked.
 
