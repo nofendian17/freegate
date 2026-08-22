@@ -12,7 +12,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 |----------|----------|---------|-------------|
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
-| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=16 chars. Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` and `/ready`. Generate: `openssl rand -hex 32`. Compared with `subtle.ConstantTimeCompare`. |
+| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` and `/ready`. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
 | `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/ready`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). Empty = no API auth (admin still required for dashboard). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
@@ -70,7 +70,7 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 ## Validation
 
 `config.Validate()` is called at startup. It rejects:
-- Empty or `<16 chars` `ADMIN_TOKEN` (`ADMIN_TOKEN is required`, `ADMIN_TOKEN must be at least 16 characters`)
+- Empty or `<6 chars` `ADMIN_TOKEN` (`ADMIN_TOKEN is required`, `ADMIN_TOKEN must be at least 6 characters`)
 - `API_KEY` entries that are empty/whitespace after comma-split (`API_KEY entries must be non-empty`)
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
 - Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)

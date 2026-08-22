@@ -143,7 +143,7 @@ func TestConfig_Validate_AdminRequired(t *testing.T) {
 }
 func TestConfig_Validate_AdminTokenTooShort(t *testing.T) {
 	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateCtrlPort: 8080, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at least 16") {
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at least 6") {
 		t.Fatalf("expected ADMIN_TOKEN length error, got %v", err)
 	}
 }

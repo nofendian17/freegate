@@ -112,8 +112,8 @@ func (c *Config) Validate() error {
 
 	if c.AdminToken == "" {
 		errs = append(errs, "ADMIN_TOKEN is required")
-	} else if len(c.AdminToken) < 16 {
-		errs = append(errs, "ADMIN_TOKEN must be at least 16 characters")
+	} else if len(c.AdminToken) < 6 {
+		errs = append(errs, "ADMIN_TOKEN must be at least 6 characters")
 	}
 	for _, k := range c.APIKey {
 		if strings.TrimSpace(k) == "" {

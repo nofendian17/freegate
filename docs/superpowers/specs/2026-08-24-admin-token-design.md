@@ -44,14 +44,14 @@ Public → /login, /logout, /static/*, /healthz (no auth)
 
 ### 1. Config (`internal/config/config.go`)
 
-- `AdminToken string` — `envStr("ADMIN_TOKEN","")` **required** (Validate rejects empty or <16 chars)
+- `AdminToken string` — `envStr("ADMIN_TOKEN","")` **required** (Validate rejects empty or <6 chars, user-defined password)
 - `APIKey []string` — change from `string` to `[]string` via `envSlice("API_KEY","")` (trim, drop empty)
 - Helpers:
   - `IsAdminAuthEnabled() bool { return c.AdminToken != "" }`
   - `IsDirect()` / `IsSidecarMode()` (already)
 - `Validate()`:
   - `ADMIN_TOKEN is required`
-  - `len(ADMIN_TOKEN) < 16` → error (entropy guard)
+  - `len(ADMIN_TOKEN) < 6` → error (minimal 6, user-defined password)
   - `API_KEY` entries each non-empty if provided
   - keep existing `IsDirect` SOCKSAddr logic
 - `.env.example` add `ADMIN_TOKEN=<generate with openssl rand -hex 32>`

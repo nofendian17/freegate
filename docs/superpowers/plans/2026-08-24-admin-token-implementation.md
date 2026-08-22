@@ -18,7 +18,7 @@
 - Upstreams: `opencode`, `kilo`, `llm7` unchanged
 - Existing dialer direct fallback `upstream.Dialer.IsDirect()` must keep working
 - No embedded DB, no JWT lib, no new external deps beyond stdlib
-- Env var names: `ADMIN_TOKEN` (required, >=16 chars), `API_KEY` (comma-separated, `envSlice`)
+- Env var names: `ADMIN_TOKEN` (required, >=6 chars), `API_KEY` (comma-separated, `envSlice`)
 - Cookie name `fg_admin`, HttpOnly, SameSite=Lax, Secure when TLS
 - Use `subtle.ConstantTimeCompare` for all token compares
 
@@ -100,7 +100,7 @@ func (c *Config) Validate() error {
     if c.AdminToken == "" {
         errs = append(errs, "ADMIN_TOKEN is required")
     } else if len(c.AdminToken) < 16 {
-        errs = append(errs, "ADMIN_TOKEN must be at least 16 characters")
+        errs = append(errs, "ADMIN_TOKEN must be at least 6 characters")
     }
     // ... existing checks, but APIKey now slice
 }
@@ -366,7 +366,7 @@ git commit -m "feat(server): wire AdminAuth for dashboard, ApiAuth for API"
 - [ ] **Step 1: Update .env.example**
 
 ```
-ADMIN_TOKEN= # required, >=16 chars, generate: openssl rand -hex 32
+ADMIN_TOKEN= # required, >=6 chars, generate: openssl rand -hex 32
 API_KEY=     # comma-separated, e.g. key1,key2
 ```
 
