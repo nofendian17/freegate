@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/davegallant/vpngate/pkg/vpn"
@@ -78,16 +77,15 @@ func killProcess(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	pid := cmd.Process.Pid
-	_ = syscall.Kill(pid, syscall.SIGTERM)
+	_ = cmd.Process.Signal(os.Interrupt)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
+		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	_ = syscall.Kill(pid, syscall.SIGKILL)
+	_ = cmd.Process.Kill()
 }
 
 func waitTunDown() {
@@ -107,7 +105,7 @@ func waitTunnelUp(cmd *exec.Cmd) (string, error) {
 			break
 		}
 		if cmd != nil && cmd.Process != nil {
-			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 				return "", fmt.Errorf("openvpn exited before tun0 was up")
 			}
 		}
