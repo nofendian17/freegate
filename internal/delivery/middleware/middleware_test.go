@@ -252,13 +252,37 @@ func TestApiAuth_MultiKey(t *testing.T) {
 			t.Fatalf("key %s should pass, got %d", k, rec.Code)
 		}
 	}
-	// admin superset
+	// admin superset via Bearer
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer admin12345678901234")
 	rec := httptest.NewRecorder()
 	m(h).ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("admin should pass api, got %d", rec.Code)
+	}
+}
+
+func TestApiAuth_AdminSessionCookie(t *testing.T) {
+	admin := "0123456789abcdef0123456789abcdef"
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	m := ApiAuth([]string{"k1"}, admin)
+
+	// valid fg_admin cookie (set by POST /login) grants /v1 without headers
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.AddCookie(&http.Cookie{Name: "fg_admin", Value: HmacForToken(admin)})
+	rec := httptest.NewRecorder()
+	m(h).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("admin session cookie should pass /v1, got %d", rec.Code)
+	}
+
+	// tampered cookie still rejected
+	bad := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	bad.AddCookie(&http.Cookie{Name: "fg_admin", Value: "deadbeef"})
+	recBad := httptest.NewRecorder()
+	m(h).ServeHTTP(recBad, bad)
+	if recBad.Code != 401 {
+		t.Fatalf("tampered cookie should 401, got %d", recBad.Code)
 	}
 }
 

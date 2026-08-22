@@ -143,6 +143,18 @@ func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handle
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Admin session cookie (set by POST /login) also grants /v1 —
+			// the dashboard playground and model-test buttons fetch /v1/*
+			// same-origin with only the fg_admin cookie, no API key header.
+			if adminToken != "" {
+				if c, err := r.Cookie("fg_admin"); err == nil && c.Value != "" {
+					exp := HmacForToken(adminToken)
+					if subtle.ConstantTimeCompare([]byte(c.Value), []byte(exp)) == 1 {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
+			}
 			respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
 		})
 	}

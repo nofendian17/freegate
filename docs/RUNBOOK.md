@@ -66,7 +66,7 @@ The default port binding is local-only. To expose:
 
 ## Health checks
 
-Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/healthz` public; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/vpn/*` require `AdminAuth` cookie/header; `/v1/*` and `/ready` require `ApiAuth` API key list or `ADMIN_TOKEN` superset):
+Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/ready` public — no token, Docker HEALTHCHECK target; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/vpn/*` require `AdminAuth` cookie/header; `/v1/*` requires `ApiAuth` API key list or `ADMIN_TOKEN` superset):
 
 | Endpoint | Used by | Returns |
 |----------|---------|---------|
@@ -94,7 +94,9 @@ curl -i -X POST -d "admin_token=$ADMIN_TOKEN" http://localhost:1234/login
 # API requires API_KEY list or ADMIN_TOKEN (superset):
 curl -s -H "X-API-Key: key1" http://localhost:1234/v1/models | jq '.data | length'  # any of key1,key2
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:1234/v1/models | jq '.data | length'
-curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:1234/ready | jq
+# /ready is public — no token needed:
+curl -s http://localhost:1234/ready | jq
+# Dashboard playground/model-test buttons reuse the fg_admin login cookie for /v1/*.
 curl -s http://localhost:1234/api/health | jq        # requires admin header/cookie above
 ```
 

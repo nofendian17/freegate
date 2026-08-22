@@ -190,6 +190,9 @@ func New(cfg *config.Config) (*Server, error) {
 	r.Post("/login", uiHandler.Login)
 	r.Post("/logout", uiHandler.Logout)
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(web.Static()))))
+	// /ready is public: Docker HEALTHCHECK and ops probes have no token.
+	// It only reveals models-loaded state, same class as /api/health.
+	r.With(rl.Middleware).Get("/ready", apiHandler.Ready)
 
 	// Dashboard (admin-only) — all uiHandler routes require AdminAuth.
 	r.With(adminAuth).Mount("/", uiHandler.Routes())
@@ -201,7 +204,6 @@ func New(cfg *config.Config) (*Server, error) {
 		r.Post("/chat/completions", apiHandler.Chat)
 	})
 	r.With(rl.Middleware, apiAuth).Post("/v1/messages", apiHandler.Chat)
-	r.With(rl.Middleware, apiAuth).Get("/ready", apiHandler.Ready)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpSrv := &http.Server{
