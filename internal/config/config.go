@@ -115,6 +115,12 @@ func (c *Config) Validate() error {
 	} else if len(c.AdminToken) < 16 {
 		errs = append(errs, "ADMIN_TOKEN must be at least 16 characters")
 	}
+	for _, k := range c.APIKey {
+		if strings.TrimSpace(k) == "" {
+			errs = append(errs, "API_KEY entries must be non-empty")
+			break
+		}
+	}
 
 	if c.UpstreamURLOpenCode == "" {
 		errs = append(errs, "UPSTREAM_URL_OPENCODE is required")
