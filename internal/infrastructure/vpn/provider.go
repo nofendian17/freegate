@@ -36,6 +36,7 @@ type Provider interface {
 	Status() (StatusInfo, error)
 	Ping() (PingResult, error)
 	CurrentIP() string
+	InstallHint() string
 	Close() error
 }
 
@@ -68,6 +69,7 @@ func (d *directProvider) RefreshServers() ([]ServerInfo, error)               { 
 func (d *directProvider) Status() (StatusInfo, error)                         { return StatusInfo{}, nil }
 func (d *directProvider) Ping() (PingResult, error)                           { return PingResult{Direct: true}, nil }
 func (d *directProvider) CurrentIP() string                                   { return "direct" }
+func (d *directProvider) InstallHint() string                                 { return "" }
 func (d *directProvider) Close() error                                        { return nil }
 
 func newLinuxProvider(cfg ProviderConfig) Provider   { return newSupervisorProvider(cfg, "linux") }
@@ -75,7 +77,13 @@ func newDarwinProvider(cfg ProviderConfig) Provider  { return newSupervisorProvi
 func newWindowsProvider(cfg ProviderConfig) Provider { return newSupervisorProvider(cfg, "windows") }
 
 func newSupervisorProvider(cfg ProviderConfig, os string) Provider {
-	return &supervisorProvider{cfg: cfg, os: os, socksAddr: cfg.SocksAddr}
+	sp := &supervisorProvider{cfg: cfg, os: os, socksAddr: cfg.SocksAddr}
+	// Pre-check at construction so dialer can fallback immediately even before Start().
+	if _, err := findOpenVPN(); err != nil {
+		sp.direct = true
+		sp.installHint = installHintForOS(runtime.GOOS)
+	}
+	return sp
 }
 
 func openVPNCandidatesForOS(goos string) []string {
@@ -98,23 +106,36 @@ func findOpenVPN() (string, error) {
 	return "", exec.ErrNotFound
 }
 
+func installHintForOS(goos string) string {
+	switch goos {
+	case "darwin":
+		return "brew install openvpn"
+	case "windows":
+		return "winget install OpenVPNTechnologies.OpenVPN  (or choco install openvpn)"
+	default:
+		return "sudo apt install openvpn  (or sudo yum install openvpn / sudo pacman -S openvpn)"
+	}
+}
+
 type supervisorProvider struct {
-	cfg       ProviderConfig
-	os        string
-	socksAddr string
-	mu        sync.RWMutex
-	direct    bool
-	currentIP string
-	connected bool
-	server    string
-	country   string
+	cfg         ProviderConfig
+	os          string
+	socksAddr   string
+	mu          sync.RWMutex
+	direct      bool
+	installHint string
+	currentIP   string
+	connected   bool
+	server      string
+	country     string
 }
 
 func (s *supervisorProvider) Start(ctx context.Context) error {
 	if _, err := findOpenVPN(); err != nil {
-		slog.Warn("vpn: openvpn not found, falling back to direct mode", "os", s.os, "error", err)
+		slog.Warn("vpn: openvpn not found, falling back to direct mode", "os", s.os, "error", err, "hint", installHintForOS(runtime.GOOS))
 		s.mu.Lock()
 		s.direct = true
+		s.installHint = installHintForOS(runtime.GOOS)
 		s.mu.Unlock()
 		return nil
 	}
@@ -241,6 +262,12 @@ func (s *supervisorProvider) CurrentIP() string {
 		return "direct"
 	}
 	return s.currentIP
+}
+
+func (s *supervisorProvider) InstallHint() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.installHint
 }
 
 func (s *supervisorProvider) Close() error { return nil }

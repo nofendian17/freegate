@@ -352,16 +352,26 @@
         const label = document.getElementById('vpn-status-label');
         if (st.direct) {
           dot.className = 'status-dot ok';
-          text.textContent = 'direct — no VPN tunnel (host IP)';
-          label.textContent = 'direct';
+          if (st.install_hint) {
+            text.textContent = 'direct — openvpn not found: ' + st.install_hint;
+            label.textContent = 'direct (install vpn)';
+          } else {
+            text.textContent = 'direct — no VPN tunnel (host IP)';
+            label.textContent = 'direct';
+          }
         } else if (st.connected) {
           dot.className = 'status-dot ok';
           text.textContent = (st.country ? st.country + ' — ' : '') + (st.server || '?') + ' @ ' + (st.ip || '…');
           label.textContent = 'connected';
         } else {
           dot.className = 'status-dot warn';
-          text.textContent = 'disconnected — reconnect loop active';
-          label.textContent = 'disconnected';
+          if (st.install_hint) {
+            text.textContent = 'openvpn not found: ' + st.install_hint;
+            label.textContent = 'missing vpn';
+          } else {
+            text.textContent = 'disconnected — reconnect loop active';
+            label.textContent = 'disconnected';
+          }
         }
       } catch (e) { /* ignore */ }
     }

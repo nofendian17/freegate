@@ -34,6 +34,7 @@ type VPNClient interface {
 	SetDirect(direct bool) error
 	Direct() bool
 	CurrentIP() string
+	InstallHint() string
 }
 
 // Handler serves the dashboard UI.

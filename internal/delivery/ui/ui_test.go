@@ -75,6 +75,7 @@ func (f *fakeVPN) Ping() (vpngate.PingResult, error)             { return f.ping
 func (f *fakeVPN) SetDirect(v bool) error                        { f.direct = v; return nil }
 func (f *fakeVPN) Direct() bool                                  { return f.direct }
 func (f *fakeVPN) CurrentIP() string                             { return f.status.IP }
+func (f *fakeVPN) InstallHint() string                           { return "" }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()

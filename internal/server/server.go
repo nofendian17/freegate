@@ -88,6 +88,7 @@ func (v *vpnUI) ForceNewIP() error                        { return v.provider.Ro
 func (v *vpnUI) Status() (vpn.StatusInfo, error)          { return v.provider.Status() }
 func (v *vpnUI) Ping() (vpn.PingResult, error)            { return v.provider.Ping() }
 func (v *vpnUI) CurrentIP() string                        { return v.provider.CurrentIP() }
+func (v *vpnUI) InstallHint() string                      { return v.provider.InstallHint() }
 
 func (v *vpnUI) SetDirect(direct bool) error {
 	v.dialer.SetDirect(direct)
@@ -124,6 +125,11 @@ func New(cfg *config.Config) (*Server, error) {
 	// One shared dialer routes upstreams; direct vs tunnel is switched
 	// live from the dashboard (replaces the old static BYPASS_PROXY env).
 	dialer := upstream.NewDialer(cfg.SOCKSAddr)
+	// If embedded VPN fell back to direct at construction (openvpn missing),
+	// ensure dialer is direct so upstreams don't try SOCKS with no listener.
+	if vpnProvider.CurrentIP() == "direct" {
+		dialer.SetDirect(true)
+	}
 
 	opencode := upstream.NewOpenCodeUpstream(
 		cfg.UpstreamURLOpenCode,

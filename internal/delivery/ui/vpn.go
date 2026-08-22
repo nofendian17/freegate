@@ -29,21 +29,26 @@ func (h *Handler) apiVPNRefreshServers(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiVPNStatus returns the current tunnel state plus the active route
-// mode (direct vs tunnel).
+// mode (direct vs tunnel). When openvpn is missing on this OS, it also
+// includes an install_hint per OS so the dashboard can guide the user.
 func (h *Handler) apiVPNStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := h.vpn.Status()
 	if err != nil {
 		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeVPNJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"direct":       h.vpn.Direct(),
 		"connected":    st.Connected,
 		"server":       st.Server,
 		"country":      st.Country,
 		"ip":           st.IP,
 		"connected_at": st.ConnectedAt,
-	})
+	}
+	if hint := h.vpn.InstallHint(); hint != "" && !st.Connected {
+		resp["install_hint"] = hint
+	}
+	writeVPNJSON(w, http.StatusOK, resp)
 }
 
 // apiVPNDirect switches the proxy between direct connections and the VPN
