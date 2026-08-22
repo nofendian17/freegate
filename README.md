@@ -41,6 +41,20 @@ docker compose up -d
 
 The proxy will be available at `http://localhost:1234`.
 
+### Prerequisites for VPN mode (single binary)
+
+Direct binary embeds VPNGate per OS (`runtime.GOOS` → `openvpn` probe) and falls back to `direct` if dependency missing. Dashboard `/api/vpn/status` returns `install_hint` when binary not found.
+
+| OS | Dependency | Install | Notes |
+|----|------------|---------|-------|
+| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` (`Needs `sudo ./freegate`) |
+| **darwin** | `openvpn` via Homebrew | `brew install openvpn` | Probes `openvpn`, `/opt/homebrew/bin/openvpn`, `/usr/local/bin/openvpn`; needs `sudo` for `utun` |
+| **windows** | `OpenVPN` + TAP-Windows6 | `winget install OpenVPNTechnologies.OpenVPN` <br> `choco install openvpn` | Run `.\freegate.exe` as **Administrator** for TAP |
+
+If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves `34` models via direct.
+
+To force direct without VPN: `./freegate --vpn=false` or `VPN_ENABLED=false`.
+
 A read-only terminal-style dashboard is served at **`http://localhost:1234/`** — see [Dashboard](#dashboard) below.
 
 ## Usage
@@ -80,16 +94,18 @@ by upstream truth, not by a hard-coded prefix list.
 
 ## Configuration
 
-All settings are environment variables:
+All settings are environment variables (`internal/config/config.go:Load` is source of truth):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `1234` | Server port |
-| `VPNGATE_HOST` | `127.0.0.1` | VPN SOCKS / control host (`vpn` compose service) |
-| `VPNGATE_SOCKS_PORT` | `9050` | VPN SOCKS5 port |
-| `VPNGATE_CTRL_PORT` | `8080` | Supervisor control API port (`POST /rotate`, `GET /ip`) |
+| `VPN_ENABLED` | `true` | Enable embedded VPN per OS. `false` = direct connections. Also `--vpn=false` flag. |
+| `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
+| `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
+| `VPNGATE_CTRL_PORT` | `8080` | Deprecated: legacy sidecar control port (kept for `docker-compose` compat) |
+| `VPNGATE_HOST` | `127.0.0.1` | Deprecated: sidecar host (`vpn` in compose → `vpn:9050`); if set, `SOCKSAddr` honors it, else `127.0.0.1:9050` |
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
-| — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); there is no static bypass env var |
+| — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `API_KEY` | (empty) | Optional auth key; empty = no auth |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
@@ -224,7 +240,7 @@ flowchart TB
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 
-    subgraph VPN["VPNGate tunnel (vpn sidecar, SOCKS5 :9050)"]
+    subgraph VPN["VPNGate (per-OS single binary: SOCKS5 127.0.0.1:9050) / legacy vpn sidecar"]
         S1["OpenVPN relay A"]
         S2["OpenVPN relay B"]
     end
@@ -281,10 +297,11 @@ freegate
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
-├── cmd/vpngate-supervisor/   # VPN sidecar: openvpn tunnel + SOCKS5 + control API
-├── docker-compose.yml        # Proxy + VPN containers
-├── Dockerfile                # Multi-stage Go build
-├── Dockerfile.vpn            # VPNGate/OpenVPN sidecar with health check
+├── internal/infrastructure/vpn/ # Embedded VPN per OS (provider.go + provider_{linux,darwin,windows}.go + SOCKS in-process)
+├── cmd/vpngate-supervisor/   # Legacy VPN sidecar: openvpn tunnel + SOCKS5 + control API (docker only)
+├── docker-compose.yml        # Proxy + VPN containers (legacy, still works)
+├── Dockerfile                # Multi-stage Go build (proxy)
+├── Dockerfile.vpn            # VPNGate/OpenVPN sidecar with health check (legacy)
 ├── Makefile                  # test, build, docker compose targets
 └── .env.example              # Environment variable reference
 ```
