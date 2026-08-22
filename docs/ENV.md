@@ -13,7 +13,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
 | `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
-| `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). Empty = no API auth (admin still required for dashboard). Entries are trimmed; empty entries dropped. |
+| `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). **Empty = `/v1/*` is admin-gated**: only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants access (no open API). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
 ## VPN (single-binary per-OS)

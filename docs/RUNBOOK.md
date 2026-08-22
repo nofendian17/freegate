@@ -28,7 +28,8 @@ LOG_LEVEL=info
 RATE_LIMIT=60
 EOF
 # ADMIN_TOKEN is required, >=6 chars (user-defined password) — protects dashboard (/, /partials/*, /api/*) and is also valid for /v1/* (superset).
-# API_KEY is comma-separated, e.g. key1,key2 — any entry valid for /v1/*; empty = no API auth (dashboard still gated by ADMIN_TOKEN).
+# API_KEY is comma-separated, e.g. key1,key2 — any entry valid for /v1/*.
+# Empty = /v1/* stays admin-gated (fg_admin login cookie or raw ADMIN_TOKEN header only) — no open API.
 
 # 3. Start
 docker compose up -d
@@ -262,7 +263,7 @@ docker compose up -d
 ## Security checklist (production)
 
 - [ ] `ADMIN_TOKEN` is set (required, >=6 chars, user-defined password, e.g. `openssl rand -hex 32`) — dashboard (`/`, `/partials/*`, `/api/*`) is admin-only via `AdminAuth` (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`)
-- [ ] `API_KEY` is comma-separated high-entropy values (e.g. `key1,key2`), `ADMIN_TOKEN` also valid for `/v1/*` (superset); do not log tokens or cookie values
+- [ ] `API_KEY` is comma-separated high-entropy values (e.g. `key1,key2`) for external clients — leaving it empty keeps `/v1/*` admin-gated (login cookie or `ADMIN_TOKEN` header only, no open API); do not log tokens or cookie values
 - [ ] `VPNGATE_MIN_SCORE` is set high enough to prefer reputable relays
 - [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS (cookie `Secure` when TLS, `HttpOnly`, `SameSite=Lax`)
 - [ ] `vpn` container is on an internal network (`fg-net`); SOCKS port is not exposed to the host
