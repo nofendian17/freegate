@@ -60,20 +60,15 @@
           <span class="card-title"># Upstreams</span>
         </div>
         <div class="upstream-list">
+          {{range .Upstream}}
           <div class="upstream-row">
-            <span class="upstream-label">opencode</span>
-            <span class="upstream-count tone-blue">{{.OpenCodeCount}}</span>
+            <span class="upstream-label">{{.Name}}</span>
+            <span class="upstream-count tone-{{.Tone}}">{{.Count}}</span>
           </div>
           <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.UpstreamPct.OpenCode}}%"></div>
+            <div class="upstream-fill" style="background:var(--info);width:{{.Pct}}%"></div>
           </div>
-          <div class="upstream-row">
-            <span class="upstream-label">kilo</span>
-            <span class="upstream-count tone-purple">{{.KiloCount}}</span>
-          </div>
-          <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.UpstreamPct.Kilo}}%"></div>
-          </div>
+          {{end}}
         </div>
       </div>
     </div>
@@ -150,6 +145,7 @@
             <option value="all">$ all</option>
             <option value="opencode">$ opencode</option>
             <option value="kilo">$ kilo</option>
+            <option value="llm7">$ llm7</option>
           </select>
         </div>
       </div>

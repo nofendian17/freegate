@@ -29,10 +29,13 @@ type Config struct {
 	UpstreamURLKilo string
 	UpstreamKeyKilo string
 
+	UpstreamURLLLM7 string
+
 	UpstreamDefault string
 
 	UpstreamRefreshOpenCode int
 	UpstreamRefreshKilo     int
+	UpstreamRefreshLLM7     int
 
 	SOCKSAddr string
 }
@@ -56,10 +59,13 @@ func Load() *Config {
 		UpstreamURLKilo: envStr("UPSTREAM_URL_KILO", "https://api.kilo.ai/api/openrouter"),
 		UpstreamKeyKilo: envStr("UPSTREAM_KEY_KILO", "anonymous"),
 
+		UpstreamURLLLM7: envStr("UPSTREAM_URL_LLM7", "https://api.llm7.io/v1"),
+
 		UpstreamDefault: envStr("UPSTREAM_DEFAULT", "opencode"),
 
 		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
+		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
 	}
 
 	cfg.SOCKSAddr = cfg.VPNGateHost + ":" + strconv.Itoa(cfg.VPNGateSocksPort)

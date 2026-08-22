@@ -9,23 +9,16 @@ import (
 )
 
 type pageData struct {
-	Title         string
-	Uptime        string
-	StartedAt     string
-	ModelCount    int
-	RequestCount  int
-	Stats         template.HTML
-	Requests      template.HTML
-	Models        template.HTML
-	OpenCodeCount int64
-	KiloCount     int64
-	UpstreamPct   upstreamPercents
-	VPNIP         string
-}
-
-type upstreamPercents struct {
-	OpenCode int
-	Kilo     int
+	Title        string
+	Uptime       string
+	StartedAt    string
+	ModelCount   int
+	RequestCount int
+	Stats        template.HTML
+	Requests     template.HTML
+	Models       template.HTML
+	Upstream     []upstreamStat
+	VPNIP        string
 }
 
 // dashboard renders the main dashboard page with initial data inline.
@@ -33,31 +26,22 @@ type upstreamPercents struct {
 func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	m := h.data.Metrics()
-	perUp := map[string]int64{}
-	if raw, ok := m["per_upstream"].(map[string]int64); ok {
-		perUp = raw
-	}
-	opencode := perUp["opencode"]
-	kilo := perUp["kilo"]
-	total := opencode + kilo
-	pct := upstreamPercents{OpenCode: pctOf(opencode, total), Kilo: pctOf(kilo, total)}
+	statsData := buildStatsData(m)
 
 	uptime := time.Duration(h.data.UptimeSeconds()) * time.Second
 	models := h.data.Models()
 
 	data := pageData{
-		Title:         "freegate dashboard",
-		Uptime:        formatDuration(uptime),
-		StartedAt:     time.Unix(h.data.StartedAtUnix(), 0).UTC().Format("2006-01-02 15:04:05 UTC"),
-		ModelCount:    len(models),
-		RequestCount:  len(h.data.Requests()),
-		Stats:         h.renderToString("partials/stats.html", buildStatsData(m)),
-		Requests:      h.renderToString("partials/requests.html", h.buildRequestRows()),
-		Models:        h.renderToString("partials/models.html", h.buildModelRows("")),
-		OpenCodeCount: opencode,
-		KiloCount:     kilo,
-		UpstreamPct:   pct,
-		VPNIP:         h.data.VPNIP(),
+		Title:        "freegate dashboard",
+		Uptime:       formatDuration(uptime),
+		StartedAt:    time.Unix(h.data.StartedAtUnix(), 0).UTC().Format("2006-01-02 15:04:05 UTC"),
+		ModelCount:   len(models),
+		RequestCount: len(h.data.Requests()),
+		Stats:        h.renderToString("partials/stats.html", statsData),
+		Requests:     h.renderToString("partials/requests.html", h.buildRequestRows()),
+		Models:       h.renderToString("partials/models.html", h.buildModelRows("")),
+		Upstream:     statsData.Upstream,
+		VPNIP:        h.data.VPNIP(),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

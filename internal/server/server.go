@@ -44,6 +44,7 @@ type Server struct {
 	tc        *vpngate.Controller
 	opencode  *upstream.OpenCodeUpstream
 	kilo      *upstream.KiloUpstream
+	llm7      *upstream.LLM7Upstream
 	rec       *recorder.Recorder
 	rateLimit *middleware.RateLimiter
 	wg        sync.WaitGroup // tracks background workers
@@ -117,8 +118,9 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg.UpstreamKeyKilo,
 		dialer,
 	)
+	llm7 := upstream.NewLLM7Upstream(cfg.UpstreamURLLLM7, dialer)
 
-	infraRouter := upstream.NewRouter(opencode, kilo)
+	infraRouter := upstream.NewRouter(opencode, kilo, llm7)
 	appRouter := &routerAdapter{Router: infraRouter}
 
 	m := metrics.New()
@@ -182,6 +184,7 @@ func New(cfg *config.Config) (*Server, error) {
 		tc:        tc,
 		opencode:  opencode,
 		kilo:      kilo,
+		llm7:      llm7,
 		rec:       rec,
 		rateLimit: rl,
 	}, nil
@@ -195,7 +198,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancelBG()
 
 	// Background workers
-	s.wg.Add(3)
+	s.wg.Add(4)
 	go func() {
 		defer s.wg.Done()
 		s.opencode.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshOpenCode)*time.Second)
@@ -203,6 +206,10 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		s.kilo.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshKilo)*time.Second)
+	}()
+	go func() {
+		defer s.wg.Done()
+		s.llm7.Start(bgCtx, time.Duration(s.cfg.UpstreamRefreshLLM7)*time.Second)
 	}()
 	go func() {
 		defer s.wg.Done()

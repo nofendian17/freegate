@@ -109,27 +109,27 @@ func TestPlaygroundJSExists(t *testing.T) {
 
 	// Persistence + shim identity + streaming functions (must keep working across refactors)
 	must := []string{
-		"freegate.playground.v1",      // localStorage key
-		"window.fgPlayground",         // public surface
-		"function open(",              // modal open
-		"function close(",             // modal close
-		"function clear(",             // clear thread
-		"function load(",              // localStorage load
-		"function save(",              // localStorage save
-		"function onInputKeydown(",    // Enter-to-send
-		"function onModelsLoaded(",    // model select restore
-		"function onSystemInput(",     // system prompt input
-		"function toggleSystem(",      // collapse/expand
-		"function onStreamToggle(",    // stream checkbox handler
-		"function requestBody(",       // build OpenAI request body
-		"function beforeSend(",        // validation + optimistic UI
-		"function send(",              // form submit handler (hx-on:submit)
-		"function handleFetchResponse(", // fetch() response handler (non-streaming)
-		"function appendUserMessage(", // optimistic user bubble
+		"freegate.playground.v1",               // localStorage key
+		"window.fgPlayground",                  // public surface
+		"function open(",                       // modal open
+		"function close(",                      // modal close
+		"function clear(",                      // clear thread
+		"function load(",                       // localStorage load
+		"function save(",                       // localStorage save
+		"function onInputKeydown(",             // Enter-to-send
+		"function onModelsLoaded(",             // model select restore
+		"function onSystemInput(",              // system prompt input
+		"function toggleSystem(",               // collapse/expand
+		"function onStreamToggle(",             // stream checkbox handler
+		"function requestBody(",                // build OpenAI request body
+		"function beforeSend(",                 // validation + optimistic UI
+		"function send(",                       // form submit handler (hx-on:submit)
+		"function handleFetchResponse(",        // fetch() response handler (non-streaming)
+		"function appendUserMessage(",          // optimistic user bubble
 		"function createAssistantPlaceholder(", // optimistic assistant bubble
-		"function finalizeAssistant(", // close out the assistant bubble
-		"function parseSSEChunks(",    // SSE streaming parser
-		"function stopStreaming(",     // abort/stop handler
+		"function finalizeAssistant(",          // close out the assistant bubble
+		"function parseSSEChunks(",             // SSE streaming parser
+		"function stopStreaming(",              // abort/stop handler
 	}
 	for _, want := range must {
 		if !strings.Contains(js, want) {
@@ -141,9 +141,9 @@ func TestPlaygroundJSExists(t *testing.T) {
 	// getReader() — these are now required, not banned. See spec.md Sprint 1.
 	// We still ban legacy function names and eval/document.write.
 	for _, banned := range []string{
-		"streamResponse(", // legacy streaming function
-		"nonStreamResponse(", // legacy non-streaming function
-		"loadModels(",     // legacy model fetcher
+		"streamResponse(",          // legacy streaming function
+		"nonStreamResponse(",       // legacy non-streaming function
+		"loadModels(",              // legacy model fetcher
 		"function handleResponse(", // legacy htmx:after-request hook
 	} {
 		if strings.Contains(js, banned) {
@@ -174,15 +174,15 @@ func TestPlaygroundModalUsesHTMX(t *testing.T) {
 	body := string(data)
 
 	must := []string{
-		`hx-get="/partials/playground/models"`,            // model picker loads via HTMX
-		`hx-on:submit="window.fgPlayground.send(event)"`, // form submit goes to shim
+		`hx-get="/partials/playground/models"`,                            // model picker loads via HTMX
+		`hx-on:submit="window.fgPlayground.send(event)"`,                  // form submit goes to shim
 		`hx-on:htmx:after-request="window.fgPlayground.onModelsLoaded()"`, // model list swap
-		`window.fgPlayground.close`,            // close trigger
-		`window.fgPlayground.clear`,            // clear trigger
-		`window.fgPlayground.toggleSystem`,     // system prompt collapse
-		`window.fgPlayground.onInputKeydown`,   // Enter-to-send
-		`window.fgPlayground.onStreamToggle`,   // stream checkbox change
-		`window.fgPlayground.stopStreaming`,    // stop button click
+		`window.fgPlayground.close`,                                       // close trigger
+		`window.fgPlayground.clear`,                                       // clear trigger
+		`window.fgPlayground.toggleSystem`,                                // system prompt collapse
+		`window.fgPlayground.onInputKeydown`,                              // Enter-to-send
+		`window.fgPlayground.onStreamToggle`,                              // stream checkbox change
+		`window.fgPlayground.stopStreaming`,                               // stop button click
 	}
 	for _, want := range must {
 		if !strings.Contains(body, want) {

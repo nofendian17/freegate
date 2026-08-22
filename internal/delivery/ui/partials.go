@@ -18,8 +18,14 @@ type statCard struct {
 
 type statCardsView struct {
 	Cards    []statCard
-	OpenCode int64
-	Kilo     int64
+	Upstream []upstreamStat
+}
+
+type upstreamStat struct {
+	Name  string
+	Count int64
+	Pct   int
+	Tone  string
 }
 
 func buildStatsData(m map[string]any) statCardsView {
@@ -44,10 +50,26 @@ func buildStatsData(m map[string]any) statCardsView {
 		{Label: "Output Tokens", Value: fmt.Sprintf("%d", outputTokens), Tone: "green"},
 	}
 
+	var upstream []upstreamStat
+	upTotal := int64(0)
+	for _, n := range []string{"opencode", "kilo", "llm7"} {
+		upTotal += perUp[n]
+	}
+	for _, n := range []string{"opencode", "kilo", "llm7"} {
+		if perUp[n] == 0 && len(upstream) > 0 {
+			continue // hide zero rows except the first
+		}
+		upstream = append(upstream, upstreamStat{
+			Name:  n,
+			Count: perUp[n],
+			Pct:   pctOf(perUp[n], upTotal),
+			Tone:  toneForProvider(n),
+		})
+	}
+
 	return statCardsView{
 		Cards:    cards,
-		OpenCode: perUp["opencode"],
-		Kilo:     perUp["kilo"],
+		Upstream: upstream,
 	}
 }
 
@@ -204,6 +226,8 @@ func toneForProvider(p string) string {
 		return "blue"
 	case "kilo":
 		return "amber"
+	case "llm7":
+		return "purple"
 	default:
 		return "gray"
 	}

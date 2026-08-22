@@ -66,15 +66,15 @@ type fakeVPN struct {
 	direct    bool
 }
 
-func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
+func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error)    { return f.servers, nil }
 func (f *fakeVPN) RefreshServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
-func (f *fakeVPN) ConnectTo(h string) error                   { f.connectTo = h; return nil }
-func (f *fakeVPN) ForceNewIP() error                          { return f.rotateErr }
-func (f *fakeVPN) Status() (vpngate.StatusInfo, error)        { return f.status, nil }
-func (f *fakeVPN) Ping() (vpngate.PingResult, error)          { return f.ping, nil }
-func (f *fakeVPN) SetDirect(v bool) error                     { f.direct = v; return nil }
-func (f *fakeVPN) Direct() bool                               { return f.direct }
-func (f *fakeVPN) CurrentIP() string                          { return f.status.IP }
+func (f *fakeVPN) ConnectTo(h string) error                      { f.connectTo = h; return nil }
+func (f *fakeVPN) ForceNewIP() error                             { return f.rotateErr }
+func (f *fakeVPN) Status() (vpngate.StatusInfo, error)           { return f.status, nil }
+func (f *fakeVPN) Ping() (vpngate.PingResult, error)             { return f.ping, nil }
+func (f *fakeVPN) SetDirect(v bool) error                        { f.direct = v; return nil }
+func (f *fakeVPN) Direct() bool                                  { return f.direct }
+func (f *fakeVPN) CurrentIP() string                             { return f.status.IP }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
