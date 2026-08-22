@@ -1,16 +1,15 @@
 package ui
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"freegate/internal/delivery/middleware"
 	"freegate/internal/infrastructure/vpngate"
 	"freegate/internal/model"
 )
@@ -67,11 +66,7 @@ func NewHandler(data DataSource, vpn VPNClient, tpl *template.Template, staticFS
 	}
 }
 
-func hmacForToken(token string) string {
-	h := hmac.New(sha256.New, []byte(token))
-	h.Write([]byte(token))
-	return hex.EncodeToString(h.Sum(nil))
-}
+func hmacForToken(token string) string { return middleware.HmacForToken(token) }
 
 func isSecure(r *http.Request) bool {
 	if r.TLS != nil {
@@ -103,7 +98,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if next == "" {
 		next = r.URL.Query().Get("next")
 	}
-	if next == "" || next[0] != '/' {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
 		next = "/"
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminToken)) != 1 {
@@ -132,6 +127,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
 	})
 	http.Redirect(w, r, "/login", http.StatusFound)
 }

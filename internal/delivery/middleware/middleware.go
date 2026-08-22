@@ -112,11 +112,13 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-func hmacForToken(token string) string {
+func HmacForToken(token string) string {
 	h := hmac.New(sha256.New, []byte(token))
 	h.Write([]byte(token))
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+func hmacForToken(token string) string { return HmacForToken(token) }
 
 func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -151,7 +153,7 @@ func AdminAuth(adminToken string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// check cookie
 			if c, err := r.Cookie("fg_admin"); err == nil {
-				exp := hmacForToken(adminToken)
+				exp := HmacForToken(adminToken)
 				if subtle.ConstantTimeCompare([]byte(c.Value), []byte(exp)) == 1 {
 					next.ServeHTTP(w, r)
 					return
