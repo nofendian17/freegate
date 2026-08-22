@@ -15,20 +15,22 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `API_KEY` | No | (empty) | If non-empty, every `/v1/*` and `/ready` request must send a matching `Authorization: Bearer <key>` or `X-API-Key: <key>` header. Empty = no auth. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP. Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 
-## VPNGate (proxy)
+## VPN (single-binary per-OS)
 
-freegate routes all upstream traffic through a VPNGate/OpenVPN tunnel provided by the `vpn` sidecar container (`cmd/vpngate-supervisor`). The supervisor exposes a SOCKS5 proxy and a small HTTP control API (`/rotate`, `/connect`, `/servers`, `/status`, `/ip`) used by the dashboard's manual server picker. There is no automatic IP rotation on upstream 429s — pick a server manually from the dashboard, or switch to **direct** (no tunnel, from the proxy container) with the "direct (no VPN)" option. There is no static bypass env var; the route is switched live at runtime.
+freegate now runs as a **single binary** with embedded VPNGate per OS (linux/darwin/windows). The binary auto-detects `runtime.GOOS`, probes for `openvpn` (`openvpn.exe` on Windows, `/opt/homebrew/bin/openvpn` on macOS) and starts an in-process OpenVPN tunnel + SOCKS5 on `127.0.0.1:9050`. If `openvpn` is missing or `tun` permission fails, it falls back to **direct** automatically. Toggle live from the dashboard or via `VPN_ENABLED=false` / `--vpn=false`.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VPNGATE_HOST` | No | `127.0.0.1` | SOCKS5 / control host. In docker-compose this is set to the `vpn` service name. |
-| `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port used for all upstream traffic |
-| `VPNGATE_CTRL_PORT` | No | `8080` | Supervisor control API port (`POST /rotate`, `GET /ip`) |
+| `VPN_ENABLED` | No | `true` | Enable embedded VPN. `false` = direct connections, no tunnel. Also overridable via `--vpn=false` flag. |
+| `VPN_PROVIDER` | No | `auto` | VPN provider: `auto` (GOOS-aware), `vpngate`, or `direct`. |
+| `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port for in-process tunnel (127.0.0.1:9050) |
+| `VPNGATE_CTRL_PORT` | No | `8080` | Deprecated: legacy sidecar control port (kept for docker compat) |
 | `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
+| `VPNGATE_HOST` | No | `127.0.0.1` | Deprecated: docker sidecar host. If set (e.g. `vpn` in compose), `SOCKSAddr` honors it; otherwise 127.0.0.1. |
 
-The internal `SOCKSAddr` field is derived as `VPNGATE_HOST:VPNGATE_SOCKS_PORT`.
+The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true` (or `VPNGATE_HOST:VPNGATE_SOCKS_PORT` if `VPNGATE_HOST` is explicitly set for docker compat); empty when direct.
 
-The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING` (server-selection filters) and `VPNGATE_REFRESH_SECONDS` (server-list refresh interval). These are wired in `docker-compose.yml`.
+`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are now applied in-process by the Provider; no sidecar env needed.
 
 `VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
 
@@ -68,6 +70,8 @@ The `vpn` sidecar reads its own env vars: `VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`
 
 `config.Validate()` is called at startup. It rejects:
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
+- Empty `SOCKSAddr` when `VPN_ENABLED=true`
+- Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
 - `PORT`, `VPNGATE_SOCKS_PORT`, or `VPNGATE_CTRL_PORT` outside `1–65535`
 - Non-positive `VPNGATE_ROTATE_INTERVAL` or `RATE_LIMIT`
 
@@ -76,8 +80,9 @@ A failure prints a multi-line error and exits 1.
 ## Source-of-truth files
 
 - `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`
+- `internal/infrastructure/vpn/` — Provider per-OS + SOCKS in-process
 - `.env.example` — annotated example
-- `docker-compose.yml` — wires these into the `proxy` and `vpn` services
-- `cmd/vpngate-supervisor/main.go` — the `vpn` sidecar (OpenVPN tunnel + SOCKS5 + control API)
+- `docker-compose.yml` — legacy containerized path (proxy + vpn sidecar)
+- `cmd/vpngate-supervisor/main.go` — legacy sidecar (deprecated, kept for docker compat)
 
 <!-- /AUTO-GENERATED -->

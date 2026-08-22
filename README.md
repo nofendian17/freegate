@@ -19,10 +19,22 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
-- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`)
+- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`) — legacy, still works
+- **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
 
 ## Quick Start
 
+**Single binary (no Docker):**
+```bash
+# linux / macOS (embedded VPN, needs sudo for tun)
+sudo ./freegate --port 1234
+# direct without VPN
+./freegate --vpn=false --port 1234
+# windows (Admin PowerShell)
+.\freegate.exe --port 1234
+```
+
+**Docker (legacy):**
 ```bash
 docker compose up -d
 ```

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -28,7 +29,20 @@ func main() {
 		log.Printf("warn: .env load: %v", err)
 	}
 
+	// CLI flags override env (single-binary mode: --vpn=false for direct).
+	vpnFlag := flag.Bool("vpn", true, "enable embedded VPN (VPNGate OpenVPN per-OS, falls back to direct if openvpn missing)")
+	portFlag := flag.Int("port", 0, "override PORT")
+	flag.Parse()
+
 	cfg := config.Load()
+	if !*vpnFlag {
+		cfg.VPNEnabled = false
+		cfg.VPNProvider = "direct"
+		cfg.SOCKSAddr = ""
+	}
+	if *portFlag != 0 {
+		cfg.Port = *portFlag
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid config:\n%s\n", err)
 		os.Exit(1)
