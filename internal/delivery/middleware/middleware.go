@@ -133,14 +133,21 @@ func Auth(requiredKey string) func(http.Handler) http.Handler {
 	}
 }
 
-// RateLimiter provides per-IP rate limiting.
+// RateLimiter provides per-IP rate limiting with sharded maps to avoid
+// global mutex contention under high concurrency.
 type RateLimiter struct {
-	mu       sync.Mutex
-	visitors map[string]*visitor
+	shards   [rateLimiterShards]shard
 	limit    int
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+const rateLimiterShards = 32
+
+type shard struct {
+	mu       sync.Mutex
+	visitors map[string]*visitor
 }
 
 type visitor struct {
@@ -150,11 +157,13 @@ type visitor struct {
 
 func NewRateLimiter(requestsPerMinute int) *RateLimiter {
 	rl := &RateLimiter{
-		visitors: make(map[string]*visitor),
-		limit:    requestsPerMinute,
-		stop:     make(chan struct{}),
+		limit: requestsPerMinute,
+		stop:  make(chan struct{}),
 	}
-	// Cleanup stale entries every 5 minutes
+	for i := range rl.shards {
+		rl.shards[i].visitors = make(map[string]*visitor)
+	}
+	// Cleanup stale entries every 5 minutes — per shard to keep locks short.
 	rl.wg.Add(1)
 	go func() {
 		defer rl.wg.Done()
@@ -163,13 +172,17 @@ func NewRateLimiter(requestsPerMinute int) *RateLimiter {
 		for {
 			select {
 			case <-ticker.C:
-				rl.mu.Lock()
-				for ip, v := range rl.visitors {
-					if time.Since(v.lastSeen) > 2*time.Minute {
-						delete(rl.visitors, ip)
+				now := time.Now()
+				for i := range rl.shards {
+					sh := &rl.shards[i]
+					sh.mu.Lock()
+					for ip, v := range sh.visitors {
+						if now.Sub(v.lastSeen) > 2*time.Minute {
+							delete(sh.visitors, ip)
+						}
 					}
+					sh.mu.Unlock()
 				}
-				rl.mu.Unlock()
 			case <-rl.stop:
 				return
 			}
@@ -178,24 +191,39 @@ func NewRateLimiter(requestsPerMinute int) *RateLimiter {
 	return rl
 }
 
+func (rl *RateLimiter) shardFor(ip string) *shard {
+	// FNV-1a fast hash, 32 shards = mask 31
+	var h uint32 = 2166136261
+	for i := 0; i < len(ip); i++ {
+		h ^= uint32(ip[i])
+		h *= 16777619
+	}
+	return &rl.shards[h%rateLimiterShards]
+}
+
 // Stop terminates the background cleanup goroutine. Safe to call multiple times.
 func (rl *RateLimiter) Stop() {
-	rl.stopOnce.Do(func() { close(rl.stop) })
+	rl.stopOnce.Do(func() {
+		close(rl.stop)
+		rl.wg.Wait()
+	})
 }
 
 func (rl *RateLimiter) allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	sh := rl.shardFor(ip)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
 
-	v, exists := rl.visitors[ip]
+	v, exists := sh.visitors[ip]
 	if !exists {
-		rl.visitors[ip] = &visitor{count: 1, lastSeen: time.Now()}
+		sh.visitors[ip] = &visitor{count: 1, lastSeen: time.Now()}
 		return true
 	}
 
-	if time.Since(v.lastSeen) > time.Minute {
+	now := time.Now()
+	if now.Sub(v.lastSeen) > time.Minute {
 		v.count = 1
-		v.lastSeen = time.Now()
+		v.lastSeen = now
 		return true
 	}
 
@@ -204,7 +232,7 @@ func (rl *RateLimiter) allow(ip string) bool {
 	}
 
 	v.count++
-	v.lastSeen = time.Now()
+	v.lastSeen = now
 	return true
 }
 

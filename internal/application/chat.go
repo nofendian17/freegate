@@ -15,7 +15,7 @@ import (
 
 // Router selects an Upstream for a given model ID.
 type Router interface {
-	Select(modelID string) (domain.Upstream, error)
+	Select(modelID string) domain.Upstream
 }
 
 // ChatService orchestrates chat-completion requests: routing, request
@@ -106,15 +106,15 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		"remote", r.RemoteAddr,
 	)
 
-	u, err := s.router.Select(modelID)
-	if err != nil {
-		wrappedErr := fmt.Errorf("select upstream: %w", err)
+	u := s.router.Select(modelID)
+	if u == nil {
+		wrappedErr := fmt.Errorf("select upstream: no upstream for model %q", modelID)
 		if s.metrics != nil {
 			s.metrics.UpstreamErrors.Add(1)
 		}
 		finalStatus = http.StatusBadGateway
 		finalErr = wrappedErr
-		slog.Error("upstream select failed", "request_id", requestID, "model", modelID, "error", err)
+		slog.Error("upstream select failed", "request_id", requestID, "model", modelID, "error", wrappedErr)
 		return wrappedErr
 	}
 	if s.metrics != nil {
@@ -123,7 +123,7 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	finalUpstream = u.Name()
 	slog.Info("upstream selected", "request_id", requestID, "model", modelID, "upstream", u.Name())
 
-	resp, err := u.ChatCompletion(ctx, domain.ChatRequest{Body: body, OriginalReq: r})
+	resp, err := u.ChatCompletion(ctx, body)
 	if err != nil {
 		wrappedErr := fmt.Errorf("upstream request: %w", err)
 		if s.metrics != nil {
@@ -134,7 +134,7 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
 		return wrappedErr
 	}
-	defer resp.Body.Close()
+	defer resp.Close()
 
 	slog.Info("upstream response", "request_id", requestID, "upstream", u.Name(), "status", resp.StatusCode)
 	finalStatus = resp.StatusCode
@@ -144,12 +144,12 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	// the upstream's own error message so the record log shows why it
 	// failed instead of only the bare status code.
 	if resp.StatusCode >= 400 {
-		if msg := proxyinfra.PassThroughError(w, resp); msg != "" {
+		if msg := proxyinfra.PassThroughDomainError(w, resp); msg != "" {
 			finalErr = fmt.Errorf("upstream: %s", msg)
 		}
 		return nil
 	}
-	usage, err := proxyinfra.NormalizeResponse(w, resp)
+	usage, err := proxyinfra.NormalizeDomainResponseWithContext(ctx, w, resp)
 	if err != nil {
 		slog.Warn("normalize response failed", "request_id", requestID, "upstream", u.Name(), "error", err)
 	} else {

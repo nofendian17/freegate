@@ -2,8 +2,6 @@ package vpn
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"freegate/internal/infrastructure/vpngate"
@@ -89,46 +86,17 @@ func newDarwinProvider(cfg ProviderConfig) Provider  { return newSupervisorProvi
 func newWindowsProvider(cfg ProviderConfig) Provider { return newSupervisorProvider(cfg, "windows") }
 
 func newSupervisorProvider(cfg ProviderConfig, os string) Provider {
-	sp := &supervisorProvider{cfg: cfg, os: os, socksAddr: cfg.SocksAddr}
+	sp := &supervisorProvider{cfg: cfg, os: os, socksAddr: cfg.SocksAddr, registry: newServerRegistry(cfg)}
 	if sp.cfg.RefreshInt == 0 {
 		sp.cfg.RefreshInt = 300 * time.Second
+		// keep registry in sync
+		sp.registry.cfg.RefreshInt = 300 * time.Second
 	}
 	if _, err := findOpenVPN(); err != nil {
 		sp.direct = true
 		sp.installHint = installHintForOS(runtime.GOOS)
 	}
 	return sp
-}
-
-func openVPNCandidatesForOS(goos string) []string {
-	switch goos {
-	case "darwin":
-		return []string{"openvpn", "/opt/homebrew/bin/openvpn", "/usr/local/bin/openvpn"}
-	case "windows":
-		return []string{"openvpn.exe", "openvpn"}
-	default:
-		return []string{"openvpn"}
-	}
-}
-
-func findOpenVPN() (string, error) {
-	for _, bin := range openVPNCandidatesForOS(runtime.GOOS) {
-		if p, err := execLookPath(bin); err == nil {
-			return p, nil
-		}
-	}
-	return "", exec.ErrNotFound
-}
-
-func installHintForOS(goos string) string {
-	switch goos {
-	case "darwin":
-		return "brew install openvpn"
-	case "windows":
-		return "winget install OpenVPNTechnologies.OpenVPN  (or choco install openvpn)"
-	default:
-		return "sudo apt install openvpn  (or sudo yum install openvpn / sudo pacman -S openvpn)"
-	}
 }
 
 var (
@@ -148,8 +116,7 @@ type supervisorProvider struct {
 	ip          string
 	connected   bool
 	connectedAt time.Time
-	servers     []vpn.Server
-	lastRefresh time.Time
+	registry    *serverRegistry
 	installHint string
 	direct      bool
 	ctx         context.Context
@@ -368,62 +335,15 @@ func (s *supervisorProvider) watch(cmd *exec.Cmd) {
 }
 
 func (s *supervisorProvider) serverMatchesFilters(sv vpn.Server) bool {
-	if !matchCountry(s.cfg.Country, sv) {
-		return false
-	}
-	if s.cfg.MinScore > 0 && sv.Score < s.cfg.MinScore {
-		return false
-	}
-	if s.cfg.MaxPing > 0 {
-		if p, ok := parsePing(sv.Ping); !ok || p > s.cfg.MaxPing {
-			return false
-		}
-	}
-	return true
+	return s.registry.matches(sv)
 }
 
 func (s *supervisorProvider) pickServer(tried map[string]bool) (vpn.Server, error) {
-	servers, err := s.getServers()
-	if err != nil {
-		return vpn.Server{}, err
-	}
-	var candidates []vpn.Server
-	for _, sv := range servers {
-		if tried[sv.HostName] {
-			continue
-		}
-		if !s.serverMatchesFilters(sv) {
-			continue
-		}
-		candidates = append(candidates, sv)
-	}
-	if len(candidates) == 0 {
-		return vpn.Server{}, fmt.Errorf("no vpngate servers match the filters")
-	}
-	return pickWeighted(candidates), nil
+	return s.registry.pickServer(tried)
 }
 
 func (s *supervisorProvider) getServers() ([]vpn.Server, error) {
-	s.mu.Lock()
-	refresh := s.lastRefresh.IsZero() || time.Since(s.lastRefresh) >= s.cfg.RefreshInt
-	servers := s.servers
-	s.mu.Unlock()
-	if refresh || len(servers) == 0 {
-		list, err := fetchServerList(refresh)
-		if err != nil {
-			if len(servers) == 0 {
-				return nil, fmt.Errorf("fetch vpngate server list: %w", err)
-			}
-			slog.Warn("vpn: server list refresh failed, using stale cache", "error", err)
-		} else {
-			servers = *list
-			s.mu.Lock()
-			s.servers = servers
-			s.lastRefresh = time.Now()
-			s.mu.Unlock()
-		}
-	}
-	return servers, nil
+	return s.registry.getServers()
 }
 
 func (s *supervisorProvider) ListServers() ([]ServerInfo, error) {
@@ -433,37 +353,17 @@ func (s *supervisorProvider) ListServers() ([]ServerInfo, error) {
 	if isDirect {
 		return nil, nil
 	}
-	list, err := s.getServers()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ServerInfo, 0, len(list))
-	for _, sv := range list {
-		if !s.serverMatchesFilters(sv) {
-			continue
-		}
-		out = append(out, ServerInfo{Hostname: sv.HostName, IP: sv.IPAddr, Country: sv.CountryLong, CountryCode: sv.CountryShort, Score: sv.Score, Ping: sv.Ping})
-	}
-	return out, nil
+	return s.registry.listServers()
 }
 
 func (s *supervisorProvider) RefreshServers() ([]ServerInfo, error) {
-	if s.direct {
+	s.mu.Lock()
+	isDirect := s.direct
+	s.mu.Unlock()
+	if isDirect {
 		return nil, nil
 	}
-	list, err := fetchServerList(true)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	s.servers = *list
-	s.lastRefresh = time.Now()
-	s.mu.Unlock()
-	out := make([]ServerInfo, 0, len(*list))
-	for _, sv := range *list {
-		out = append(out, ServerInfo{Hostname: sv.HostName, IP: sv.IPAddr, Country: sv.CountryLong, CountryCode: sv.CountryShort, Score: sv.Score, Ping: sv.Ping})
-	}
-	return out, nil
+	return s.registry.refreshServers()
 }
 
 func (s *supervisorProvider) Status() (StatusInfo, error) {
@@ -597,119 +497,6 @@ func (s *supervisorProvider) countryLocked() string {
 		return ""
 	}
 	return s.current.CountryLong
-}
-
-// helpers copied from supervisor main.go
-
-func startOpenVPN(server vpn.Server) (*exec.Cmd, string, error) {
-	decoded, err := base64.StdEncoding.DecodeString(server.OpenVpnConfigData)
-	if err != nil {
-		return nil, "", fmt.Errorf("decode openvpn config: %w", err)
-	}
-	tmp, err := os.CreateTemp("", "fg-vpngate-*.ovpn")
-	if err != nil {
-		return nil, "", fmt.Errorf("create config file: %w", err)
-	}
-	if _, err := tmp.Write(decoded); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return nil, "", fmt.Errorf("write config file: %w", err)
-	}
-	tmp.Close()
-	cmd := exec.Command("openvpn", "--verb", "3", "--config", tmp.Name(), "--data-ciphers", "AES-128-CBC", "--pull-filter", "ignore", "dhcp-option", "--connect-retry", "2", "--connect-retry-max", "5")
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		os.Remove(tmp.Name())
-		return nil, "", fmt.Errorf("start openvpn: %w", err)
-	}
-	return cmd, tmp.Name(), nil
-}
-
-func killProcess(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	pid := cmd.Process.Pid
-	_ = syscall.Kill(pid, syscall.SIGTERM)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	_ = syscall.Kill(pid, syscall.SIGKILL)
-}
-
-func waitTunDown() {
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := net.InterfaceByName("tun0"); err != nil {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
-func waitTunnelUp(cmd *exec.Cmd) (string, error) {
-	deadline := time.Now().Add(tunnelWaitTimeout)
-	for {
-		if iface, err := net.InterfaceByName("tun0"); err == nil && iface.Flags&net.FlagUp != 0 {
-			break
-		}
-		if cmd != nil && cmd.Process != nil {
-			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-				return "", fmt.Errorf("openvpn exited before tun0 was up")
-			}
-		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("openvpn tunnel (tun0) did not come up within %s", tunnelWaitTimeout)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	deadline2 := time.Now().Add(ipCheckTimeout)
-	for {
-		if ip, err := fetchPublicIP(); err == nil && ip != "" {
-			return ip, nil
-		}
-		if time.Now().After(deadline2) {
-			return "", nil
-		}
-		time.Sleep(750 * time.Millisecond)
-	}
-}
-
-func fetchPublicIP() (string, error) {
-	for _, u := range []string{"https://api.ipify.org?format=json", "https://ifconfig.me/ip"} {
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Get(u)
-		if err != nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			continue
-		}
-		if u == "https://api.ipify.org?format=json" {
-			// try json
-			var out map[string]any
-			if err := parseJSON(body, &out); err == nil {
-				if ip, ok := out["ip"].(string); ok && strings.TrimSpace(ip) != "" {
-					return strings.TrimSpace(ip), nil
-				}
-			}
-		}
-		if ip := strings.TrimSpace(string(body)); ip != "" {
-			return ip, nil
-		}
-	}
-	return "", errors.New("no ip")
-}
-
-func parseJSON(b []byte, v any) error {
-	return json.Unmarshal(b, v)
 }
 
 func (s *supervisorProvider) ipRefresher() {

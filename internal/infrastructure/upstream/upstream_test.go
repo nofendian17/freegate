@@ -2,10 +2,10 @@ package upstream
 
 import (
 	"context"
-	"net/http"
 	"testing"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/model"
 )
 
@@ -18,7 +18,7 @@ type mockUpstream struct {
 func (m *mockUpstream) Name() string                                          { return m.name }
 func (m *mockUpstream) Match(modelID string) bool                             { return m.match(modelID) }
 func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
-func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
+func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
 func (m *mockUpstream) Models() []model.Model                                    { return m.models }

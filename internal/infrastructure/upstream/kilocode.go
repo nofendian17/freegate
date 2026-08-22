@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/model"
 )
@@ -17,8 +18,12 @@ type KiloUpstream struct {
 }
 
 func NewKiloUpstream(baseURL, apiKey string, d *Dialer) *KiloUpstream {
+	return NewKiloUpstreamWithTransport(baseURL, apiKey, NewTransport(d))
+}
+
+func NewKiloUpstreamWithTransport(baseURL, apiKey string, tr *http.Transport) *KiloUpstream {
 	return &KiloUpstream{
-		client: NewHTTPClient(baseURL, []string{apiKey}, d, nil),
+		client: NewHTTPClientWithTransport(baseURL, []string{apiKey}, nil, tr),
 		cache:  NewModelCache(),
 	}
 }
@@ -43,12 +48,7 @@ func (k *KiloUpstream) Match(modelID string) bool {
 	if modelID == "" {
 		return false
 	}
-	for _, m := range k.cache.Get() {
-		if m.ID == modelID {
-			return true
-		}
-	}
-	return false
+	return k.cache.Has(modelID)
 }
 
 func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
@@ -88,6 +88,10 @@ func (k *KiloUpstream) Models() []model.Model {
 	return k.cache.Get()
 }
 
-func (k *KiloUpstream) ChatCompletion(ctx context.Context, body []byte) (*http.Response, error) {
-	return k.client.Post(ctx, "/chat/completions", body)
+func (k *KiloUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
+	resp, err := k.client.Post(ctx, "/chat/completions", body)
+	if err != nil {
+		return nil, err
+	}
+	return domain.NewUpstreamResponse(resp), nil
 }

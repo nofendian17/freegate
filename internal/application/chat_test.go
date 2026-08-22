@@ -7,22 +7,22 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"freegate/internal/domain"
 )
 
 type mockRouter struct {
 	upstream domain.Upstream
-	err      error
 }
 
-func (m *mockRouter) Select(modelID string) (domain.Upstream, error) {
-	return m.upstream, m.err
+func (m *mockRouter) Select(modelID string) domain.Upstream {
+	return m.upstream
 }
 
 type mockUpstream struct {
 	name     string
-	response *http.Response
+	response *domain.UpstreamResponse
 	err      error
 	calls    int
 }
@@ -34,18 +34,18 @@ func (m *mockUpstream) Match(modelID string) bool {
 func (m *mockUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	return nil, nil
 }
-func (m *mockUpstream) ChatCompletion(ctx context.Context, req domain.ChatRequest) (*http.Response, error) {
+func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
 	return m.response, nil
 }
-func (m *mockUpstream) Models() []domain.Model    { return nil }
-func (m *mockUpstream) Start(ctx context.Context) {}
+func (m *mockUpstream) Models() []domain.Model { return nil }
+func (m *mockUpstream) Start(ctx context.Context, _ time.Duration) {}
 
 func TestChatServiceProxyChatSuccess(t *testing.T) {
-	resp := &http.Response{
+	resp := &domain.UpstreamResponse{
 		StatusCode: 200,
 		Body:       io.NopCloser(strings.NewReader("{}")),
 		Header:     http.Header{},
@@ -71,7 +71,7 @@ func TestChatServiceProxyChatSuccess(t *testing.T) {
 // rotation — the user picks the VPN server manually).
 func TestChatServiceProxyChatPassesThrough429(t *testing.T) {
 	body := `{"error":{"message":"Rate limit exceeded. Please try again later."}}`
-	resp := &http.Response{
+	resp := &domain.UpstreamResponse{
 		StatusCode: 429,
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},

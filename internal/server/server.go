@@ -19,7 +19,6 @@ import (
 	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/delivery/ui"
-	"freegate/internal/domain"
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
@@ -48,30 +47,6 @@ type Server struct {
 	rec         *recorder.Recorder
 	rateLimit   *middleware.RateLimiter
 	wg          sync.WaitGroup // tracks background workers
-}
-
-// routerAdapter wraps *upstream.Router to satisfy application.Router,
-// whose Select returns (domain.Upstream, error).
-type routerAdapter struct {
-	*upstream.Router
-}
-
-func (a *routerAdapter) Select(modelID string) (domain.Upstream, error) {
-	return &upstreamAdapter{Upstream: a.Router.Select(modelID)}, nil
-}
-
-// upstreamAdapter wraps upstream.Upstream to satisfy domain.Upstream
-// (different ChatRequest signature, different Start signature).
-type upstreamAdapter struct {
-	upstream.Upstream
-}
-
-func (u *upstreamAdapter) ChatCompletion(ctx context.Context, req domain.ChatRequest) (*http.Response, error) {
-	return u.Upstream.ChatCompletion(ctx, req.Body)
-}
-
-func (u *upstreamAdapter) Start(ctx context.Context) {
-	u.Upstream.Start(ctx, 0)
 }
 
 // vpnUI adapts the VPN provider for the dashboard: it wraps the Provider
@@ -139,7 +114,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// Docker sidecar mode: VPNGATE_HOST explicitly set to non-loopback (e.g. "vpn")
 	// means the vpn container holds the tunnel. Use its HTTP API and don't
 	// show the per-OS openvpn install hint.
-	if os.Getenv("VPNGATE_HOST") != "" && cfg.VPNGateHost != "127.0.0.1" {
+	if cfg.IsSidecarMode() {
 		ctrl := vpngate.NewController(cfg.VPNGateHost, cfg.VPNGateCtrlPort, time.Duration(cfg.VPNGateRotateInterval)*time.Second)
 		vpnProvider = &sidecarAdapter{ctrl: ctrl}
 	} else {
@@ -158,45 +133,37 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 	}
 
-	// One shared dialer routes upstreams; direct vs tunnel is switched
-	// live from the dashboard (replaces the old static BYPASS_PROXY env).
+	// One shared dialer + transport routes all upstreams; direct vs tunnel
+	// is switched live from the dashboard. Sharing the Transport pools idle
+	// connections once instead of per-upstream.
 	dialer := upstream.NewDialer(cfg.SOCKSAddr)
-	// If embedded VPN fell back to direct at construction (openvpn missing),
-	// ensure dialer is direct so upstreams don't try SOCKS with no listener.
-	// Sidecar mode already has SOCKS via vpn:9050, so skip this.
-	if _, isSidecar := vpnProvider.(*sidecarAdapter); !isSidecar && vpnProvider.CurrentIP() == "direct" {
+	// Single source for direct mode: Config.IsDirect().
+	if cfg.IsDirect() {
 		dialer.SetDirect(true)
 	}
-
-	opencode := upstream.NewOpenCodeUpstream(
-		cfg.UpstreamURLOpenCode,
-		cfg.UpstreamKeyOpenCode,
-		dialer,
-		cfg.UpstreamOpenCodeFreeAllowlist,
-	)
-	kilo := upstream.NewKiloUpstream(
-		cfg.UpstreamURLKilo,
-		cfg.UpstreamKeyKilo,
-		dialer,
-	)
-	llm7 := upstream.NewLLM7Upstream(cfg.UpstreamURLLLM7, dialer)
-
-	infraRouter := upstream.NewRouter(opencode, kilo, llm7)
-	appRouter := &routerAdapter{Router: infraRouter}
+	// Safety fallback for openvpn-missing case where provider is direct
+	// but cfg still carried SOCKSAddr.
+	if _, isSidecar := vpnProvider.(*sidecarAdapter); !isSidecar {
+		if vpnProvider.CurrentIP() == "direct" && !dialer.IsDirect() {
+			dialer.SetDirect(true)
+		}
+	}
+	sharedTr := buildSharedTransport(dialer)
+	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
 	m := metrics.New()
-
-	cs := application.NewChatService(appRouter, m)
 	ms := application.NewModelService(infraRouter)
-
-	rec := recorder.NewRecorder(m.Snapshot)
-	rec.SetModelsFunc(ms.AllModels)
-	rec.SetVPNIPFunc(func() string {
-		if dialer.IsDirect() {
-			return "direct"
-		}
-		return vpnProvider.CurrentIP()
+	rec := recorder.NewRecorderWithDeps(recorder.Deps{
+		Metrics: m.Snapshot,
+		Models:  ms.AllModels,
+		VPNIP: func() string {
+			if dialer.IsDirect() {
+				return "direct"
+			}
+			return vpnProvider.CurrentIP()
+		},
 	})
+	cs := application.NewChatService(infraRouter, m)
 	cs.WithRequestLogger(rec.RecordRequestLog)
 
 	tpl, err := ui.LoadTemplates(web.Templates())
