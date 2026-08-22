@@ -39,6 +39,7 @@ services:
       - VPNGATE_ROTATE_INTERVAL=${VPNGATE_ROTATE_INTERVAL:-30}
       - PORT=1234
       - LOG_LEVEL=info
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT=${RATE_LIMIT:-60}
       - UPSTREAM_URL_OPENCODE=${UPSTREAM_URL_OPENCODE:-https://opencode.ai/zen/v1}
