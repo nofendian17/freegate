@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -123,9 +124,29 @@ func TestEnvSlice_EmptyItem(t *testing.T) {
 	}
 }
 
+func TestConfig_Load_MultiAPIKey(t *testing.T) {
+	t.Setenv("API_KEY", "key1, key2, key3")
+	t.Setenv("ADMIN_TOKEN", "0123456789abcdef0123456789abcdef")
+	cfg := Load()
+	if len(cfg.APIKey) != 3 || cfg.APIKey[0] != "key1" || cfg.APIKey[1] != "key2" {
+		t.Fatalf("APIKey split failed: %+v", cfg.APIKey)
+	}
+	if cfg.AdminToken != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("AdminToken failed: %s", cfg.AdminToken)
+	}
+}
+func TestConfig_Validate_AdminRequired(t *testing.T) {
+	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateCtrlPort: 8080, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN") {
+		t.Fatalf("expected ADMIN_TOKEN required error, got %v", err)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:                  1234,
+		AdminToken:            "0123456789abcdef0123456789abcdef",
+		APIKey:                []string{"test-key"},
 		VPNEnabled:            true,
 		VPNProvider:           "auto",
 		VPNGateHost:           "127.0.0.1",

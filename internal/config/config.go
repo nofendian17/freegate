@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Port      int
-	LogLevel  string
-	APIKey    string
-	RateLimit int
+	Port       int
+	LogLevel   string
+	AdminToken string
+	APIKey     []string
+	RateLimit  int
 
 	// VPN controls the embedded VPNGate provider (single-binary mode).
 	// When enabled, freegate starts an in-process OpenVPN tunnel + SOCKS5
@@ -58,12 +59,16 @@ func (c *Config) IsSidecarMode() bool {
 	return os.Getenv("VPNGATE_HOST") != "" && c.VPNGateHost != "127.0.0.1"
 }
 
+// IsAdminAuthEnabled reports whether admin auth is configured.
+func (c *Config) IsAdminAuthEnabled() bool { return c.AdminToken != "" }
+
 func Load() *Config {
 	cfg := &Config{
-		Port:      envInt("PORT", 1234),
-		LogLevel:  envStr("LOG_LEVEL", "info"),
-		APIKey:    envStr("API_KEY", ""),
-		RateLimit: envInt("RATE_LIMIT", 60),
+		Port:       envInt("PORT", 1234),
+		LogLevel:   envStr("LOG_LEVEL", "info"),
+		AdminToken: envStr("ADMIN_TOKEN", ""),
+		APIKey:     envSlice("API_KEY", ""),
+		RateLimit:  envInt("RATE_LIMIT", 60),
 
 		VPNEnabled:  envBool("VPN_ENABLED", true),
 		VPNProvider: envStr("VPN_PROVIDER", "auto"),
@@ -104,6 +109,12 @@ func Load() *Config {
 
 func (c *Config) Validate() error {
 	var errs []string
+
+	if c.AdminToken == "" {
+		errs = append(errs, "ADMIN_TOKEN is required")
+	} else if len(c.AdminToken) < 16 {
+		errs = append(errs, "ADMIN_TOKEN must be at least 16 characters")
+	}
 
 	if c.UpstreamURLOpenCode == "" {
 		errs = append(errs, "UPSTREAM_URL_OPENCODE is required")
