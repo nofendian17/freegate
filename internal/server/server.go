@@ -39,6 +39,7 @@ const (
 type Server struct {
 	cfg         *config.Config
 	httpSrv     *http.Server
+	Handler     http.Handler
 	logger      *slog.Logger
 	vpnProvider vpn.Provider
 	opencode    *upstream.OpenCodeUpstream
@@ -171,7 +172,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static())
+	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static(), cfg.AdminToken)
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
@@ -181,19 +182,26 @@ func New(cfg *config.Config) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CORS)
 
-	// UI dashboard at / — no rate limit, no auth
-	r.Mount("/", uiHandler.Routes())
+	apiAuth := middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)
+	adminAuth := middleware.AdminAuth(cfg.AdminToken)
+
+	// Public routes — must be before admin mount so they are not shadowed.
+	r.Get("/login", uiHandler.LoginPage)
+	r.Post("/login", uiHandler.Login)
+	r.Post("/logout", uiHandler.Logout)
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(web.Static()))))
+
+	// Dashboard (admin-only) — all uiHandler routes require AdminAuth.
+	r.With(adminAuth).Mount("/", uiHandler.Routes())
 
 	// API (OpenAI-compatible) — rate limit + auth apply to these only.
-	// These specific routes are registered on the root mux and are checked
-	// BEFORE the default handler set by Mount("/").
-	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Route("/v1", func(r chi.Router) {
+	r.With(rl.Middleware, apiAuth).Route("/v1", func(r chi.Router) {
 		r.Get("/models", apiHandler.ListModels)
 		r.Get("/metrics", apiHandler.Metrics)
 		r.Post("/chat/completions", apiHandler.Chat)
 	})
-	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Post("/v1/messages", apiHandler.Chat)
-	r.With(rl.Middleware, middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)).Get("/ready", apiHandler.Ready)
+	r.With(rl.Middleware, apiAuth).Post("/v1/messages", apiHandler.Chat)
+	r.With(rl.Middleware, apiAuth).Get("/ready", apiHandler.Ready)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpSrv := &http.Server{
@@ -208,6 +216,7 @@ func New(cfg *config.Config) (*Server, error) {
 	return &Server{
 		cfg:         cfg,
 		httpSrv:     httpSrv,
+		Handler:     r,
 		logger:      logger,
 		vpnProvider: vpnProvider,
 		opencode:    opencode,
