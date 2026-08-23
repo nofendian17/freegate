@@ -490,6 +490,54 @@ func TestClaudeToOpenAI_ToolUseUnparsedRawQuote(t *testing.T) {
 	}
 }
 
+// TestClaudeToOpenAI_AdaptiveThinking reproduces the Claude Code 2.1.241+
+// request shape: thinking {"type":"adaptive"} plus output_config.effort.
+// OpenAI-compatible upstreams reject (or hang on) the unknown adaptive
+// shape — error "[1210] This model always engages in thinking and cannot
+// be disabled; please use low, high, or max". The translation must drop
+// the thinking object and map effort onto reasoning_effort.
+func TestClaudeToOpenAI_AdaptiveThinking(t *testing.T) {
+	body := `{"model":"x","max_tokens":100,"thinking":{"type":"adaptive","display":"omitted"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON result: %v", err)
+	}
+	if _, ok := openai["thinking"]; ok {
+		t.Errorf("adaptive thinking must be dropped for OpenAI upstreams, got %v", openai["thinking"])
+	}
+	if eff, _ := openai["reasoning_effort"].(string); eff != "high" {
+		t.Errorf("expected reasoning_effort=high from output_config.effort, got %v", openai["reasoning_effort"])
+	}
+}
+
+// TestClaudeToOpenAI_EnabledThinkingPassthrough keeps the pre-existing
+// contract: Claude-native enabled/disabled thinking shapes pass through
+// verbatim and output_config alone does not invent a reasoning_effort.
+func TestClaudeToOpenAI_EnabledThinkingPassthrough(t *testing.T) {
+	body := `{"model":"x","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":512},"messages":[{"role":"user","content":"hi"}]}`
+	result, err := ToOpenAI([]byte(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var openai map[string]any
+	if err := json.Unmarshal(result, &openai); err != nil {
+		t.Fatalf("invalid JSON result: %v", err)
+	}
+	th, ok := openai["thinking"].(map[string]any)
+	if !ok || th["type"] != "enabled" {
+		t.Fatalf("expected thinking passthrough, got %v", openai["thinking"])
+	}
+	if _, ok := openai["reasoning_effort"]; ok {
+		t.Error("reasoning_effort must not be set without output_config.effort")
+	}
+}
+
 // TestMustJSON_UnescapedQuote directly exercises mustJSON with a map whose value
 // contains an unescaped inner quote + literal newline; the result must be valid JSON.
 func TestMustJSON_UnescapedQuote(t *testing.T) {
