@@ -11,6 +11,7 @@ require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/davegallant/vpngate v0.7.0
 	github.com/joho/godotenv v1.5.1
+	golang.org/x/sync v0.22.0
 )
 
 require (

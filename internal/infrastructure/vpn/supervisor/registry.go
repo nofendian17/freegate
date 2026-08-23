@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
 
@@ -21,10 +23,22 @@ type serverRegistry struct {
 	servers     []vpn.Server
 	lastRefresh time.Time
 	cfg         Config
+
+	// sf deduplicates concurrent server-list fetches so racing callers
+	// (rotation vs ListServers vs RefreshServers) share one network call
+	// and one result instead of spawning parallel fetch goroutines.
+	sf singleflight.Group
+
+	// fetch is the raw-list seam; swapped in tests. Defaults to
+	// fetchServerList.
+	fetch func(refresh bool) (*[]vpn.Server, error)
 }
 
 func newServerRegistry(cfg Config) *serverRegistry {
-	return &serverRegistry{cfg: cfg}
+	if cfg.RefreshInt == 0 {
+		cfg.RefreshInt = 300 * time.Second
+	}
+	return &serverRegistry{cfg: cfg, fetch: fetchServerList}
 }
 
 // matches reports whether a server passes the configured country / score
@@ -54,14 +68,26 @@ func (r *serverRegistry) getServers() ([]vpn.Server, error) {
 	r.mu.Unlock()
 
 	if refresh || len(servers) == 0 {
-		list, err := fetchServerList(refresh)
+		v, err, _ := r.sf.Do("list", func() (any, error) {
+			// Double-check freshness inside the flight: another caller
+			// may have refreshed between our staleness check and our
+			// turn to own the flight.
+			if list, ok := r.freshCache(); ok {
+				return list, nil
+			}
+			list, ferr := r.fetch(refresh)
+			if ferr != nil {
+				return nil, ferr
+			}
+			return *list, nil
+		})
 		if err != nil {
 			if len(servers) == 0 {
 				return nil, fmt.Errorf("fetch vpngate server list: %w", err)
 			}
 			slog.Warn("vpngate: server list refresh failed, using stale cache", "error", err)
 		} else {
-			servers = *list
+			servers = v.([]vpn.Server)
 			r.mu.Lock()
 			r.servers = servers
 			r.lastRefresh = time.Now()
@@ -89,18 +115,25 @@ func (r *serverRegistry) listServers() ([]ServerInfo, error) {
 
 // refreshServers forces a live re-fetch of the vpngate list (ignoring the
 // refresh interval), swaps the cache, and returns the freshly filtered
-// relays.
+// relays. Concurrent refresh calls share a single fetch.
 func (r *serverRegistry) refreshServers() ([]ServerInfo, error) {
-	list, err := fetchServerList(true)
+	v, err, _ := r.sf.Do("refresh", func() (any, error) {
+		list, ferr := r.fetch(true)
+		if ferr != nil {
+			return nil, ferr
+		}
+		return *list, nil
+	})
 	if err != nil {
 		return nil, err
 	}
+	servers := v.([]vpn.Server)
 	r.mu.Lock()
-	r.servers = *list
+	r.servers = servers
 	r.lastRefresh = time.Now()
 	r.mu.Unlock()
-	out := make([]ServerInfo, 0, len(*list))
-	for _, sv := range *list {
+	out := make([]ServerInfo, 0, len(servers))
+	for _, sv := range servers {
 		out = append(out, serverInfoOf(sv))
 	}
 	return out, nil
@@ -137,9 +170,26 @@ func serverInfoOf(sv vpn.Server) ServerInfo {
 	}
 }
 
+// freshCache reports the cached list when it exists and is within the
+// refresh interval.
+func (r *serverRegistry) freshCache() ([]vpn.Server, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.servers) > 0 && !r.lastRefresh.IsZero() &&
+		time.Since(r.lastRefresh) < r.cfg.RefreshInt {
+		return r.servers, true
+	}
+	return nil, false
+}
+
 // fetchServerList wraps vpn.GetListWithOptions with a hard timeout so a
 // hung upstream (the library retries internally for up to minutes) cannot
 // stall a rotation.
+//
+// Residual limitation: the vpngate library takes no context, so a caller
+// that times out cannot cancel the underlying goroutine — it runs until
+// the library returns. singleflight collapses concurrent callers onto one
+// in-flight fetch, bounding how many such goroutines can pile up per key.
 func fetchServerList(refresh bool) (*[]vpn.Server, error) {
 	type result struct {
 		servers *[]vpn.Server

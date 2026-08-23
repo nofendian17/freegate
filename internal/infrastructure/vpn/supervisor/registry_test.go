@@ -1,7 +1,11 @@
 package supervisor
 
 import (
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
@@ -31,5 +35,91 @@ func TestRegistryMatchesFilters(t *testing.T) {
 				t.Fatalf("matches() = %v, want %v (cfg=%+v sv=%+v)", got, tt.want, tt.cfg, tt.sv)
 			}
 		})
+	}
+}
+
+func TestGetServersDeduplicatesConcurrentFetches(t *testing.T) {
+	r := newServerRegistry(Config{})
+
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r.fetch = func(bool) (*[]vpn.Server, error) {
+		calls.Add(1)
+		once.Do(func() { close(started) })
+		<-release
+		list := []vpn.Server{{HostName: "a", Score: 1}}
+		return &list, nil
+	}
+
+	const n = 5
+	results := make(chan int, n)
+	for range n {
+		go func() {
+			servers, err := r.getServers()
+			if err != nil {
+				results <- -1
+				return
+			}
+			results <- len(servers)
+		}()
+	}
+
+	<-started // the single in-flight fetch is running
+	close(release)
+
+	for range n {
+		if got := <-results; got != 1 {
+			t.Fatalf("getServers returned %d servers, want 1", got)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("fetch ran %d times across %d concurrent callers, want 1", calls.Load(), n)
+	}
+
+	// The cache is now fresh: a sequential call must not re-fetch.
+	if _, err := r.getServers(); err != nil {
+		t.Fatalf("unexpected error on cached call: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("cached getServers re-fetched (calls=%d)", calls.Load())
+	}
+}
+
+func TestRefreshServersDeduplicatesAndForcesFetch(t *testing.T) {
+	r := newServerRegistry(Config{RefreshInt: time.Hour})
+
+	var calls atomic.Int32
+	r.fetch = func(refresh bool) (*[]vpn.Server, error) {
+		calls.Add(1)
+		if !refresh {
+			return nil, fmt.Errorf("refreshServers must force refresh")
+		}
+		list := []vpn.Server{{HostName: "fresh", Score: 2}}
+		return &list, nil
+	}
+
+	const n = 4
+	errs := make(chan error, n)
+	for range n {
+		go func() {
+			_, err := r.refreshServers()
+			errs <- err
+		}()
+	}
+	for range n {
+		if err := <-errs; err != nil {
+			t.Fatalf("refreshServers: %v", err)
+		}
+	}
+	// Forced refresh runs at least once; racing callers may collapse onto
+	// a shared flight but never error out or lose the result.
+	if calls.Load() < 1 || calls.Load() > n {
+		t.Fatalf("fetch ran %d times, want between 1 and %d", calls.Load(), n)
+	}
+	servers, err := r.listServers()
+	if err != nil || len(servers) != 1 || servers[0].Hostname != "fresh" {
+		t.Fatalf("cache not updated by shared refresh: %+v, %v", servers, err)
 	}
 }
