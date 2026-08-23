@@ -35,7 +35,7 @@ func ToOpenAI(body []byte) ([]byte, error) {
 	// and prepost.AdjustMaxTokens both read body.thinking downstream, and
 	// upstreams that support extended thinking accept this Claude-native
 	// shape directly.
-	copyField(claude, openai, "thinking")
+	copyThinking(claude, openai)
 
 	// metadata.user_id → OpenAI's top-level "user" field (end-user
 	// identifier). Claude nests it under metadata; OpenAI expects a plain
@@ -111,6 +111,47 @@ func ToOpenAI(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("translate: marshal openai request: %w", err)
 	}
 	return result, nil
+}
+
+// copyThinking translates the Claude-native thinking config for the
+// OpenAI-intermediate representation. Enabled/disabled shapes pass through
+// verbatim (upstreams that support extended thinking accept them as-is).
+//
+// Claude Code 2.1.241+ additionally emits thinking {"type":"adaptive"} —
+// a Claude-only mode with no OpenAI-compatible equivalent. Forwarding it
+// verbatim makes upstreams reject the request ("[1210] This model always
+// engages in thinking and cannot be disabled; please use low, high, or
+// max") or hang. Adaptive is therefore dropped; the user-facing effort
+// hint from output_config.effort is mapped to reasoning_effort instead.
+func copyThinking(claude, openai map[string]any) {
+	if th, ok := claude["thinking"].(map[string]any); ok {
+		if typ, _ := th["type"].(string); typ == "enabled" || typ == "disabled" {
+			openai["thinking"] = th
+		}
+		// Unknown/adaptive types are dropped: reasoning models keep their
+		// default always-on behavior, which matches what these upstreams do
+		// when no thinking field is present.
+	}
+	if oc, ok := claude["output_config"].(map[string]any); ok {
+		if eff, _ := oc["effort"].(string); eff != "" {
+			if mapped := mapEffort(eff); mapped != "" {
+				openai["reasoning_effort"] = mapped
+			}
+		}
+	}
+}
+
+// mapEffort passes OpenAI-spec reasoning_effort values through verbatim
+// (see https://developers.openai.com/api/docs/guides/reasoning) and
+// returns "" for anything else so unknown hints are dropped rather than
+// invented.
+func mapEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return ""
+	}
 }
 
 // convertClaudeMessages converts an array of Claude messages to OpenAI format.
