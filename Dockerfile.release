@@ -1,0 +1,7 @@
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY freegate /usr/local/bin/freegate
+EXPOSE 1234
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:1234/ready || exit 1
+ENTRYPOINT ["/usr/local/bin/freegate"]

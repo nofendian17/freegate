@@ -28,6 +28,9 @@ services:
       - fg-net
 
   proxy:
+    # Published by GoReleaser to GHCR on every tagged release.
+    # To build from source instead: docker compose up -d --build
+    image: ghcr.io/nofendian17/freegate:latest
     build: .
     container_name: fg-proxy
     ports:

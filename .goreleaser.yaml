@@ -32,6 +32,36 @@ archives:
       - README.md
       - .env.example
 
+# Multi-arch images published to GHCR on every tagged release:
+#   ghcr.io/nofendian17/freegate:latest and :<version>
+# Dockerfile.release copies the pre-built binary; no in-container compile.
+dockers:
+  - image_templates:
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-amd64
+    dockerfile: Dockerfile.release
+    binary: freegate
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-arm64
+    goarch: arm64
+    dockerfile: Dockerfile.release
+    binary: freegate
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: ghcr.io/nofendian17/freegate:latest
+    image_templates:
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-amd64
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-arm64
+  - name_template: "ghcr.io/nofendian17/freegate:{{ .Version }}"
+    image_templates:
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-amd64
+      - ghcr.io/nofendian17/freegate:{{ .Version }}-arm64
+
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
