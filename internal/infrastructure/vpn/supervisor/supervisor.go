@@ -57,6 +57,11 @@ type Supervisor struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// connects tracks in-flight connect attempts from API callers so a
+	// Close racing a Rotate/ConnectTo waits for the attempt to observe
+	// cancellation instead of returning while a spawn is still possible.
+	connects sync.WaitGroup
+
 	mu          sync.Mutex
 	rotating    bool
 	cur         *managedProcess
@@ -195,10 +200,13 @@ func (s *Supervisor) reconnectLoop() {
 // held for short state reads/writes, never while a tunnel is being brought
 // up, so control endpoints stay responsive during a slow rotation.
 func (s *Supervisor) Rotate() error {
-	// Nil-ctx safe: Rotate may be called before Start.
-	if err := s.shutdownStarted(); err != nil {
+	// Registering before the rotation guard keeps Close's accounting
+	// conservative: it may wait for a rotation that then no-ops on the
+	// guard, never the reverse.
+	if err := s.enterConnect(); err != nil {
 		return err
 	}
+	defer s.connects.Done()
 
 	end, err := s.beginRotation()
 	if err != nil {
@@ -269,6 +277,19 @@ func (s *Supervisor) shutdownStarted() error {
 	default:
 		return nil
 	}
+}
+
+// enterConnect registers an in-flight connect attempt. It fails once
+// shutdown has started, so a caller that passes here is guaranteed that
+// Close's wg.Wait (which runs after cancel) will wait for it — closing
+// the window where a tunnel could be spawned after Close returns.
+// Pair every successful call with s.connects.Done() via defer.
+func (s *Supervisor) enterConnect() error {
+	if err := s.shutdownStarted(); err != nil {
+		return err
+	}
+	s.connects.Add(1)
+	return nil
 }
 
 // sleepCtx waits for d, returning false as soon as ctx is cancelled so
@@ -382,6 +403,11 @@ func (s *Supervisor) connectToServer(server vpn.Server) error {
 // path. Only servers that pass the configured filters are connectable, so
 // the picker and the direct API agree on what the operator may select.
 func (s *Supervisor) ConnectTo(hostname string) error {
+	if err := s.enterConnect(); err != nil {
+		return err
+	}
+	defer s.connects.Done()
+
 	servers, err := s.registry.getServers()
 	if err != nil {
 		return fmt.Errorf("fetch server list: %w", err)
@@ -588,7 +614,12 @@ func (s *Supervisor) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	// Wait for background loops AND any in-flight API connect attempt:
+	// a Rotate/ConnectTo that passed enterConnect before cancel may still
+	// be between checks; it observes ctx cancellation at its next
+	// shutdownStarted/connectToServer gate and aborts without spawning.
 	s.wg.Wait()
+	s.connects.Wait()
 
 	s.mu.Lock()
 	cur := s.cur

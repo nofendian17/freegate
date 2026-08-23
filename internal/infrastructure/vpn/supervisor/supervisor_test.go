@@ -186,3 +186,60 @@ func TestSleepCtx(t *testing.T) {
 		t.Fatal("sleepCtx must report true when the duration elapsed")
 	}
 }
+
+func TestCloseWaitsForInFlightRotate(t *testing.T) {
+	s := New(Config{SocksAddr: "127.0.0.1:19053"})
+	ctx, cancel := context.WithCancel(context.Background())
+	s.ctx, s.cancel = ctx, cancel
+
+	// Hold a fake in-flight connect attempt the way Rotate/ConnectTo do.
+	if err := s.enterConnect(); err != nil {
+		t.Fatalf("enterConnect before shutdown: %v", err)
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeDone)
+	}()
+
+	// Give Close time to reach cancel + wg.Wait + connects.Wait.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while a connect attempt was still registered")
+	default:
+	}
+
+	// The in-flight attempt observes cancellation at its next gate and
+	// finishes without spawning a tunnel.
+	if err := s.shutdownStarted(); err == nil {
+		t.Error("shutdownStarted must fail after Close cancelled the ctx")
+	}
+	s.connects.Done()
+
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close never returned after the connect attempt finished")
+	}
+}
+
+func TestRotateAfterCloseIsRejected(t *testing.T) {
+	s := New(Config{SocksAddr: "127.0.0.1:19054"})
+	ctx, cancel := context.WithCancel(context.Background())
+	s.ctx, s.cancel = ctx, cancel
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	err := s.Rotate()
+	if err == nil {
+		t.Fatal("Rotate after Close must be rejected")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if err := s.ConnectTo("whatever"); err == nil {
+		t.Fatal("ConnectTo after Close must be rejected")
+	}
+}
