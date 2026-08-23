@@ -151,8 +151,12 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	// Upstream HTTP errors (429/5xx) are passed through verbatim; capture
 	// the upstream's own error message so the record log shows why it
-	// failed instead of only the bare status code.
+	// failed instead of only the bare status code. Count it in stats too —
+	// these were previously invisible in the dashboard's error counters.
 	if resp.StatusCode >= 400 {
+		if s.metrics != nil {
+			s.metrics.UpstreamErrors.Add(1)
+		}
 		if msg := proxyinfra.PassThroughDomainError(w, resp); msg != "" {
 			finalErr = fmt.Errorf("upstream: %s", msg)
 		}
