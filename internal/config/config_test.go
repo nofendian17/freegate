@@ -135,6 +135,19 @@ func TestConfig_Load_MultiAPIKey(t *testing.T) {
 		t.Fatalf("AdminToken failed: %s", cfg.AdminToken)
 	}
 }
+
+func TestConfig_Load_VPNGateCountry(t *testing.T) {
+	cfg := Load()
+	if cfg.VPNGateCountry != "" {
+		t.Fatalf("expected empty VPNGateCountry by default, got %q", cfg.VPNGateCountry)
+	}
+
+	t.Setenv("VPNGATE_COUNTRY", "!US")
+	cfg = Load()
+	if cfg.VPNGateCountry != "!US" {
+		t.Fatalf("expected VPNGateCountry=!US, got %q", cfg.VPNGateCountry)
+	}
+}
 func TestConfig_Validate_AdminRequired(t *testing.T) {
 	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateCtrlPort: 8080, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN") {
