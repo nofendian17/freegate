@@ -1,28 +1,27 @@
-package vpn
+package supervisor
 
 import (
-	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
 
 const (
+	// Server-selection weighting. Score is the primary reliability signal;
+	// ping is secondary (many relays report 0 or no ping at all).
 	selectionScoreWeight = 0.7
 	selectionPingWeight  = 0.3
-	selectionMinWeight   = 0.05
-	rotateAttempts       = 3
-	tunnelWaitTimeout    = 8 * time.Second
-	ipCheckTimeout       = 6 * time.Second
-	ipRefreshAttempts    = 3
-	ipRefreshRetryDelay  = 3 * time.Second
-	listFetchTimeout     = 20 * time.Second
+	// selectionMinWeight keeps every filtered candidate eligible even when
+	// its score is far below the best one, preserving exit-IP variety.
+	selectionMinWeight = 0.05
 )
 
-// pickWeighted chooses a server via weighted random selection.
+// pickWeighted chooses a server via weighted random selection. Weights
+// combine score and ping, each normalized across the candidate set: a
+// higher score or a lower ping raises the odds, but every candidate stays
+// eligible so consecutive rotations still vary the exit IP.
 func pickWeighted(candidates []vpn.Server) vpn.Server {
 	maxScore, maxPing := 0, 0
 	for _, sv := range candidates {
@@ -52,6 +51,10 @@ func pickWeighted(candidates []vpn.Server) vpn.Server {
 	return candidates[len(candidates)-1]
 }
 
+// selectionWeight computes the weight for one candidate given the max
+// score and max ping across the candidate set. A higher score or a lower
+// ping raises the weight; ping 0 or missing means "unknown" and gets a
+// neutral weight, never the bonus a real low ping would earn.
 func selectionWeight(sv vpn.Server, maxScore, maxPing int) float64 {
 	scoreW := 1.0
 	if maxScore > 0 {
@@ -68,6 +71,9 @@ func selectionWeight(sv vpn.Server, maxScore, maxPing int) float64 {
 	return w
 }
 
+// matchCountry reports whether a server matches the country filter. A
+// leading "!" turns the filter into an exclusion, e.g. "!Japan" matches
+// every country except Japan.
 func matchCountry(filter string, s vpn.Server) bool {
 	if filter == "" {
 		return true
@@ -91,22 +97,4 @@ func parsePing(ping string) (int, bool) {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(ping))
 	return n, err == nil
-}
-
-func fetchServerList(refresh bool) (*[]vpn.Server, error) {
-	type result struct {
-		servers *[]vpn.Server
-		err     error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		list, err := vpn.GetListWithOptions("", "", vpn.ListOptions{Refresh: refresh})
-		ch <- result{servers: list, err: err}
-	}()
-	select {
-	case r := <-ch:
-		return r.servers, r.err
-	case <-time.After(listFetchTimeout):
-		return nil, fmt.Errorf("server list fetch timed out after %s", listFetchTimeout)
-	}
 }

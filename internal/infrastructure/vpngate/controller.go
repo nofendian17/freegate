@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"freegate/internal/infrastructure/vpn/supervisor"
 )
 
 const (
@@ -29,48 +31,14 @@ const (
 	requestTimeout = 100 * time.Second
 )
 
-// ServerInfo is one relay server offered by the supervisor's /servers
-// endpoint (already filtered by the supervisor's configured filters).
-type ServerInfo struct {
-	Hostname    string `json:"hostname"`
-	IP          string `json:"ip"`
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	Score       int    `json:"score"`
-	Ping        string `json:"ping"`
-}
-
-// StatusInfo is the supervisor's current tunnel state (GET /status).
-type StatusInfo struct {
-	Connected   bool   `json:"connected"`
-	Server      string `json:"server"`
-	Country     string `json:"country"`
-	IP          string `json:"ip"`
-	ConnectedAt int64  `json:"connected_at"`
-}
-
-// PingResult is the outcome of the supervisor's live connectivity check
-// (POST /ping): DNS resolution, an HTTPS egress probe with latency, and
-// the current tunnel state. Direct is filled in by the proxy side (the
-// supervisor has no notion of the dialer route) so the dashboard can tell
-// the user that the ping reflects the tunnel, not the active route.
-type PingResult struct {
-	Connected bool   `json:"connected"`
-	Direct    bool   `json:"direct"`
-	Server    string `json:"server"`
-	Country   string `json:"country"`
-	IP        string `json:"ip"`
-
-	DNSOK    bool   `json:"dns_ok"`
-	DNSMS    int64  `json:"dns_ms"`
-	DNSError string `json:"dns_error,omitempty"`
-
-	EgressOK  bool   `json:"egress_ok"`
-	EgressIP  string `json:"egress_ip,omitempty"`
-	HTTPMS    int64  `json:"http_ms"`
-	HTTPCode  int    `json:"http_code"`
-	EgressErr string `json:"egress_error,omitempty"`
-}
+// Wire DTOs live in the supervisor core (single source of truth for both
+// the sidecar binary and the in-process provider); aliased here to keep
+// this client's public API stable.
+type (
+	ServerInfo = supervisor.ServerInfo
+	StatusInfo = supervisor.StatusInfo
+	PingResult = supervisor.PingResult
+)
 
 // Controller rotates the apparent exit IP by asking the supervisor to
 // reconnect its OpenVPN tunnel to a different VPNGate server.

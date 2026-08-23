@@ -2,22 +2,8 @@ package vpn
 
 import (
 	"context"
-	"errors"
 	"testing"
 )
-
-func TestLinuxProvider_PreflightMissingOpenVPN(t *testing.T) {
-	orig := execLookPath
-	execLookPath = func(string) (string, error) { return "", errors.New("not found") }
-	defer func() { execLookPath = orig }()
-	p := newLinuxProvider(ProviderConfig{Enabled: true, SocksAddr: "127.0.0.1:9050"})
-	if err := p.Start(context.Background()); err != nil {
-		t.Errorf("expected fallback nil error when openvpn missing, got %v", err)
-	}
-	if got := p.CurrentIP(); got != "direct" && got != "" {
-		t.Errorf("expected direct or empty on fallback, got %s", got)
-	}
-}
 
 func TestNewProvider_AutoReturnsDirectWhenDisabled(t *testing.T) {
 	p, err := NewProvider(ProviderConfig{Enabled: false})
@@ -27,7 +13,48 @@ func TestNewProvider_AutoReturnsDirectWhenDisabled(t *testing.T) {
 	if p == nil {
 		t.Fatal("expected provider")
 	}
-	if p.CurrentIP() != "direct" {
-		t.Errorf("expected direct, got %s", p.CurrentIP())
+	if got := p.CurrentIP(); got != "direct" {
+		t.Errorf("expected direct, got %s", got)
+	}
+}
+
+func TestNewProvider_ProviderDirect(t *testing.T) {
+	p, err := NewProvider(ProviderConfig{Enabled: true, Provider: "direct"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if _, ok := p.(*directProvider); !ok {
+		t.Fatalf("expected directProvider, got %T", p)
+	}
+}
+
+func TestDirectProvider_Noops(t *testing.T) {
+	d := &directProvider{}
+	if err := d.Start(context.Background()); err != nil {
+		t.Errorf("Start: %v", err)
+	}
+	if err := d.Rotate(); err != nil {
+		t.Errorf("Rotate: %v", err)
+	}
+	if err := d.ConnectTo("x"); err != nil {
+		t.Errorf("ConnectTo: %v", err)
+	}
+	servers, err := d.ListServers()
+	if servers != nil || err != nil {
+		t.Errorf("ListServers = %v, %v; want nil, nil", servers, err)
+	}
+	st, err := d.Status()
+	if err != nil || st.Connected {
+		t.Errorf("Status = %+v, %v; want zero, nil", st, err)
+	}
+	pr, err := d.Ping()
+	if err != nil || !pr.Direct {
+		t.Errorf("Ping = %+v, %v; want Direct=true", pr, err)
+	}
+	if d.InstallHint() != "" {
+		t.Error("InstallHint should be empty")
+	}
+	if err := d.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 }
