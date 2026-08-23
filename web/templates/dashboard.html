@@ -28,6 +28,9 @@
         <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
         <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
         <span><span class="label">vpn ip</span><span id="vpn-ip">{{if .VPNIP}}{{.VPNIP}}{{else}}—{{end}}</span></span>
+        <form method="POST" action="/logout" class="logout-form">
+          <button type="submit" class="btn-tertiary">> logout</button>
+        </form>
       </div>
     </nav>
 

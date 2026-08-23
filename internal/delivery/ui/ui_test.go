@@ -105,6 +105,25 @@ func TestDashboardRenders(t *testing.T) {
 	}
 }
 
+// TestDashboardLogoutButton ensures the dashboard nav exposes the logout
+// form so admins can end their session without clearing cookies manually.
+func TestDashboardLogoutButton(t *testing.T) {
+	h := newTestHandler(t)
+	rr := serveViaRoutes(h, "GET", "/")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<form method="POST" action="/logout"`,
+		`type="submit"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
 // TestDashboardVPNDirectPickerDefault guards against the dashboard picker
 // silently defaulting to "$ direct (no VPN)" while the active route is still
 // the tunnel. The placeholder option must render first so the initial
