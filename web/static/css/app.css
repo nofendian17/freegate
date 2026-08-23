@@ -190,6 +190,11 @@ a:hover {
   margin-right: var(--space-1);
 }
 
+.logout-form {
+  display: inline;
+  margin: 0;
+}
+
 /* ----- Page Header ----- */
 .page-header {
   text-align: center;
@@ -761,6 +766,15 @@ button.btn-tertiary:hover {
     padding: var(--space-2) 0 0;
     border-top: 1px solid var(--border);
     margin-top: var(--space-1);
+  }
+
+  .logout-form {
+    justify-self: start;
+  }
+
+  .logout-form button {
+    height: auto;
+    padding: 0;
   }
 
   .page-header {
