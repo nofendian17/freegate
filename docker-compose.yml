@@ -42,11 +42,16 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT=${RATE_LIMIT:-60}
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
       - UPSTREAM_URL_OPENCODE=${UPSTREAM_URL_OPENCODE:-https://opencode.ai/zen/v1}
       - UPSTREAM_KEY_OPENCODE=${UPSTREAM_KEY_OPENCODE:-public}
       - UPSTREAM_OPENCODE_FREE_ALLOWLIST=${UPSTREAM_OPENCODE_FREE_ALLOWLIST:-big-pickle}
+      - UPSTREAM_REFRESH_OPENCODE=${UPSTREAM_REFRESH_OPENCODE:-60}
       - UPSTREAM_URL_KILO=${UPSTREAM_URL_KILO:-https://api.kilo.ai/api/openrouter}
       - UPSTREAM_KEY_KILO=${UPSTREAM_KEY_KILO:-anonymous}
+      - UPSTREAM_REFRESH_KILO=${UPSTREAM_REFRESH_KILO:-60}
+      - UPSTREAM_URL_LLM7=${UPSTREAM_URL_LLM7:-https://api.llm7.io/v1}
+      - UPSTREAM_REFRESH_LLM7=${UPSTREAM_REFRESH_LLM7:-300}
     depends_on:
       vpn:
         condition: service_healthy
