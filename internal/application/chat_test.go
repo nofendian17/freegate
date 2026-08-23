@@ -41,7 +41,7 @@ func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain
 	}
 	return m.response, nil
 }
-func (m *mockUpstream) Models() []domain.Model { return nil }
+func (m *mockUpstream) Models() []domain.Model                     { return nil }
 func (m *mockUpstream) Start(ctx context.Context, _ time.Duration) {}
 
 func TestChatServiceProxyChatSuccess(t *testing.T) {

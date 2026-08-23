@@ -288,4 +288,3 @@ func TestFetchPublicIPAllProbesFail(t *testing.T) {
 		t.Fatalf("expected error with empty ip, got ip=%q err=%v", ip, err)
 	}
 }
-

@@ -61,12 +61,12 @@ func (k *keyCooldown) isLimited(key string) bool {
 // rather than per-upstream. DialContext routes via VPN when enabled.
 func NewTransport(d *Dialer) *http.Transport {
 	tr := &http.Transport{
-		ForceAttemptHTTP2: false,
-		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:     false,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 300 * time.Second,
-		MaxIdleConns:        50,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     60 * time.Second,
+		MaxIdleConns:          50,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       60 * time.Second,
 	}
 	if d != nil {
 		tr.DialContext = d.DialContext

@@ -69,7 +69,6 @@ func eventsText(t *testing.T, events []string) string {
 	return sb.String()
 }
 
-
 // must emit only its own delta, not the full accumulated textBuffer.
 // Emitting the whole buffer on every chunk corrupts Gemini streaming output
 // and makes the stream O(n^2).

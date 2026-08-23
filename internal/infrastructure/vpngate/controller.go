@@ -61,9 +61,9 @@ type PingResult struct {
 	Country   string `json:"country"`
 	IP        string `json:"ip"`
 
-	DNSOK     bool   `json:"dns_ok"`
-	DNSMS     int64  `json:"dns_ms"`
-	DNSError  string `json:"dns_error,omitempty"`
+	DNSOK    bool   `json:"dns_ok"`
+	DNSMS    int64  `json:"dns_ms"`
+	DNSError string `json:"dns_error,omitempty"`
 
 	EgressOK  bool   `json:"egress_ok"`
 	EgressIP  string `json:"egress_ip,omitempty"`
