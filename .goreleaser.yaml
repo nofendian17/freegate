@@ -47,6 +47,9 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # GH runners use the 'docker' buildx driver, which does not support
+    # attestations; keep the default off instead of failing the release.
+    sbom: false
 
 checksum:
   name_template: "checksums.txt"
