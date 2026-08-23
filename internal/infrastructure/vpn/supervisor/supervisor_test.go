@@ -1,11 +1,14 @@
 package supervisor
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
@@ -153,5 +156,33 @@ func TestNewDirectFallbackWhenOpenVPNMissing(t *testing.T) {
 	}
 	if err := s.Start(t.Context()); err != nil {
 		t.Fatalf("Start in direct mode must succeed, got %v", err)
+	}
+}
+
+func TestRotateBeforeStartWithCancelledCtx(t *testing.T) {
+	// Regression: Rotate used to dereference a nil ctx before Start and
+	// panic. With a cancelled ctx it must return an error instead.
+	s := New(Config{SocksAddr: "127.0.0.1:19052"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.ctx, s.cancel = ctx, cancel
+
+	err := s.Rotate()
+	if err == nil {
+		t.Fatal("expected error rotating after shutdown")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSleepCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if sleepCtx(ctx, time.Hour) {
+		t.Fatal("sleepCtx must report false when ctx is already cancelled")
+	}
+	if !sleepCtx(context.Background(), time.Millisecond) {
+		t.Fatal("sleepCtx must report true when the duration elapsed")
 	}
 }

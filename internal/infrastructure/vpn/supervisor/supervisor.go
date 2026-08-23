@@ -68,6 +68,10 @@ type Supervisor struct {
 	direct      bool
 	installHint string
 
+	// socksLn is the SOCKS listener created by Start; Close shuts it down
+	// so the in-process provider does not leak the accept goroutine.
+	socksLn net.Listener
+
 	// refreshBusy keeps the IP refresher single-flight: a probe cycle can
 	// outlast its tick (3 attempts × slow timeouts), and piling cycles up
 	// would hammer echo services through an already-slow relay.
@@ -102,31 +106,37 @@ func (s *Supervisor) IsDirect() bool {
 }
 
 // Start launches the SOCKS proxy and the background loops (reconnect +
-// IP refresher). In direct mode it only logs and succeeds.
+// IP refresher). In direct mode it only logs and succeeds. The SOCKS
+// listener is created synchronously so bind errors surface to the caller.
 func (s *Supervisor) Start(ctx context.Context) error {
 	if s.IsDirect() {
 		slog.Warn("vpngate: openvpn not found, falling back to direct mode",
 			"hint", s.InstallHint())
 		return nil
 	}
+
+	ln, err := net.Listen("tcp", s.socksAddr)
+	if err != nil {
+		return fmt.Errorf("socks listen %s: %w", s.socksAddr, err)
+	}
+	s.mu.Lock()
+	s.socksLn = ln
+	s.mu.Unlock()
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	go func() {
-		if err := serveSOCKS(s.socksAddr); err != nil {
-			slog.Error("vpngate: socks server exited", "error", err)
+	// Background goroutines — tracked via WaitGroup.Go so shutdown waits
+	// for them.
+	s.wg.Go(func() {
+		if err := serveSOCKS(ln); err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				slog.Info("vpngate: socks server stopped")
+			} else {
+				slog.Error("vpngate: socks server exited", "error", err)
+			}
 		}
-	}()
-
-	// Background loops — tracked by wg so shutdown waits for them.
-	s.wg.Add(2)
-	go func() {
-		defer s.wg.Done()
-		s.reconnectLoop()
-	}()
-	go func() {
-		defer s.wg.Done()
-		s.ipRefresher()
-	}()
+	})
+	s.wg.Go(s.reconnectLoop)
+	s.wg.Go(s.ipRefresher)
 	return nil
 }
 
@@ -137,30 +147,41 @@ func (s *Supervisor) Start(ctx context.Context) error {
 // silently instead of logging or racing it.
 func (s *Supervisor) reconnectLoop() {
 	for {
-		select {
-		case <-s.ctx.Done():
+		if !sleepCtx(s.ctx, 0) {
 			slog.Info("vpngate: reconnect loop stopped")
 			return
-		default:
 		}
 		if s.isConnected() {
-			time.Sleep(5 * time.Second)
+			if !sleepCtx(s.ctx, 5*time.Second) {
+				slog.Info("vpngate: reconnect loop stopped")
+				return
+			}
 			continue
 		}
 		if s.isRotating() {
-			time.Sleep(2 * time.Second)
+			if !sleepCtx(s.ctx, 2*time.Second) {
+				slog.Info("vpngate: reconnect loop stopped")
+				return
+			}
 			continue
 		}
 		slog.Info("vpngate: connecting to a vpn server")
 		if err := s.Rotate(); err != nil {
-			if !errors.Is(err, ErrRotationInProgress) {
+			// Shutdown-triggered aborts are expected, not failures.
+			if !errors.Is(err, ErrRotationInProgress) && !errors.Is(err, context.Canceled) {
 				slog.Warn("vpngate: connect failed", "error", err)
 			}
-			time.Sleep(2 * time.Second)
+			if !sleepCtx(s.ctx, 2*time.Second) {
+				slog.Info("vpngate: reconnect loop stopped")
+				return
+			}
 			continue
 		}
 		slog.Info("vpngate: connected", "server", s.serverName(), "ip", s.CurrentIP())
-		time.Sleep(5 * time.Second)
+		if !sleepCtx(s.ctx, 5*time.Second) {
+			slog.Info("vpngate: reconnect loop stopped")
+			return
+		}
 	}
 }
 
@@ -174,10 +195,9 @@ func (s *Supervisor) reconnectLoop() {
 // held for short state reads/writes, never while a tunnel is being brought
 // up, so control endpoints stay responsive during a slow rotation.
 func (s *Supervisor) Rotate() error {
-	select {
-	case <-s.ctx.Done():
-		return s.ctx.Err()
-	default:
+	// Nil-ctx safe: Rotate may be called before Start.
+	if err := s.shutdownStarted(); err != nil {
+		return err
 	}
 
 	end, err := s.beginRotation()
@@ -251,6 +271,20 @@ func (s *Supervisor) shutdownStarted() error {
 	}
 }
 
+// sleepCtx waits for d, returning false as soon as ctx is cancelled so
+// background loops exit promptly on shutdown instead of sleeping through
+// it.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // beginRotation acquires the single-rotation guard, or returns
 // ErrRotationInProgress if another rotation is already running. The
 // returned func releases the guard; call it via defer.
@@ -280,6 +314,11 @@ func (s *Supervisor) connectToServer(server vpn.Server) error {
 	if err := s.shutdownStarted(); err != nil {
 		return err
 	}
+	// Bounds this connect attempt; Background when never started (tests).
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Tear down the previous tunnel outside the lock so control
 	// endpoints stay responsive while the process is being killed.
 	s.mu.Lock()
@@ -307,9 +346,13 @@ func (s *Supervisor) connectToServer(server vpn.Server) error {
 	if err != nil {
 		return err
 	}
+	// Deliberately NOT tracked by the supervisor's WaitGroup: watch blocks
+	// on cmd.Wait until the process exits, and Close kills the process
+	// only after wg.Wait — adding it would deadlock shutdown. The done
+	// channel below is the synchronization point instead.
 	go s.watch(m)
 
-	ip, err := waitTunnelUp(m, before)
+	ip, err := waitTunnelUp(ctx, m, before)
 	if err != nil {
 		m.stop(5 * time.Second)
 		return err
@@ -524,9 +567,18 @@ func (s *Supervisor) InstallHint() string {
 	return s.installHint
 }
 
-// Close stops background loops, kills the active tunnel, and removes its
-// temp config.
+// Close stops background loops, shuts down the SOCKS listener, kills the
+// active tunnel, and removes its temp config.
 func (s *Supervisor) Close() error {
+	// Unblock the SOCKS accept loop first so wg.Wait is prompt.
+	s.mu.Lock()
+	ln := s.socksLn
+	s.socksLn = nil
+	s.mu.Unlock()
+	if ln != nil {
+		ln.Close()
+	}
+
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -596,13 +648,15 @@ func (s *Supervisor) ipRefresher() {
 		if !s.refreshBusy.CompareAndSwap(false, true) {
 			continue
 		}
-		s.refreshCycle()
+		s.refreshCycle(s.ctx)
 		s.refreshBusy.Store(false)
 	}
 }
 
-// refreshCycle runs one connected-check + bounded-retry IP probe.
-func (s *Supervisor) refreshCycle() {
+// refreshCycle runs one connected-check + bounded-retry IP probe. It
+// returns early when ctx is cancelled so Close is not delayed by retry
+// sleeps.
+func (s *Supervisor) refreshCycle(ctx context.Context) {
 	s.mu.Lock()
 	connected := s.connected && s.cur != nil
 	s.mu.Unlock()
@@ -625,8 +679,8 @@ func (s *Supervisor) refreshCycle() {
 		}
 		slog.Debug("vpngate: ip refresh attempt failed",
 			"attempt", attempt+1, "error", err)
-		if attempt+1 < ipRefreshAttempts {
-			time.Sleep(ipRefreshRetryDelay)
+		if attempt+1 < ipRefreshAttempts && !sleepCtx(ctx, ipRefreshRetryDelay) {
+			return
 		}
 	}
 }

@@ -168,37 +168,48 @@ const ipCheckTimeout = 6 * time.Second
 // waitTunnelUp blocks until a NEW tunnel interface appears and is up
 // (platforms where detection is meaningful), then does a short best-effort
 // egress check. It fails fast if the openvpn process exits (e.g.
-// AUTH_FAILED or a dead relay) instead of waiting out the full timeout.
-// A slow-but-usable tunnel is still accepted; the ipRefresher reaps
-// tunnels that stop routing entirely.
+// AUTH_FAILED or a dead relay) or the context is cancelled, instead of
+// waiting out the full timeout. A slow-but-usable tunnel is still
+// accepted; the ipRefresher reaps tunnels that stop routing entirely.
 //
 // On platforms without predictable adapter names (Windows) the interface
 // gate is skipped: process liveness plus the egress probe decide.
-func waitTunnelUp(m *managedProcess, before map[string]bool) (string, error) {
+func waitTunnelUp(ctx context.Context, m *managedProcess, before map[string]bool) (string, error) {
 	if tunGateEnabled() {
+		poll := time.NewTimer(500 * time.Millisecond)
+		defer poll.Stop()
 		deadline := time.Now().Add(tunnelWaitTimeout)
 		for !newTunnelUp(before) {
 			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("supervisor shutting down: %w", ctx.Err())
 			case <-m.done:
 				return "", fmt.Errorf("openvpn exited before the tunnel interface came up")
-			default:
+			case <-poll.C:
+				poll.Reset(500 * time.Millisecond)
 			}
 			if time.Now().After(deadline) {
 				return "", fmt.Errorf("openvpn tunnel interface did not come up within %s", tunnelWaitTimeout)
 			}
-			time.Sleep(500 * time.Millisecond)
 		}
 	}
 	// Best-effort IP capture; not a health gate.
+	ipPoll := time.NewTimer(750 * time.Millisecond)
+	defer ipPoll.Stop()
 	ipDeadline := time.Now().Add(ipCheckTimeout)
 	for {
 		if ip, err := fetchPublicIP(); err == nil && ip != "" {
 			return ip, nil
 		}
+		select {
+		case <-ctx.Done():
+			return "", nil // shutdown during best-effort capture: tunnel may still be usable
+		case <-ipPoll.C:
+			ipPoll.Reset(750 * time.Millisecond)
+		}
 		if time.Now().After(ipDeadline) {
 			return "", nil
 		}
-		time.Sleep(750 * time.Millisecond)
 	}
 }
 
