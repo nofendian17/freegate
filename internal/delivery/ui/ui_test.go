@@ -37,9 +37,9 @@ func newTestHandler(t *testing.T) *Handler {
 	return NewHandler(&fakeData{
 		metrics: map[string]any{
 			"total_requests":  int64(42),
-			"retry_count":     int64(3),
 			"upstream_errors": int64(1),
-			"rate_limit_hits": int64(7),
+			"input_tokens":    int64(1000),
+			"output_tokens":   int64(500),
 			"per_upstream":    map[string]int64{"opencode": 30, "kilo": 12},
 		},
 		models: []model.Model{
@@ -50,7 +50,7 @@ func newTestHandler(t *testing.T) *Handler {
 			{Ts: time.Now(), Method: "POST", Path: "/v1/chat/completions", Model: "test-model-1", Upstream: "opencode", Status: 200, DurationMs: 1234, IP: "127.0.0.1"},
 		},
 		ts: []model.TimeseriesEntry{
-			{Ts: time.Now(), TotalRequests: 10, Errors: 0, Retries: 0, RateLimitHits: 0, PerUpstream: map[string]int{"opencode": 10}},
+			{Ts: time.Now(), TotalRequests: 10, Errors: 0, PerUpstream: map[string]int{"opencode": 10}},
 		},
 		uptime: 90,
 		start:  time.Now().Add(-90 * time.Second).Unix(),
@@ -93,7 +93,7 @@ func TestDashboardRenders(t *testing.T) {
 	body := rr.Body.String()
 	for _, want := range []string{
 		"freegate",
-		"Total Requests", "Retries", "Upstream Errors", "Rate-Limit Hits",
+		"Total Requests", "Upstream Errors", "Input Tokens", "Output Tokens",
 		"opencode", "kilo",
 		"test-model-1", "test-model-2",
 		"htmx.min.js", "chart.umd.js", "app.css",
@@ -144,7 +144,7 @@ func TestPartialStatsRenders(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"42", "3", "1", "7"} {
+	for _, want := range []string{"42", "1", "1000", "500"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("partials/stats missing %q", want)
 		}

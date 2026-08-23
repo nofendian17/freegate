@@ -8,9 +8,7 @@ import (
 
 // Metrics holds simple request counters for observability.
 type Metrics struct {
-	TotalRequests atomic.Int64
-	RetryCount    atomic.Int64
-	RateLimitHits atomic.Int64
+	TotalRequests  atomic.Int64
 	UpstreamErrors atomic.Int64
 	InputTokens    atomic.Int64
 	OutputTokens   atomic.Int64
@@ -64,8 +62,6 @@ func (m *Metrics) snapshot() map[string]any {
 
 	return map[string]any{
 		"total_requests":  m.TotalRequests.Load(),
-		"retry_count":     m.RetryCount.Load(),
-		"rate_limit_hits": m.RateLimitHits.Load(),
 		"upstream_errors": m.UpstreamErrors.Load(),
 		"input_tokens":    m.InputTokens.Load(),
 		"output_tokens":   m.OutputTokens.Load(),
