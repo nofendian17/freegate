@@ -123,3 +123,46 @@ func TestRefreshServersDeduplicatesAndForcesFetch(t *testing.T) {
 		t.Fatalf("cache not updated by shared refresh: %+v, %v", servers, err)
 	}
 }
+
+func TestListAndRefreshShareOneFlight(t *testing.T) {
+	r := newServerRegistry(Config{RefreshInt: time.Hour})
+
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r.fetch = func(refresh bool) (*[]vpn.Server, error) {
+		calls.Add(1)
+		once.Do(func() { close(started) })
+		<-release
+		list := []vpn.Server{{HostName: "shared", Score: 3}}
+		return &list, nil
+	}
+
+	errs := make(chan error, 2)
+	go func() {
+		_, err := r.getServers()
+		errs <- err
+	}()
+	<-started // a list-driven fetch owns the flight
+
+	// A concurrent forced refresh must join the in-flight flight instead
+	// of issuing a second parallel fetch.
+	go func() {
+		_, err := r.refreshServers()
+		errs <- err
+	}()
+
+	// Give the refresh caller time to reach singleflight.Do so it joins
+	// the still-blocked flight instead of racing past its completion.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("fetch ran %d times across racing getServers+refreshServers, want 1", got)
+	}
+}

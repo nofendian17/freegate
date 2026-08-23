@@ -479,6 +479,12 @@ func (s *Supervisor) Healthy() bool {
 func (s *Supervisor) Ping() PingResult {
 	res := PingResult{}
 	s.mu.Lock()
+	// Direct mode has no tunnel to probe; report it as such instead of
+	// failing DNS/egress checks (pre-consolidation parity).
+	if s.direct {
+		s.mu.Unlock()
+		return PingResult{Direct: true}
+	}
 	res.Connected = s.connected && s.cur != nil
 	if s.current != nil {
 		res.Server = s.current.HostName

@@ -119,6 +119,8 @@ func (m *managedProcess) stop(grace time.Duration) {
 	if m == nil || m.cmd == nil || m.cmd.Process == nil {
 		return
 	}
+	// Best-effort interrupt: a failed signal means openvpn already exited,
+	// which the <-m.done wait below observes regardless.
 	_ = m.cmd.Process.Signal(os.Interrupt)
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
@@ -129,6 +131,8 @@ func (m *managedProcess) stop(grace time.Duration) {
 	}
 	pid := m.cmd.Process.Pid
 	slog.Warn("vpngate: openvpn did not exit in time, killing", "pid", pid)
+	// Best-effort kill after the grace period elapsed; the process exit
+	// itself is observed via m.done, so the signal error carries no info.
 	_ = m.cmd.Process.Kill()
 	<-m.done
 }
@@ -266,6 +270,9 @@ func probeIP(p ipEchoProbe) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	// Deliberate discard: a truncated read yields an empty/partial body
+	// that fails downstream as an unusable IP, which is all we'd do with
+	// the error anyway.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: status %d", p.url, resp.StatusCode)
