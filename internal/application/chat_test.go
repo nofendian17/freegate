@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/metrics"
 )
 
 type mockRouter struct {
@@ -95,6 +96,33 @@ func TestChatServiceProxyChatPassesThrough429(t *testing.T) {
 	}
 	if !strings.Contains(string(w.body), "Rate limit exceeded") {
 		t.Errorf("expected provider 429 body to pass through, got %q", string(w.body))
+	}
+}
+
+// TestChatServiceProxyChatUpstreamHTTPErrorCountsInStats verifies that an
+// upstream HTTP error status (e.g. a provider 400 or 429 passed through)
+// is counted in the upstream_errors stat, not only transport failures.
+func TestChatServiceProxyChatUpstreamHTTPErrorCountsInStats(t *testing.T) {
+	body := `{"error":{"message":"Error from provider (Console): [1210]"}}`
+	resp := &domain.UpstreamResponse{
+		StatusCode: 400,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+	upstream := &mockUpstream{name: "test", response: resp}
+	router := &mockRouter{upstream: upstream}
+	metrics := metrics.New()
+
+	cs := NewChatService(router, metrics)
+	w := &recordingResponseWriter{header: http.Header{}}
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+	if err := cs.ProxyChat(context.Background(), w, r, "test-model", []byte("{}")); err != nil {
+		t.Fatalf("ProxyChat failed: %v", err)
+	}
+	snap := metrics.Snapshot()
+	if got, _ := snap["upstream_errors"].(int64); got != 1 {
+		t.Errorf("expected upstream_errors=1 after upstream HTTP 400, got %v", snap["upstream_errors"])
 	}
 }
 
