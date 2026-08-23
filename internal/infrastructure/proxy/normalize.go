@@ -826,6 +826,12 @@ func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter,
 
 func NormalizeDomainResponseWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
 	httputil.CopyHeaders(w.Header(), resp.Header)
+	// The normalized body we write below differs in size from the raw
+	// upstream payload (reasoning sync, finish_reason synthesis, JSON
+	// re-marshalling), so a copied Content-Length would be wrong and
+	// clients would abort with a content-length mismatch. Drop it and let
+	// net/http compute the real value.
+	w.Header().Del("Content-Length")
 	w.WriteHeader(resp.StatusCode)
 	return copyNormalizedDomainWithContext(ctx, w, resp)
 }
@@ -833,6 +839,9 @@ func NormalizeDomainResponseWithContext(ctx context.Context, w http.ResponseWrit
 func PassThroughDomainError(w http.ResponseWriter, resp *domain.UpstreamResponse) string {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 	httputil.CopyHeaders(w.Header(), resp.Header)
+	// Same as above: the body may be truncated at maxErrorBodySize or
+	// re-serialized downstream, so never trust the upstream's length.
+	w.Header().Del("Content-Length")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
 	return extractErrorMessage(body)
