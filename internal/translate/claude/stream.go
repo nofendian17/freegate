@@ -24,6 +24,7 @@ type StreamState struct {
 	toolCalls        map[int]*toolCallInfo
 	toolArgBufs      map[int]*bytes.Buffer
 	openToolBlocks   []int
+	pendingContent   []pendingContent
 	usage            *usageInfo
 	finishReason     string
 	finishSent       bool
@@ -31,6 +32,15 @@ type StreamState struct {
 	sseBuf           bytes.Buffer
 	outputContent    strings.Builder
 	seenIDs          map[string]int
+}
+
+// pendingContent is a text/reasoning fragment that arrived while a
+// tool_use block was still open. Anthropic blocks must be strictly
+// sequential, so the fragment cannot be streamed until the tool block
+// closes; flushPendingContent replays it in arrival order right after.
+type pendingContent struct {
+	kind string // "text" or "reasoning"
+	text string
 }
 
 type toolCallInfo struct {
@@ -181,19 +191,72 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 
 // --- Event generators ---
 
-// closeOpenToolBlocks emits content_block_stop for every tool_use block
-// still open and resets the tool-call tracking so a later tool call starts
-// fresh. Anthropic requires content blocks to be strictly sequential, so
-// before opening a text or thinking block we must close any open tool_use
-// block first.
+// closeOpenToolBlocks flushes the buffered (repaired) arguments as a single
+// input_json_delta for each open tool_use block, then emits its
+// content_block_stop, and resets the tool-call tracking so a later tool call
+// starts fresh. Anthropic requires content blocks to be strictly sequential,
+// so before opening a new block any open tool_use block must be closed —
+// flushing here guarantees the client never receives a tool_use with empty
+// input (which Claude Code rejects with "The required parameter `command`
+// is missing").
 func (s *StreamState) closeOpenToolBlocks() []string {
 	var events []string
 	for _, blockIdx := range s.openToolBlocks {
+		events = append(events, s.flushToolBlockArgs(blockIdx)...)
 		events = append(events, contentBlockStop(blockIdx)...)
 	}
 	s.openToolBlocks = nil
 	s.toolCalls = make(map[int]*toolCallInfo)
 	s.toolArgBufs = make(map[int]*bytes.Buffer)
+	return events
+}
+
+// flushToolBlockArgs repairs the arguments accumulated for the tool call
+// rendering into the given block index and returns them as one
+// input_json_delta event. Returns nil when nothing was buffered; clients
+// treat absent deltas as empty input.
+func (s *StreamState) flushToolBlockArgs(blockIdx int) []string {
+	for intIdx, ti := range s.toolCalls {
+		if ti.Index != blockIdx {
+			continue
+		}
+		buf := s.toolArgBufs[intIdx]
+		if buf == nil || buf.Len() == 0 {
+			return nil
+		}
+		repaired := repairToolArgs(buf.String())
+		buf.Reset()
+		return formatSSE("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": blockIdx,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": repaired,
+			},
+		})
+	}
+	return nil
+}
+
+// flushPendingContent replays content fragments that were pended while a
+// tool_use block was open. Must only run once no tool blocks remain open;
+// each fragment re-enters its normal handler, which opens and closes its
+// own block.
+func (s *StreamState) flushPendingContent() []string {
+	if len(s.pendingContent) == 0 {
+		return nil
+	}
+	pending := s.pendingContent
+	s.pendingContent = nil
+	var events []string
+	for _, p := range pending {
+		switch p.kind {
+		case "text":
+			events = append(events, handleTextContent(p.text, s)...)
+		case "reasoning":
+			events = append(events, handleReasoningContent(p.text, s)...)
+		}
+	}
 	return events
 }
 
@@ -223,15 +286,21 @@ func (s *StreamState) closeThinkingBlock() []string {
 func handleReasoningContent(text string, state *StreamState) []string {
 	var events []string
 
+	// Reasoning arriving while a tool_use block is open must not force
+	// the block closed: closing mid-call discards the still-buffered
+	// arguments (Claude Code then rejects the call with "The required
+	// parameter `command` is missing") and drops every later fragment.
+	// Pend it; flushPendingContent replays it after the block closes.
+	if len(state.openToolBlocks) > 0 {
+		state.pendingContent = append(state.pendingContent, pendingContent{kind: "reasoning", text: text})
+		state.outputContent.WriteString(text)
+		return nil
+	}
+
 	// Close any open text block first
 	if state.textOpen {
 		events = append(events, contentBlockStop(state.textBlockIdx)...)
 		state.textOpen = false
-	}
-
-	// Close any open tool_use block before opening thinking
-	if len(state.openToolBlocks) > 0 {
-		events = append(events, state.closeOpenToolBlocks()...)
 	}
 
 	// Open thinking block if not open
@@ -267,14 +336,20 @@ func handleReasoningContent(text string, state *StreamState) []string {
 func handleTextContent(text string, state *StreamState) []string {
 	var events []string
 
+	// Text arriving while a tool_use block is open must not force the
+	// block closed: closing mid-call discards the still-buffered
+	// arguments (Claude Code then rejects the call with "The required
+	// parameter `command` is missing") and drops every later fragment.
+	// Pend it; flushPendingContent replays it after the block closes.
+	if len(state.openToolBlocks) > 0 {
+		state.pendingContent = append(state.pendingContent, pendingContent{kind: "text", text: text})
+		state.outputContent.WriteString(text)
+		return nil
+	}
+
 	// Close any open thinking block
 	if state.thinkingOpen {
 		events = append(events, state.closeThinkingBlock()...)
-	}
-
-	// Close any open tool_use block before opening text
-	if len(state.openToolBlocks) > 0 {
-		events = append(events, state.closeOpenToolBlocks()...)
 	}
 
 	// Open text block if not open
@@ -708,25 +783,23 @@ func handleFinish(state *StreamState) []string {
 		events = append(events, state.closeThinkingBlock()...)
 	}
 
-	// Close any open tool_use blocks, repairing each accumulated arg buffer before stop.
-	if len(state.openToolBlocks) > 0 {
-		for intIdx, ti := range state.toolCalls {
-			if buf, ok := state.toolArgBufs[intIdx]; ok && buf != nil && buf.Len() > 0 {
-				accumulated := buf.String()
-				repaired := repairToolArgs(accumulated)
+	// Close any open tool_use blocks; each receives its repaired
+	// arguments as a single input_json_delta immediately before its
+	// content_block_stop.
+	events = append(events, state.closeOpenToolBlocks()...)
 
-				// Emit a single delta containing the fully repaired arguments JSON
-				events = append(events, formatSSE("content_block_delta", map[string]any{
-					"type":  "content_block_delta",
-					"index": ti.Index,
-					"delta": map[string]any{
-						"type":         "input_json_delta",
-						"partial_json": repaired,
-					},
-				})...)
-			}
-		}
-		events = append(events, state.closeOpenToolBlocks()...)
+	// Replay any text/reasoning that was pended behind the tool blocks so
+	// it still reaches the client before the message ends.
+	events = append(events, state.flushPendingContent()...)
+
+	// The replay may have opened new text/thinking blocks; close them so
+	// every block is terminated before message_delta/message_stop.
+	if state.textOpen {
+		events = append(events, contentBlockStop(state.textBlockIdx)...)
+		state.textOpen = false
+	}
+	if state.thinkingOpen {
+		events = append(events, state.closeThinkingBlock()...)
 	}
 
 	// Map finish_reason

@@ -146,6 +146,34 @@ The rate limiter is **in-memory only**; restarting the proxy clears all counters
 ### Upstream returns 429 → pass-through
 The `ChatService` forwards upstream responses — including 429 — to the client verbatim. There is no automatic retry or IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button). The client sees the provider's original 429 body and status.
 
+### Client sees empty replies / tool-call parameter errors
+
+Some free upstreams degrade instead of erroring. `muse-spark-1.2-contributor-free` (OpenCode Zen and LLM7 serve the same backend) is known to:
+
+- end SSE streams at EOF with **no** `finish_reason` and **no** `[DONE]` (trailing `{"choices":[],"cost":"0"}` line), and
+- answer non-streaming requests with HTTP 200 and a bare `{role:"assistant"}` message — no content at all.
+
+freegate compensates for both:
+
+- Buffered tool-call arguments are flushed as one repaired `input_json_delta` before the synthesized terminal chunk (`proxy/normalize.go` EOF path), so `tool_use` input never arrives empty.
+- Degenerate responses (HTTP 200 with zero content/reasoning/tool-calls) are logged as:
+  `WARN msg="upstream empty completion" model=... request_id=... path=json|stream` — regardless of any env switch.
+
+Diagnosis workflow:
+
+1. Grep the proxy log for `upstream empty completion`; the `request_id` ties the warning to a dashboard recent-request entry.
+2. Set `UPSTREAM_CAPTURE=true`, restart the proxy, reproduce, then read `msg="upstream raw response"` lines for that `request_id` — these are the byte-exact upstream lines (SSE included). Lines contain full conversation content; turn the flag off afterwards.
+3. Confirm upstream state directly, bypassing freegate:
+
+   ```bash
+   curl -s -X POST "$UPSTREAM_URL_OPENCODE/chat/completions" \
+     -H "Authorization: Bearer $UPSTREAM_KEY_OPENCODE" \
+     -H "Content-Type: application/json" \
+     -d '{"model":"muse-spark-1.2-contributor-free","max_tokens":32,"messages":[{"role":"user","content":"ping"}]}'
+   ```
+
+   An explicit `model_unavailable` error, or another empty completion, confirms the problem is upstream — nothing to fix in freegate. Non-streaming emptiness on this model is permanent upstream behavior; prefer streaming clients or another model from `/v1/models`.
+
 ### Switch between VPN and direct
 
 The dashboard's VPN Server card offers "direct (no VPN)" as the first option: selecting it routes all upstream traffic straight from the proxy container (no tunnel), while picking any relay (or rotate-random) routes back through the tunnel. This is a live runtime switch (backed by `upstream.Dialer`); there is no static `BYPASS_PROXY` env var anymore.

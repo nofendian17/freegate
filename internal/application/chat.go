@@ -24,9 +24,10 @@ type Router interface {
 // automatic retry or IP rotation here: the user picks the VPN exit server
 // manually from the dashboard.
 type ChatService struct {
-	router  Router
-	metrics *metrics.Metrics
-	logger  domain.RequestLogger
+	router         Router
+	metrics        *metrics.Metrics
+	logger         domain.RequestLogger
+	rawUpstreamLog bool
 }
 
 // NewChatService constructs a ChatService. Pass nil for m to disable
@@ -139,6 +140,14 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	slog.Info("upstream response", "request_id", requestID, "upstream", u.Name(), "status", resp.StatusCode)
 	finalStatus = resp.StatusCode
 
+	// Raw upstream logging (opt-in via UPSTREAM_CAPTURE=true): every
+	// upstream response line is printed via slog so degenerate upstream
+	// behavior (e.g. muse-spark's EOF-truncated streams) is visible in the
+	// server log without any file capture.
+	if s.rawUpstreamLog {
+		resp.Body = newRawLineLogger(resp.Body, modelID, requestID)
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	// Upstream HTTP errors (429/5xx) are passed through verbatim; capture
 	// the upstream's own error message so the record log shows why it
@@ -149,6 +158,15 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 		}
 		return nil
 	}
+
+	// Correlation headers for the normalization layer: degenerate-response
+	// warnings (e.g. upstream empty completion) carry these so operators can
+	// trace a warning back to this request. Set only on the success path —
+	// the error pass-through above copies upstream headers verbatim and must
+	// not leak these to the client. NormalizeDomainResponseWithContext
+	// strips them before writing the client response.
+	resp.Header.Set("X-Fg-Model", modelID)
+	resp.Header.Set("X-Fg-Request-Id", requestID)
 	usage, err := proxyinfra.NormalizeDomainResponseWithContext(ctx, w, resp)
 	if err != nil {
 		slog.Warn("normalize response failed", "request_id", requestID, "upstream", u.Name(), "error", err)

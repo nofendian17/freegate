@@ -52,6 +52,10 @@ services:
       - UPSTREAM_REFRESH_KILO=${UPSTREAM_REFRESH_KILO:-60}
       - UPSTREAM_URL_LLM7=${UPSTREAM_URL_LLM7:-https://api.llm7.io/v1}
       - UPSTREAM_REFRESH_LLM7=${UPSTREAM_REFRESH_LLM7:-300}
+      # Debug: raw upstream response logging via slog (stdout). Default
+      # false; lines contain full conversation content, enable only while
+      # debugging.
+      - UPSTREAM_CAPTURE=${UPSTREAM_CAPTURE:-false}
     depends_on:
       vpn:
         condition: service_healthy

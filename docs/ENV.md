@@ -67,6 +67,14 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 |----------|----------|---------|-------------|
 | `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models that don't appear in Kilo's free catalog. Accepts `opencode` or `kilo`. |
 
+## Debugging
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `UPSTREAM_CAPTURE` | No | `false` | Raw upstream response logging via slog. When `true`, every upstream response line is printed to stdout/stderr as `INFO msg="upstream raw response"` carrying `request_id` and `model` — one record per SSE line, including streams that end without `[DONE]`/`finish_reason`. Lines contain full conversation content: enable only while debugging, on trusted machines. Wired in `server.go` → `ChatService.WithRawUpstreamLog` → `application/rawupstream.go::rawLineLogger`. |
+
+Related (no env needed): degenerate upstream responses — HTTP 200 with no content/tool calls at all — are always logged as `WARN msg="upstream empty completion"` with `model` + `request_id`, regardless of this switch.
+
 ## Validation
 
 `config.Validate()` is called at startup. It rejects:
@@ -89,6 +97,7 @@ Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, 
 - `internal/domain/` — `upstream.go` + `response.go` (`UpstreamResponse` decouples `net/http`), `model.go` canonical
 - `internal/translate/internal/prepost/prepare_upstream.go` — one-pass `PrepareUpstream` (roles+reasoning+stream_options)
 - `internal/infrastructure/proxy/normalize.go` — `NormalizeDomainResponseWithContext` (ctx-aware streaming), `RateLimiter` sharded 32-way in `internal/delivery/middleware`
+- `internal/application/rawupstream.go` — `rawLineLogger` (opt-in per-line raw upstream log, `UPSTREAM_CAPTURE=true`)
 - `.env.example` — annotated example
 - `docker-compose.yml` — legacy containerized path (proxy + vpn sidecar)
 - `cmd/vpngate-supervisor/main.go` — legacy sidecar (deprecated, kept for docker compat)

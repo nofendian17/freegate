@@ -25,19 +25,20 @@ type TokenUsage struct {
 func copyNormalizedWithContext(ctx context.Context, w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
+	model, reqID := correlationMeta(resp.Header)
 
 	if isStreaming {
 		rd := bufio.NewReader(resp.Body)
 		if isAnthropicSSE(rd) {
 			return normalizeClaudeStreamWithContext(ctx, w, rd), nil
 		}
-		return normalizeOpenAIStreamWithContext(ctx, w, rd), nil
+		return normalizeOpenAIStreamWithMeta(ctx, w, rd, model, reqID), nil
 	}
-	return normalizeJSON(w, resp.Body), nil
+	return normalizeJSONWithMeta(w, resp.Body, model, reqID), nil
 }
 
 func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
-	return normalizeOpenAIStreamWithContext(context.Background(), dst, rd)
+	return normalizeOpenAIStreamWithMeta(context.Background(), dst, rd, "", "")
 }
 
 func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
@@ -58,7 +59,18 @@ func isAnthropicSSE(rd *bufio.Reader) bool {
 	return bytes.HasPrefix(peek, []byte("event:"))
 }
 
+// correlationMeta extracts the correlation fields ChatService injects into
+// the upstream response headers before normalization, so degenerate-response
+// warnings can be tied back to the originating request.
+func correlationMeta(h http.Header) (model, requestID string) {
+	return h.Get("X-Fg-Model"), h.Get("X-Fg-Request-Id")
+}
+
 func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bufio.Reader) TokenUsage {
+	return normalizeOpenAIStreamWithMeta(ctx, dst, rd, "", "")
+}
+
+func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio.Reader, model, requestID string) TokenUsage {
 	fl, _ := dst.(http.Flusher)
 	var usage TokenUsage
 
@@ -76,6 +88,7 @@ func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bu
 	finished := false
 	seenFinish := false
 	hasToolSeen := false
+	sawAnyPayload := false
 
 	emitRepaired := func() {
 		if finished {
@@ -231,6 +244,18 @@ func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bu
 					finishReason = fr
 				}
 				if delta, ok := c["delta"].(map[string]any); ok {
+					if s, _ := delta["content"].(string); s != "" {
+						sawAnyPayload = true
+					}
+					if s, _ := delta["reasoning_content"].(string); s != "" {
+						sawAnyPayload = true
+					}
+					if s, _ := delta["reasoning"].(string); s != "" {
+						sawAnyPayload = true
+					}
+					if tcs, _ := delta["tool_calls"].([]any); len(tcs) > 0 {
+						sawAnyPayload = true
+					}
 					bufferToolArgs(delta, toolArgs, toolSeen)
 					syncDeltaReasoning(chunk)
 				}
@@ -275,7 +300,26 @@ func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bu
 		if hasToolSeen {
 			fr = "tool_calls"
 		}
+		// Flush buffered+repaired tool arguments BEFORE the synthesized
+		// terminal chunk. On the EOF path (no [DONE], no real
+		// finish_reason — e.g. muse-spark truncation) skipping this used
+		// to drop every buffered argument, so the translated tool_use
+		// reached Claude Code with input {} and failed schema validation
+		// ("The required parameter `command` is missing").
+		emitRepaired()
 		emitTerminalChunk(dst, fl, metaID, metaModel, metaCreated, fr)
+	}
+	if metaCaptured && !sawAnyPayload {
+		// Degenerate upstream response: chunk train carried no content,
+		// reasoning, or tool calls at all (observed during the muse-spark
+		// outage: llm7 answered an unavailable model with HTTP 200 and a
+		// stream of empty choices[] lines). Surface it loudly instead of
+		// letting the client see a silently empty assistant turn.
+		slog.Warn("upstream empty completion",
+			"model", model,
+			"request_id", requestID,
+			"path", "stream",
+		)
 	}
 	return usage
 }
@@ -571,6 +615,10 @@ func syncDeltaReasoning(chunk map[string]interface{}) {
 }
 
 func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
+	return normalizeJSONWithMeta(dst, src, "", "")
+}
+
+func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string) TokenUsage {
 	body, err := io.ReadAll(src)
 	if err != nil {
 		slog.Warn("failed to read response body", "error", err)
@@ -602,6 +650,18 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 	repairToolCallsJSON(resp)
 	ensureFinishReason(resp)
 
+	if isEmptyJSONCompletion(resp) {
+		// Degenerate upstream response (observed during the muse-spark
+		// outage: llm7 answered an unavailable model with HTTP 200 and a
+		// bare {role:"assistant"} message). Surface it loudly instead of
+		// letting the client see a silently empty assistant turn.
+		slog.Warn("upstream empty completion",
+			"model", model,
+			"request_id", requestID,
+			"path", "json",
+		)
+	}
+
 	transformed, err := json.Marshal(resp)
 	if err != nil {
 		dst.Write(body)
@@ -610,6 +670,40 @@ func normalizeJSON(dst io.Writer, src io.Reader) TokenUsage {
 
 	dst.Write(transformed)
 	return usage
+}
+
+// isEmptyJSONCompletion reports whether an OpenAI chat-completion response
+// carries no assistant payload at all: no choices, or messages with neither
+// content, tool_calls, nor reasoning. An explicit error object is NOT
+// degenerate — that path is already surfaced as an upstream failure.
+func isEmptyJSONCompletion(resp map[string]interface{}) bool {
+	if _, isErr := resp["error"]; isErr {
+		return false
+	}
+	choices, _ := resp["choices"].([]interface{})
+	if len(choices) == 0 {
+		return true
+	}
+	for _, cAny := range choices {
+		c, ok := cAny.(map[string]interface{})
+		if !ok {
+			return true
+		}
+		msg, _ := c["message"].(map[string]interface{})
+		if msg == nil {
+			return true
+		}
+		if s, _ := msg["content"].(string); strings.TrimSpace(s) != "" {
+			return false
+		}
+		if tc, has := msg["tool_calls"].([]interface{}); has && len(tc) > 0 {
+			return false
+		}
+		if r, _ := msg["reasoning_content"].(string); r != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // ensureFinishReason synthesizes a finish_reason when the upstream omitted
@@ -814,18 +908,23 @@ func truncateMessage(s string) string {
 func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
+	model, reqID := correlationMeta(resp.Header)
 	if isStreaming {
 		rd := bufio.NewReader(resp.Body)
 		if isAnthropicSSE(rd) {
 			return normalizeClaudeStreamWithContext(ctx, w, rd), nil
 		}
-		return normalizeOpenAIStreamWithContext(ctx, w, rd), nil
+		return normalizeOpenAIStreamWithMeta(ctx, w, rd, model, reqID), nil
 	}
-	return normalizeJSON(w, resp.Body), nil
+	return normalizeJSONWithMeta(w, resp.Body, model, reqID), nil
 }
 
 func NormalizeDomainResponseWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
 	httputil.CopyHeaders(w.Header(), resp.Header)
+	// Strip freegate-internal correlation headers so they never reach the
+	// client; they exist only to label normalization warnings.
+	w.Header().Del("X-Fg-Model")
+	w.Header().Del("X-Fg-Request-Id")
 	// The normalized body we write below differs in size from the raw
 	// upstream payload (reasoning sync, finish_reason synthesis, JSON
 	// re-marshalling), so a copied Content-Length would be wrong and
