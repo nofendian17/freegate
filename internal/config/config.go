@@ -53,6 +53,11 @@ type Config struct {
 
 	UpstreamDefault string
 
+	// UpstreamCapture is the master switch for raw upstream response
+	// logging via slog (stdout). It defaults to false: captures contain
+	// full conversation content and would otherwise flood the log.
+	UpstreamCapture bool
+
 	UpstreamRefreshOpenCode int
 	UpstreamRefreshKilo     int
 	UpstreamRefreshLLM7     int
@@ -101,6 +106,8 @@ func Load() *Config {
 		UpstreamURLLLM7: envStr("UPSTREAM_URL_LLM7", "https://api.llm7.io/v1"),
 
 		UpstreamDefault: envStr("UPSTREAM_DEFAULT", "opencode"),
+
+		UpstreamCapture: envBool("UPSTREAM_CAPTURE", false),
 
 		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),

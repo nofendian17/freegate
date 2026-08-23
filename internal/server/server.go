@@ -171,6 +171,11 @@ func New(cfg *config.Config) (*Server, error) {
 	})
 	cs := application.NewChatService(infraRouter, m)
 	cs.WithRequestLogger(rec.RecordRequestLog)
+	// Raw upstream response logging via slog (stdout), for diagnosing
+	// degenerate upstream behavior. Off unless UPSTREAM_CAPTURE=true.
+	if cfg.UpstreamCapture {
+		cs.WithRawUpstreamLog(true)
+	}
 
 	tpl, err := ui.LoadTemplates(web.Templates())
 	if err != nil {
