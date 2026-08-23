@@ -195,5 +195,13 @@ Model discovery is off by default (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`)
 **Rate limited (429)**
 freegate's default rate limit is 60 req/min per IP. Check `RATE_LIMIT` env var. Upstream 429s are passed through to the client unchanged — there is no automatic retry or IP rotation. To change the exit IP, pick a different relay server manually from the dashboard (or rotate to a random one).
 
+**Tool call fails with "The required parameter X is missing" / "input JSON failed to parse"**
+
+freegate buffers upstream tool-call arguments and repairs them (concatenated objects, truncated strings, unescaped quotes) before emitting a single `input_json_delta` per tool block — including on streams that end at EOF without `[DONE]`/`finish_reason` (the muse-spark shape). If you still hit this, capture ground truth: restart freegate with `UPSTREAM_CAPTURE=true`, reproduce, then find `msg="upstream raw response"` lines for the failing request's ID in the server log. See the Runbook → *Client sees empty replies / tool-call parameter errors*.
+
+**Model returns empty replies (e.g. muse-spark-1.2-contributor-free)**
+
+Known upstream limitation, not a proxy bug: that model only produces output in streaming mode. Non-streaming requests get HTTP 200 with an empty assistant message from the provider itself; freegate logs `WARN msg="upstream empty completion"` when it happens. Prefer streaming clients, or pick a different model from `/v1/models`.
+
 **Slow first request**
 VPN tunnel establishment adds latency on the first request. Subsequent requests reuse the tunnel.
