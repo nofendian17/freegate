@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"freegate/internal/domain"
 	"freegate/internal/translate/claude"
 	"io"
 	"net/http"
@@ -641,5 +643,83 @@ func TestNormalizeClaudeStream_DropsPostStopReplay(t *testing.T) {
 		if rest := output[idx:]; strings.Contains(rest, `"arguments"`) {
 			t.Fatalf("found tool-call data after the terminal chunk:\n%s", rest)
 		}
+	}
+}
+
+// TestNormalizeDomainResponse_ContentLengthNotCopied is a regression test:
+// the upstream's Content-Length describes its RAW payload, but we write a
+// normalized body of a different size (reasoning sync, finish_reason
+// synthesis, JSON re-marshalling). Copying the header verbatim made clients
+// abort with a content-length mismatch (observed as
+// ERR_CONTENT_LENGTH_MISMATCH in Chrome, curl exit 18).
+func TestNormalizeDomainResponse_ContentLengthNotCopied(t *testing.T) {
+	upstreamJSON := `{"id":"x","choices":[{"message":{"role":"assistant","content":"hi"}}]}`
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := &domain.UpstreamResponse{
+			StatusCode: 200,
+			Header: http.Header{
+				"Content-Type":   []string{"application/json"},
+				"Content-Length": []string{fmt.Sprintf("%d", len(upstreamJSON))}, // raw upstream length
+			},
+			Body: io.NopCloser(strings.NewReader(upstreamJSON)),
+		}
+		if _, err := NormalizeDomainResponseWithContext(r.Context(), w, resp); err != nil {
+			t.Errorf("normalize: %v", err)
+		}
+	})
+
+	srv := httptest.NewServer(inner)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("client fetch failed (content-length mismatch?): %v", err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("reading body failed: %v", err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("body is not valid JSON (%d bytes): %v\n%s", len(body), err, body)
+	}
+}
+
+// TestPassThroughDomainError_ContentLengthNotCopied mirrors the regression
+// above for the error passthrough path, where a LimitReader may truncate.
+func TestPassThroughDomainError_ContentLengthNotCopied(t *testing.T) {
+	raw := `{"error":{"message":"boom"}}`
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := &domain.UpstreamResponse{
+			StatusCode: 429,
+			Header: http.Header{
+				"Content-Type":   []string{"application/json"},
+				"Content-Length": []string{"9999"}, // deliberately wrong
+			},
+			Body: io.NopCloser(strings.NewReader(raw)),
+		}
+		PassThroughDomainError(w, resp)
+	})
+
+	srv := httptest.NewServer(inner)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("client fetch failed (content-length mismatch?): %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 429 {
+		t.Fatalf("status = %d, want 429", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "boom") {
+		t.Fatalf("expected error body passthrough, got %q", body)
 	}
 }

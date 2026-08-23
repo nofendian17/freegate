@@ -10,10 +10,6 @@ import (
 // ClaudeToOpenAIState tracks per-stream state for the Claude → OpenAI
 // streaming translation. Used when the upstream speaks native Claude
 // SSE and the client expects OpenAI chat-completion chunks.
-//
-// Mirrors the state model of 9router's response/claude-to-openai.js
-// (minus the Antigravity tool-name restoration and built-in server_tool_use
-// skipping — neither is in scope here).
 type ClaudeToOpenAIState struct {
 	messageID     string
 	model         string

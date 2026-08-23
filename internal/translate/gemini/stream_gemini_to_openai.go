@@ -11,10 +11,6 @@ import (
 // streaming translation. Used when the upstream speaks native Gemini
 // SSE (newline-delimited JSON objects) and the client expects OpenAI
 // chat-completion chunks.
-//
-// Mirrors the state model of 9router's response/gemini-to-openai.js
-// (minus the unsupported envelope / masking logic specific to that
-// deployment).
 type GeminiToOpenAIState struct {
 	messageID     string
 	model         string

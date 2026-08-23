@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"freegate/internal/httputil"
 )
 
 func TestRateLimiter_FirstRequest(t *testing.T) {
@@ -66,6 +68,84 @@ func TestRateLimiter_ResetAfterMinute(t *testing.T) {
 
 	if !rl.allow(ip) {
 		t.Fatal("expected request after reset to be allowed")
+	}
+}
+
+// TestRateLimiter_SpoofedForwardedHeaderIgnoredByDefault guards against
+// X-Forwarded-For spoofing: with TRUST_PROXY_HEADERS off (the default), a
+// client must not escape its per-IP bucket by rotating forwarded headers.
+func TestRateLimiter_SpoofedForwardedHeaderIgnoredByDefault(t *testing.T) {
+	httputil.SetTrustProxyHeaders(false)
+	defer httputil.SetTrustProxyHeaders(false)
+
+	rl := NewRateLimiter(1)
+	defer rl.Stop()
+
+	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req1 := httptest.NewRequest("GET", "/v1/models", nil)
+	req1.RemoteAddr = "10.0.0.9:1000"
+	req1.Header.Set("X-Forwarded-For", "203.0.113.9")
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200", rec1.Code)
+	}
+
+	// Same RemoteAddr, different spoofed XFF → same bucket, rate limited.
+	req2 := httptest.NewRequest("GET", "/v1/models", nil)
+	req2.RemoteAddr = "10.0.0.9:1000"
+	req2.Header.Set("X-Forwarded-For", "203.0.113.10")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("spoofed XFF bypassed the limiter: status = %d, want 429", rec2.Code)
+	}
+}
+
+// TestRateLimiter_TrustProxyHeadersHonorsXFF verifies that when
+// TRUST_PROXY_HEADERS is enabled, clients behind a reverse proxy get their
+// own bucket keyed by the XFF first hop instead of the proxy's RemoteAddr.
+func TestRateLimiter_TrustProxyHeadersHonorsXFF(t *testing.T) {
+	httputil.SetTrustProxyHeaders(true)
+	defer httputil.SetTrustProxyHeaders(false)
+
+	rl := NewRateLimiter(1)
+	defer rl.Stop()
+
+	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	mkReq := func(xff string) *http.Request {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		req.RemoteAddr = "10.0.0.9:1000"
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		return req
+	}
+
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, mkReq("203.0.113.9"))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first proxied request status = %d, want 200", rec1.Code)
+	}
+
+	// Same XFF client over a fresh proxy connection → same bucket.
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, mkReq("203.0.113.9"))
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("same proxied client: status = %d, want 429", rec2.Code)
+	}
+
+	// A different real client behind the proxy → its own bucket.
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, mkReq("203.0.113.11"))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("different proxied client: status = %d, want 200", rec3.Code)
 	}
 }
 

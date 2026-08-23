@@ -70,16 +70,16 @@ type directProvider struct {
 	ip string
 }
 
-func (d *directProvider) Start(ctx context.Context) error                     { return nil }
-func (d *directProvider) Rotate() error                                       { return nil }
-func (d *directProvider) ConnectTo(string) error                              { return nil }
-func (d *directProvider) ListServers() ([]ServerInfo, error)                  { return nil, nil }
-func (d *directProvider) RefreshServers() ([]ServerInfo, error)               { return nil, nil }
-func (d *directProvider) Status() (StatusInfo, error)                         { return StatusInfo{}, nil }
-func (d *directProvider) Ping() (PingResult, error)                           { return PingResult{Direct: true}, nil }
-func (d *directProvider) CurrentIP() string                                   { return "direct" }
-func (d *directProvider) InstallHint() string                                 { return "" }
-func (d *directProvider) Close() error                                        { return nil }
+func (d *directProvider) Start(ctx context.Context) error       { return nil }
+func (d *directProvider) Rotate() error                         { return nil }
+func (d *directProvider) ConnectTo(string) error                { return nil }
+func (d *directProvider) ListServers() ([]ServerInfo, error)    { return nil, nil }
+func (d *directProvider) RefreshServers() ([]ServerInfo, error) { return nil, nil }
+func (d *directProvider) Status() (StatusInfo, error)           { return StatusInfo{}, nil }
+func (d *directProvider) Ping() (PingResult, error)             { return PingResult{Direct: true}, nil }
+func (d *directProvider) CurrentIP() string                     { return "direct" }
+func (d *directProvider) InstallHint() string                   { return "" }
+func (d *directProvider) Close() error                          { return nil }
 
 func newLinuxProvider(cfg ProviderConfig) Provider   { return newSupervisorProvider(cfg, "linux") }
 func newDarwinProvider(cfg ProviderConfig) Provider  { return newSupervisorProvider(cfg, "darwin") }
@@ -105,9 +105,9 @@ var (
 )
 
 type supervisorProvider struct {
-	cfg       ProviderConfig
-	os        string
-	socksAddr string
+	cfg         ProviderConfig
+	os          string
+	socksAddr   string
 	mu          sync.Mutex
 	rotating    bool
 	cmd         *exec.Cmd
@@ -530,4 +530,3 @@ func (s *supervisorProvider) ipRefresher() {
 		}
 	}
 }
-

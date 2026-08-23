@@ -16,12 +16,6 @@ func TestMetrics_New(t *testing.T) {
 	if snap["total_requests"].(int64) != 0 {
 		t.Errorf("expected total_requests=0, got %v", snap["total_requests"])
 	}
-	if snap["retry_count"].(int64) != 0 {
-		t.Errorf("expected retry_count=0, got %v", snap["retry_count"])
-	}
-	if snap["rate_limit_hits"].(int64) != 0 {
-		t.Errorf("expected rate_limit_hits=0, got %v", snap["rate_limit_hits"])
-	}
 	if snap["upstream_errors"].(int64) != 0 {
 		t.Errorf("expected upstream_errors=0, got %v", snap["upstream_errors"])
 	}
@@ -42,26 +36,6 @@ func TestMetrics_IncrTotalRequests(t *testing.T) {
 	snap := m.Snapshot()
 	if snap["total_requests"].(int64) != 3 {
 		t.Errorf("expected total_requests=3, got %v", snap["total_requests"])
-	}
-}
-
-func TestMetrics_IncrRetryCount(t *testing.T) {
-	m := New()
-	m.RetryCount.Add(2)
-
-	snap := m.Snapshot()
-	if snap["retry_count"].(int64) != 2 {
-		t.Errorf("expected retry_count=2, got %v", snap["retry_count"])
-	}
-}
-
-func TestMetrics_IncrRateLimitHits(t *testing.T) {
-	m := New()
-	m.RateLimitHits.Add(5)
-
-	snap := m.Snapshot()
-	if snap["rate_limit_hits"].(int64) != 5 {
-		t.Errorf("expected rate_limit_hits=5, got %v", snap["rate_limit_hits"])
 	}
 }
 

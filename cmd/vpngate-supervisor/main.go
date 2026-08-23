@@ -81,8 +81,8 @@ const (
 	// ipRefreshAttempts / ipRefreshRetryDelay give the background IP
 	// refresher patience with slow free relays instead of giving up after
 	// one timed-out probe per tick.
-	ipRefreshAttempts     = 3
-	ipRefreshRetryDelay   = 3 * time.Second
+	ipRefreshAttempts   = 3
+	ipRefreshRetryDelay = 3 * time.Second
 	// listFetchTimeout bounds a single server-list refresh so a hung
 	// fetch cannot wedge the rotation state.
 	listFetchTimeout = 20 * time.Second
@@ -776,10 +776,10 @@ type pingResult struct {
 	DNSMS    int64  `json:"dns_ms"`
 	DNSError string `json:"dns_error,omitempty"`
 
-	EgressOK bool   `json:"egress_ok"`
-	EgressIP string `json:"egress_ip,omitempty"`
-	HTTPMS   int64  `json:"http_ms"`
-	HTTPCode int    `json:"http_code"`
+	EgressOK  bool   `json:"egress_ok"`
+	EgressIP  string `json:"egress_ip,omitempty"`
+	HTTPMS    int64  `json:"http_ms"`
+	HTTPCode  int    `json:"http_code"`
 	EgressErr string `json:"egress_error,omitempty"`
 }
 

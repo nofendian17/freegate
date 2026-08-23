@@ -58,11 +58,11 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 					name, _ = fn["name"].(string)
 				}
 				id, _ := tc["id"].(string)
-				
+
 				defID := ensureID(id, name, i, j)
 				count := toolCallSeenCount[defID]
 				toolCallSeenCount[defID] = count + 1
-				
+
 				var finalID string
 				if count == 0 {
 					finalID = defID
@@ -80,7 +80,7 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 				resID := ensureID(id, "", i, 0)
 				count := toolResultSeenCount[resID]
 				toolResultSeenCount[resID] = count + 1
-				
+
 				var finalID string
 				mappedList := toolCallMap[resID]
 				if count < len(mappedList) {
@@ -108,11 +108,11 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 				case "tool_use":
 					name, _ := part["name"].(string)
 					id, _ := part["id"].(string)
-					
+
 					defID := ensureID(id, name, i, k)
 					count := toolCallSeenCount[defID]
 					toolCallSeenCount[defID] = count + 1
-					
+
 					var finalID string
 					if count == 0 {
 						finalID = defID
@@ -126,7 +126,7 @@ func EnsureToolCallIds(body []byte) ([]byte, error) {
 						resID := ensureID(id, "", i, k)
 						count := toolResultSeenCount[resID]
 						toolResultSeenCount[resID] = count + 1
-						
+
 						var finalID string
 						mappedList := toolCallMap[resID]
 						if count < len(mappedList) {

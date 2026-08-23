@@ -2,11 +2,11 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through a rotating VPNGate tunnel.
 
-freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai** and **kilo.ai** (OpenRouter), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **api.llm7.io** (keyless gateway), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
-- **Multi-upstream routing** — a model is served by Kilo iff it appears in Kilo's free catalog (`isFree == true` in the upstream's `/models` response); everything else falls through to OpenCode
+- **Multi-upstream routing** — a model is served by Kilo or LLM7 iff it appears in that upstream's free catalog (`isFree == true` for Kilo; not usage-based / `turbo` tier for LLM7, both from the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); pick any relay server from the dashboard (or rotate to a random one), or switch to **direct** (no tunnel) with one click — no automatic IP rotation on 429
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
@@ -17,7 +17,7 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
-- **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy (non-streaming via HTMX; streaming is a planned follow-up)
+- **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy, with SSE streaming (default), a stop button, and one-shot non-streaming mode
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
 - **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`)
 - **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
@@ -87,6 +87,7 @@ curl -X POST http://localhost:1234/v1/messages \
 
 A model ID is served by:
 - **Kilo** — if Kilo's free catalog contains it (`isFree == true`)
+- **LLM7** — if LLM7's free catalog contains it (keyless gateway; free = not usage-based or `turbo` tier)
 - **OpenCode** — everything else (default upstream)
 
 The catalog is refreshed periodically from each upstream, so routing is driven
@@ -105,11 +106,13 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `VPNGATE_CTRL_PORT` | `8080` | Deprecated: legacy sidecar control port (kept for `docker-compose` compat) |
 | `VPNGATE_HOST` | `127.0.0.1` | Deprecated: sidecar host (`vpn` in compose → `vpn:9050`); if set, `SOCKSAddr` honors it, else `127.0.0.1:9050` |
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
+| `VPNGATE_COUNTRY` | (empty) | Relay country filter for single-binary mode: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
 | — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `ADMIN_TOKEN` | — | **Required** (>=6 chars). Admin password: gates the dashboard (login form at `/login`, cookie `fg_admin` or `X-Admin-Token`/`Bearer` header) and also works as a superset key for `/v1/*`. Generate: `openssl rand -hex 32` |
 | `API_KEY` | (empty) | Comma-separated keys for `/v1/*` (`X-API-Key` / Bearer); any entry valid, admin token is superset. **Empty = `/v1/*` stays admin-gated** (login cookie or admin token header only — no open API) |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
+| `TRUST_PROXY_HEADERS` | `false` | Honor `X-Forwarded-For` / `X-Real-IP` for client IP (rate limiting, logs). Leave `false` when exposed directly — forwarded headers are spoofable. Set `true` only behind a reverse proxy that overwrites them. |
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode upstream URL |
 | `UPSTREAM_KEY_OPENCODE` | `public` | OpenCode API key |
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated model IDs that are free on the OpenCode upstream but don't carry the `-free` suffix |
@@ -126,7 +129,7 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (also accepts Claude and Gemini formats) |
 | `POST` | `/v1/messages` | Claude-native endpoint (auto-translated to OpenAI upstream) |
-| `GET` | `/v1/metrics` | Request metrics (counts per upstream, retries, errors, tokens) |
+| `GET` | `/v1/metrics` | Request metrics (counts per upstream, errors, tokens) |
 | `GET` | `/ready` | Health check |
 | `GET` | `/` | Terminal-style monitoring dashboard (see below) |
 
@@ -182,7 +185,7 @@ The dashboard follows the **TerminalUI** design system:
 
 ### Features
 
-- **Stat blocks** — total requests, retries, upstream errors, rate-limit hits, total tokens (auto-refresh 5s)
+- **Stat blocks** — total requests, upstream errors, total tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
 - **Upstream split** — opencode and kilo counts with proportional bars
 - **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
@@ -197,10 +200,10 @@ The dashboard follows the **TerminalUI** design system:
 | Path | Description |
 |------|-------------|
 | `GET /` | HTML dashboard (server-rendered initial state) |
-| `GET /partials/stats` | HTMX partial: 5 metric cards (requests, retries, errors, rate-limit hits, tokens) |
+| `GET /partials/stats` | HTMX partial: 4 metric cards (requests, errors, input/output tokens) |
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
 | `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo` |
-| `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}]` |
+| `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, per_upstream}]` |
 | `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
 | `GET /index.html` | Redirects to `/` |
@@ -217,13 +220,13 @@ The dashboard includes an embedded **chat playground** — a modal chat UI serve
 
 - **Model picker** — populated from `GET /v1/models` (auto-loaded on first open; refreshes on demand)
 - **System prompt** — collapsible; persists with the thread in `localStorage`
-- **Stream toggle** — switches between SSE streaming and one-shot responses
+- **Stream toggle** — switches between SSE streaming (default) and one-shot responses; a stop button aborts an in-flight stream while keeping the partial answer
 - **Multi-turn thread** — keep the conversation going; full history is sent with each request
 - **Persistence** — the thread survives page reloads via `localStorage` (key: `freegate.playground.v1`); "clear" wipes it
 - **Shortcuts** — `Enter` sends, `Shift+Enter` inserts a newline
 - **Admin-only dashboard** — the dashboard (and VPN switching) requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use any `API_KEY` entry or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
 
-Internally the playground is **HTMX-driven** with a small JS shim for client-side state. The form posts to `/v1/chat/completions` via `hx-post`, the model picker loads via `hx-get="/partials/playground/models"`, and event hooks (`hx-on:htmx:after-request`, etc.) hand responses off to the shim. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the option-list partial in `web/templates/partials/playground_models.html`, the server route at `internal/delivery/ui/handler.go` (`/partials/playground/models`), and the shim in `web/static/js/playground.js`. **Streaming is not yet implemented** in this version — the form sends `stream: false` and waits for the full response. A streaming follow-up is tracked.
+Internally the playground is HTMX-driven for chrome (modal open/close, model picker loads via `hx-get="/partials/playground/models"`), while the send path uses **fetch directly**: streaming mode consumes the OpenAI SSE response with a ReadableStream reader and appends delta text incrementally, with automatic fallback to buffered rendering when SSE or streams are unavailable; non-streaming mode waits for the full JSON. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the option-list partial in `web/templates/partials/playground_models.html`, the server route at `internal/delivery/ui/handler.go` (`/partials/playground/models`), and the shim in `web/static/js/playground.js`.
 
 ## Architecture
 
@@ -235,8 +238,8 @@ flowchart TB
     end
 
     subgraph Freegate["freegate (:1234)"]
-        Router["Router<br/>Kilo cache hit → Kilo<br/>default → OpenCode"]
-        Proxy["Proxy<br/>· retry + IP rotation<br/>· reasoning normalization<br/>· token extraction"]
+        Router["Router<br/>Kilo / LLM7 cache hit → that upstream<br/>default → OpenCode"]
+        Proxy["Proxy<br/>· multi-key round-robin + 429 cooldown<br/>· reasoning normalization<br/>· tool-arg repair + finish_reason synthesis<br/>· token extraction"]
         Dashboard["Dashboard /*<br/>HTMX + Chart.js<br/>TerminalUI design"]
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
@@ -249,6 +252,7 @@ flowchart TB
     subgraph Upstreams["Upstreams"]
         OC["opencode.ai<br/>/zen/v1<br/>key: public"]
         Kilo["api.kilo.ai<br/>/api/openrouter<br/>key: anonymous"]
+        LLM7["api.llm7.io<br/>/v1<br/>keyless"]
     end
 
     CLI --> Router
@@ -257,6 +261,7 @@ flowchart TB
     Proxy --> S2
     S1 --> OC
     S2 --> Kilo
+    S1 --> LLM7
     Proxy -.->|"log entry"| Recorder
     Recorder -.->|"reads"| Dashboard
     Browser --> Dashboard

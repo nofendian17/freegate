@@ -30,9 +30,7 @@ type upstreamStat struct {
 
 func buildStatsData(m map[string]any) statCardsView {
 	total := httputil.Int64(m["total_requests"])
-	retries := httputil.Int64(m["retry_count"])
 	errors := httputil.Int64(m["upstream_errors"])
-	rlHits := httputil.Int64(m["rate_limit_hits"])
 	inputTokens := httputil.Int64(m["input_tokens"])
 	outputTokens := httputil.Int64(m["output_tokens"])
 
@@ -43,9 +41,7 @@ func buildStatsData(m map[string]any) statCardsView {
 
 	cards := []statCard{
 		{Label: "Total Requests", Value: fmt.Sprintf("%d", total), Tone: "blue"},
-		{Label: "Retries", Value: fmt.Sprintf("%d", retries), Tone: "amber"},
 		{Label: "Upstream Errors", Value: fmt.Sprintf("%d", errors), Tone: "red"},
-		{Label: "Rate-Limit Hits", Value: fmt.Sprintf("%d", rlHits), Tone: "purple"},
 		{Label: "Input Tokens", Value: fmt.Sprintf("%d", inputTokens), Tone: "blue"},
 		{Label: "Output Tokens", Value: fmt.Sprintf("%d", outputTokens), Tone: "green"},
 	}

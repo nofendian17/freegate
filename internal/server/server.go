@@ -19,6 +19,7 @@ import (
 	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/delivery/ui"
+	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
@@ -58,14 +59,14 @@ type vpnUI struct {
 	dialer   *upstream.Dialer
 }
 
-func (v *vpnUI) ListServers() ([]vpn.ServerInfo, error)   { return v.provider.ListServers() }
+func (v *vpnUI) ListServers() ([]vpn.ServerInfo, error)    { return v.provider.ListServers() }
 func (v *vpnUI) RefreshServers() ([]vpn.ServerInfo, error) { return v.provider.RefreshServers() }
-func (v *vpnUI) ConnectTo(hostname string) error          { return v.provider.ConnectTo(hostname) }
-func (v *vpnUI) ForceNewIP() error                        { return v.provider.Rotate() }
-func (v *vpnUI) Status() (vpn.StatusInfo, error)          { return v.provider.Status() }
-func (v *vpnUI) Ping() (vpn.PingResult, error)            { return v.provider.Ping() }
-func (v *vpnUI) CurrentIP() string                        { return v.provider.CurrentIP() }
-func (v *vpnUI) InstallHint() string                      { return v.provider.InstallHint() }
+func (v *vpnUI) ConnectTo(hostname string) error           { return v.provider.ConnectTo(hostname) }
+func (v *vpnUI) ForceNewIP() error                         { return v.provider.Rotate() }
+func (v *vpnUI) Status() (vpn.StatusInfo, error)           { return v.provider.Status() }
+func (v *vpnUI) Ping() (vpn.PingResult, error)             { return v.provider.Ping() }
+func (v *vpnUI) CurrentIP() string                         { return v.provider.CurrentIP() }
+func (v *vpnUI) InstallHint() string                       { return v.provider.InstallHint() }
 
 // sidecarAdapter wraps the legacy vpngate sidecar Controller so Docker
 // deployments (VPNGATE_HOST=vpn) keep using the sidecar's HTTP API instead
@@ -111,6 +112,10 @@ func New(cfg *config.Config) (*Server, error) {
 	}))
 	slog.SetDefault(logger)
 
+	// Client-IP derivation: honor X-Forwarded-For / X-Real-IP only when
+	// explicitly deployed behind a trusted reverse proxy.
+	httputil.SetTrustProxyHeaders(cfg.TrustProxyHeaders)
+
 	var vpnProvider vpn.Provider
 	// Docker sidecar mode: VPNGATE_HOST explicitly set to non-loopback (e.g. "vpn")
 	// means the vpn container holds the tunnel. Use its HTTP API and don't
@@ -124,7 +129,7 @@ func New(cfg *config.Config) (*Server, error) {
 			Enabled:    cfg.VPNEnabled,
 			Provider:   cfg.VPNProvider,
 			SocksAddr:  cfg.SOCKSAddr,
-			Country:    "", // TODO: wire VPNGATE_COUNTRY filter if set
+			Country:    cfg.VPNGateCountry,
 			MinScore:   0,
 			MaxPing:    0,
 			RefreshInt: time.Duration(cfg.VPNGateRotateInterval) * time.Second,

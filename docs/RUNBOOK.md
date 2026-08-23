@@ -73,7 +73,7 @@ Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/re
 |----------|---------|---------|
 | `GET /ready` | Docker `HEALTHCHECK` in `Dockerfile`, ops probes | `200 {"status":"ok"}` once models are loaded; `503 {"status":"not ready"}` otherwise |
 | `GET /api/health` | Dashboard health badge (refreshed every 3 s) | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
-| `GET /api/timeseries` | Dashboard chart (refreshed every 10 s) | Array of `{ts, total_requests, errors, retries, rate_limit_hits, per_upstream}` (1 h rolling, 10 s samples) |
+| `GET /api/timeseries` | Dashboard chart (refreshed every 10 s) | Array of `{ts, total_requests, errors, per_upstream}` (1 h rolling, 10 s samples) |
 
 Docker healthchecks:
 
@@ -108,10 +108,9 @@ curl -s http://localhost:1234/api/health | jq        # requires admin header/coo
 ```json
 {
   "total_requests": 1234,
-  "retry_count": 12,
   "upstream_errors": 3,
-  "rate_limit_hits": 7,
-  "total_tokens": 982134,
+  "input_tokens": 982134,
+  "output_tokens": 512345,
   "per_upstream": {"opencode": 900, "kilo": 334}
 }
 ```

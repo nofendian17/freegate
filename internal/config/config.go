@@ -14,6 +14,12 @@ type Config struct {
 	APIKey     []string
 	RateLimit  int
 
+	// TrustProxyHeaders enables honoring X-Forwarded-For / X-Real-IP when
+	// deriving the client IP (rate limiting, logs, request history). Enable
+	// only behind a reverse proxy that overwrites these headers; otherwise
+	// they are client-controlled and spoofable.
+	TrustProxyHeaders bool
+
 	// VPN controls the embedded VPNGate provider (single-binary mode).
 	// When enabled, freegate starts an in-process OpenVPN tunnel + SOCKS5
 	// per-OS (linux/darwin/windows) and routes upstreams via 127.0.0.1:9050.
@@ -31,6 +37,10 @@ type Config struct {
 	VPNGateSocksPort      int    // SOCKS5 port used for all upstream traffic
 	VPNGateCtrlPort       int    // control API port (POST /rotate, GET /ip)
 	VPNGateRotateInterval int    // minimum seconds between scheduled IP rotations
+	// VPNGateCountry filters the relay list by country: a country name
+	// substring ("Japan") or ISO code ("JP"), prefix with "!" to exclude
+	// ("!US"). Empty = all countries.
+	VPNGateCountry string
 
 	UpstreamURLOpenCode           string
 	UpstreamKeyOpenCode           []string
@@ -70,6 +80,8 @@ func Load() *Config {
 		APIKey:     envSlice("API_KEY", ""),
 		RateLimit:  envInt("RATE_LIMIT", 60),
 
+		TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
+
 		VPNEnabled:  envBool("VPN_ENABLED", true),
 		VPNProvider: envStr("VPN_PROVIDER", "auto"),
 
@@ -77,6 +89,7 @@ func Load() *Config {
 		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
 		VPNGateCtrlPort:       envInt("VPNGATE_CTRL_PORT", 8080),
 		VPNGateRotateInterval: envInt("VPNGATE_ROTATE_INTERVAL", 30),
+		VPNGateCountry:        envStr("VPNGATE_COUNTRY", ""),
 
 		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
 		UpstreamKeyOpenCode:           envSlice("UPSTREAM_KEY_OPENCODE", "public"),
