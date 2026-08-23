@@ -7,9 +7,8 @@ import (
 )
 
 // FromOpenAI converts an OpenAI-format chat-completions request body to
-// Gemini format. Mirrors 9router's request/openai-to-gemini.js (the base
-// function openaiToGeminiBase, minus the Gemini-CLI / Cloud-Code
-// envelope which is specific to that deployment).
+// Gemini format. Produces the plain Gemini generateContent shape (no
+// Gemini-CLI / Cloud-Code envelope).
 //
 // The caller is expected to have already run prepost.* helpers on the
 // OpenAI body.

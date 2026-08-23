@@ -6,7 +6,7 @@ package prepost
 // Token-budget defaults applied by AdjustMaxTokens.
 const (
 	// DefaultMaxTokens is the fallback max_tokens used when the client did
-	// not provide one. Mirrors 9router's runtimeConfig DEFAULT_MAX_TOKENS.
+	// not provide one.
 	DefaultMaxTokens = 4096
 
 	// DefaultMinTokens is the minimum max_tokens required when tools are

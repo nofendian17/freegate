@@ -7,8 +7,7 @@ import (
 )
 
 // JSONToOpenAI converts a non-streaming Claude-format response body to
-// OpenAI format. Mirrors 9router's response/claude-to-openai.js (non-
-// streaming path).
+// OpenAI format.
 //
 // Claude shape:
 //

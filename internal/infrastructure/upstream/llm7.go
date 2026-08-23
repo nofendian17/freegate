@@ -54,7 +54,8 @@ func (u *LLM7Upstream) Match(modelID string) bool {
 }
 
 // llm7Free reports whether the catalog entry is usable anonymously without a
-// per-token charge — mirrors bansos-router's filter.
+// per-token charge: usage-based models are excluded, and only the "turbo"
+// tier is considered free when the flag is absent.
 func llm7Free(m types.LLM7Model) bool {
 	if m.UsageBasedOnly != nil {
 		return !*m.UsageBasedOnly

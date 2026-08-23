@@ -10,8 +10,7 @@ import (
 )
 
 // JSONToOpenAI converts a non-streaming Gemini-format response body to
-// OpenAI format. Mirrors 9router's response/gemini-to-openai.js (non-
-// streaming path).
+// OpenAI format.
 //
 // Gemini shape:
 //
