@@ -40,6 +40,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # dockers_v2 needs a multi-platform-capable buildx builder; the GH
+      # runners' default 'docker' driver rejects multi-platform builds.
+      - uses: docker/setup-buildx-action@v4
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
