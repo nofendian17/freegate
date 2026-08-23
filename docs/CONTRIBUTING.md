@@ -139,7 +139,7 @@ make test-race     # run with -race if you touched any concurrency code
 - **`gofmt -s`** (run via `make fmt`); CI-equivalent is `make check`
 - **`go vet ./...`** (run via `make vet`); must be clean
 - **No external linter yet** — `make check` is the gate
-- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`, `golang.org/x/net/proxy`, `github.com/davegallant/vpngate/pkg/vpn`, `github.com/armon/go-socks5`)
+- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`, `golang.org/x/net/proxy`, `github.com/davegallant/vpngate/pkg/vpn`, `github.com/armon/go-socks5`, `golang.org/x/sync` — singleflight only, to dedupe concurrent VPNGate server-list fetches)
 - **Naming** — exported types/functions from `internal/...` are still `PascalCase`; unexported helpers are `camelCase`; tests use `TestXxx` / `t.Run("case", ...)`
 - **Errors** — wrap with `fmt.Errorf("...: %w", err)`; never discard with `_` unless the API forces it (and then add a comment)
 - **Logging** — `slog` via the default logger set in `internal/server/server.go`; don't introduce `log` or `fmt.Println`

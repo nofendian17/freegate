@@ -11,6 +11,11 @@ import (
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
 
+// serverFetchKey is the singleflight key shared by every server-list
+// fetch path, so list-driven and refresh-driven callers dedupe onto one
+// flight instead of issuing parallel upstream fetches.
+const serverFetchKey = "server-list"
+
 // listFetchTimeout bounds a single server-list refresh so a hung upstream
 // (the library retries internally for up to minutes) cannot stall a
 // rotation.
@@ -68,7 +73,7 @@ func (r *serverRegistry) getServers() ([]vpn.Server, error) {
 	r.mu.Unlock()
 
 	if refresh || len(servers) == 0 {
-		v, err, _ := r.sf.Do("list", func() (any, error) {
+		v, err, _ := r.sf.Do(serverFetchKey, func() (any, error) {
 			// Double-check freshness inside the flight: another caller
 			// may have refreshed between our staleness check and our
 			// turn to own the flight.
@@ -117,7 +122,7 @@ func (r *serverRegistry) listServers() ([]ServerInfo, error) {
 // refresh interval), swaps the cache, and returns the freshly filtered
 // relays. Concurrent refresh calls share a single fetch.
 func (r *serverRegistry) refreshServers() ([]ServerInfo, error) {
-	v, err, _ := r.sf.Do("refresh", func() (any, error) {
+	v, err, _ := r.sf.Do(serverFetchKey, func() (any, error) {
 		list, ferr := r.fetch(true)
 		if ferr != nil {
 			return nil, ferr
