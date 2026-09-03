@@ -143,6 +143,37 @@ func TestChatServiceProxyChatUpstreamError(t *testing.T) {
 	}
 }
 
+type mockChainRouter struct{ chain []domain.Upstream }
+
+func (m *mockChainRouter) Select(modelID string) domain.Upstream {
+	return m.chain[0]
+}
+
+func (m *mockChainRouter) SelectChain(modelID string) []domain.Upstream { return m.chain }
+
+func TestChatService_Chain_FallsOverOn429(t *testing.T) {
+	first := &mockUpstream{name: "custom:a", response: &domain.UpstreamResponse{
+		StatusCode: 429,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"rate_limit","message":"slow down"}}`)),
+		Header:     http.Header{},
+	}}
+	second := &mockUpstream{name: "custom:b", response: &domain.UpstreamResponse{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		Header:     http.Header{},
+	}}
+	r := &mockChainRouter{chain: []domain.Upstream{first, second}}
+	svc := NewChatService(r, nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	if err := svc.ProxyChat(context.Background(), w, req, "acme-gpt-1", []byte(`{"model":"acme-gpt-1"}`)); err != nil {
+		t.Fatalf("proxy: %v", err)
+	}
+	if second.calls != 1 {
+		t.Fatalf("expected failover to second upstream, calls=%d", second.calls)
+	}
+}
+
 type recordingResponseWriter struct {
 	header http.Header
 	body   []byte
