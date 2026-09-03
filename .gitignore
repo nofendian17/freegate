@@ -1,3 +1,6 @@
+# Worktrees (isolated implementation workspaces)
+/.worktrees/
+
 # Environment files with secrets
 .env
 
