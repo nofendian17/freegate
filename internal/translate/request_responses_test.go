@@ -69,3 +69,72 @@ func TestRequest_OpenAIToResponses_ToolCalls(t *testing.T) {
 		t.Errorf("second item should be function_call, got %v", second["type"])
 	}
 }
+
+func TestRequest_OpenAIToResponses_CustomTool(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"custom","name":"exec","description":"run shell","format":{"syntax":"test","definition":"def"}}]}`)
+	out, err := Request(body, FormatOpenAI, FormatOpenAIResponses)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	tools, _ := got["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatalf("expected tools, got none: %s", string(out))
+	}
+	found := false
+	for _, tr := range tools {
+		if m, ok := tr.(map[string]any); ok {
+			if m["name"] == "exec" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected exec tool, got %s", string(out))
+	}
+}
+
+func TestRequest_OpenAIToResponses_PassthroughFields(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","messages":[{"role":"user","content":"hi"}],"parallel_tool_calls":false,"truncation":"auto","prompt_cache_key":"test123"}`)
+	out, err := Request(body, FormatOpenAI, FormatOpenAIResponses)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if got["parallel_tool_calls"] != false {
+		t.Errorf("expected parallel_tool_calls false preserved, got %v (%s)", got["parallel_tool_calls"], string(out))
+	}
+	if got["truncation"] != "auto" {
+		t.Errorf("expected truncation auto, got %v", got["truncation"])
+	}
+	if got["prompt_cache_key"] != "test123" {
+		t.Errorf("expected prompt_cache_key test123, got %v", got["prompt_cache_key"])
+	}
+}
+
+func TestRequest_ResponsesToOpenAI_EncryptedContent(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","input":[{"type":"reasoning","encrypted_content":"enc123","summary":[{"type":"summary_text","text":"think"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"instructions":"sys"}`)
+	out, err := Request(body, FormatOpenAIResponses, FormatOpenAI)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	msgs, _ := got["messages"].([]any)
+	found := false
+	for _, m := range msgs {
+		if pm, ok := m.(map[string]any); ok {
+			if pm["role"] == "assistant" {
+				if pm["reasoning_content"] != nil || pm["encrypted_content"] != nil {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected reasoning_content/encrypted_content in assistant message, got %s", string(out))
+	}
+}

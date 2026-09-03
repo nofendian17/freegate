@@ -572,7 +572,7 @@ func FromOpenAI(body []byte) ([]byte, error) {
 		}
 	}
 	// passthrough fields
-	for _, k := range []string{"temperature", "top_p", "service_tier", "prompt_cache_key"} {
+	for _, k := range []string{"temperature", "top_p", "service_tier", "prompt_cache_key", "parallel_tool_calls", "truncation", "tool_choice", "response_format", "seed", "user", "store", "include"} {
 		if v, ok := raw[k]; ok {
 			out[k] = v
 		}
