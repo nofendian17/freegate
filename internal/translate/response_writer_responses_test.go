@@ -69,3 +69,40 @@ func TestResponseWriter_OpenAIToResponses_JSON(t *testing.T) {
 		t.Errorf("expected hello from muse, got %q", out)
 	}
 }
+
+func TestResponseWriter_ClaudeToResponses_Stream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rw := NewResponseWriterWithDst(rec, FormatClaude, FormatOpenAIResponses)
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.WriteHeader(200)
+	// Claude SSE chunk (simplified)
+	chunk := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello Claude\"}}\n\n"
+	if _, err := rw.Write([]byte(chunk)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "response.output_text.delta") {
+		t.Errorf("expected responses event, got %q", body)
+	}
+	if !strings.Contains(body, "Hello Claude") {
+		t.Errorf("expected Hello Claude, got %q", body)
+	}
+}
+
+func TestResponseWriter_ResponsesToClaude_Stream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rw := NewResponseWriterWithDst(rec, FormatOpenAIResponses, FormatClaude)
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.WriteHeader(200)
+	event := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi Claude\"}\n\n"
+	if _, err := rw.Write([]byte(event)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "content_block_delta") {
+		t.Errorf("expected claude event, got %q", body)
+	}
+	if !strings.Contains(body, "Hi Claude") {
+		t.Errorf("expected Hi Claude, got %q", body)
+	}
+}

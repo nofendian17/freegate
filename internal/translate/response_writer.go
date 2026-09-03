@@ -146,6 +146,10 @@ func (rw *ResponseWriter) writeStream(p []byte) (int, error) {
 		return rw.streamOpenAIToResponses(p)
 	case rw.src == FormatOpenAIResponses && rw.dst == FormatOpenAI:
 		return rw.streamResponsesToOpenAI(p)
+	case rw.src == FormatClaude && rw.dst == FormatOpenAIResponses:
+		return rw.streamClaudeToResponses(p)
+	case rw.src == FormatOpenAIResponses && rw.dst == FormatClaude:
+		return rw.streamResponsesToClaude(p)
 	case rw.src == rw.dst:
 		// Pass-through.
 		return rw.passThrough(p)
@@ -401,6 +405,128 @@ func (rw *ResponseWriter) streamResponsesToOpenAI(p []byte) (int, error) {
 		events := state.ResponsesEventToOpenAI(eventName, data)
 		for _, evt := range events {
 			rw.writeLine(evt)
+		}
+	}
+	return len(p), nil
+}
+
+// --- Claude → Responses streaming (2-hop via OpenAI) ---
+
+func (rw *ResponseWriter) streamClaudeToResponses(p []byte) (int, error) {
+	if rw.state.claudeToOAI == nil {
+		rw.state.claudeToOAI = claude.NewClaudeToOpenAIState()
+	}
+	if rw.state.oaiToResponses == nil {
+		rw.state.oaiToResponses = responses.NewStreamState()
+	}
+	claudeState := rw.state.claudeToOAI
+	respState := rw.state.oaiToResponses
+	lines := claudeState.Feed(p)
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "data: ") && !strings.HasPrefix(line, "event: ") {
+			continue
+		}
+		// Extract data part for Claude chunk
+		var dataStr string
+		for _, l := range strings.Split(line, "\n") {
+			if strings.HasPrefix(l, "data: ") {
+				dataStr = strings.TrimPrefix(l, "data: ")
+				break
+			}
+		}
+		if dataStr == "" {
+			dataStr = strings.TrimPrefix(line, "data: ")
+		}
+		dataStr = strings.TrimRight(dataStr, "\r\n ")
+		if dataStr == "[DONE]" || dataStr == "" {
+			continue
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+			continue
+		}
+		// Claude -> OpenAI
+		openAIEvents := claudeState.ProcessChunk(chunk)
+		for _, openAIEvent := range openAIEvents {
+			// openAIEvent is like "data: {...}\n\n"
+			var openAIData string
+			for _, l := range strings.Split(openAIEvent, "\n") {
+				if strings.HasPrefix(l, "data: ") {
+					openAIData = strings.TrimPrefix(l, "data: ")
+					break
+				}
+			}
+			if openAIData == "" || openAIData == "[DONE]" {
+				continue
+			}
+			var openAIChunk map[string]any
+			if err := json.Unmarshal([]byte(openAIData), &openAIChunk); err != nil {
+				continue
+			}
+			// OpenAI -> Responses
+			respEvents := respState.OpenAIChunkToResponses(openAIChunk)
+			for _, evt := range respEvents {
+				rw.writeLine(evt)
+			}
+		}
+	}
+	return len(p), nil
+}
+
+// --- Responses → Claude streaming (2-hop via OpenAI) ---
+
+func (rw *ResponseWriter) streamResponsesToClaude(p []byte) (int, error) {
+	if rw.state.responsesToOAI == nil {
+		rw.state.responsesToOAI = responses.NewStreamState()
+	}
+	if rw.state.oaiToClaude == nil {
+		rw.state.oaiToClaude = claude.NewStreamState()
+	}
+	respState := rw.state.responsesToOAI
+	claudeState := rw.state.oaiToClaude
+	blocks := respState.Feed(p)
+	for _, block := range blocks {
+		var eventName string
+		var dataStr string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "event: ") {
+				eventName = strings.TrimPrefix(line, "event: ")
+			} else if strings.HasPrefix(line, "data: ") {
+				dataStr = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if dataStr == "" || dataStr == "[DONE]" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+			continue
+		}
+		if eventName == "" {
+			if t, ok := data["type"].(string); ok {
+				eventName = t
+			}
+		}
+		openAIEvents := respState.ResponsesEventToOpenAI(eventName, data)
+		for _, openAIEvent := range openAIEvents {
+			var openAIData string
+			for _, l := range strings.Split(openAIEvent, "\n") {
+				if strings.HasPrefix(l, "data: ") {
+					openAIData = strings.TrimPrefix(l, "data: ")
+					break
+				}
+			}
+			if openAIData == "" || openAIData == "[DONE]" {
+				continue
+			}
+			var chunk map[string]any
+			if err := json.Unmarshal([]byte(openAIData), &chunk); err != nil {
+				continue
+			}
+			claudeEvents := claude.ProcessChunk(chunk, claudeState)
+			for _, evt := range claudeEvents {
+				rw.writeLine(evt)
+			}
 		}
 	}
 	return len(p), nil
