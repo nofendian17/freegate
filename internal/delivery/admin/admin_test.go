@@ -13,7 +13,7 @@ import (
 )
 
 func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
-	s, _ := providers.Open("file::memory:?cache=shared")
+	s, _ := providers.Open("file:admin-create?mode=memory&cache=shared")
 	rebuilt := 0
 	h := New(s, func() error { rebuilt++; return nil }, nil, nil)
 	r := chi.NewRouter()
@@ -29,4 +29,41 @@ func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 		t.Fatalf("expected rebuild once, got %d", rebuilt)
 	}
 	var _ domain.Upstream
+}
+
+func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
+	s, err := providers.Open("file:admin-probe?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.CreateProvider(providers.Provider{Name: "bad", BaseURL: "https://api.test/v1", APIKeys: []string{"sk-1"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, _ := s.GetProviderRaw(row.ID)
+	bad.BaseURL = "http://exa mple.com\x7f"
+	if _, err := s.UpdateProvider(row.ID, bad); err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return nil }, nil, nil)
+	r := chi.NewRouter()
+	r.Mount("/", h.Routes())
+	req := httptest.NewRequest("POST", "/api/providers/1/test", nil)
+	w := httptest.NewRecorder()
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("panicked: %v", rec)
+		}
+	}()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ok"] != false {
+		t.Fatalf("expected ok=false, got %v", got)
+	}
 }

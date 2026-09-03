@@ -129,7 +129,11 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	req, _ := http.NewRequestWithContext(r.Context(), "GET", row.BaseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(r.Context(), "GET", row.BaseURL+"/models", nil)
+	if err != nil {
+		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
 	if len(row.APIKeys) > 0 {
 		req.Header.Set("Authorization", "Bearer "+row.APIKeys[0])
 	}
