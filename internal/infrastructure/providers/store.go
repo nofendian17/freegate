@@ -115,6 +115,17 @@ func (s *Store) ListProviders() ([]Provider, error) {
 }
 
 func (s *Store) GetProvider(id uint) (Provider, error) {
+	p, err := s.GetProviderRaw(id)
+	if err != nil {
+		return Provider{}, err
+	}
+	p.APIKeys = MaskKeys(p.APIKeys)
+	return p, nil
+}
+
+// GetProviderRaw returns the provider with raw (unmasked) API keys.
+// Internal-only: for the manager/dialer. API responses must use GetProvider.
+func (s *Store) GetProviderRaw(id uint) (Provider, error) {
 	var p Provider
 	if err := s.db.First(&p, id).Error; err != nil {
 		return Provider{}, err
@@ -123,7 +134,7 @@ func (s *Store) GetProvider(id uint) (Provider, error) {
 }
 
 func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
-	cur, err := s.GetProvider(id)
+	cur, err := s.GetProviderRaw(id)
 	if err != nil {
 		return Provider{}, err
 	}
@@ -179,6 +190,10 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 func (s *Store) DeleteCombo(id uint) error { return s.db.Delete(&RouteCombo{}, id).Error }
 
 func (s *Store) ActivateCombo(id uint) error {
+	var cur RouteCombo
+	if err := s.db.First(&cur, id).Error; err != nil {
+		return err
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&RouteCombo{}).Where("1 = 1").Update("is_active", false).Error; err != nil {
 			return err

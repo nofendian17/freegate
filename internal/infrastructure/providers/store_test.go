@@ -70,6 +70,31 @@ func TestCombo_Update_PreservesActive(t *testing.T) {
 	}
 }
 
+func TestGetProvider_Masked_AndRaw(t *testing.T) {
+	s, err := Open("file:getmask?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p, err := s.CreateProvider(Provider{Name: "maskme", BaseURL: "https://m.test/v1", APIKeys: []string{"sk-live-123456"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := s.GetProvider(p.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.APIKeys) != 1 || got.APIKeys[0] != "****3456" {
+		t.Fatalf("expected masked key, got %q", got.APIKeys)
+	}
+	raw, err := s.GetProviderRaw(p.ID)
+	if err != nil {
+		t.Fatalf("get raw: %v", err)
+	}
+	if len(raw.APIKeys) != 1 || raw.APIKeys[0] != "sk-live-123456" {
+		t.Fatalf("expected raw key, got %q", raw.APIKeys)
+	}
+}
+
 func TestCombo_SingleActive(t *testing.T) {
 	s, err := Open("file::memory:?cache=shared")
 	if err != nil {
@@ -89,5 +114,29 @@ func TestCombo_SingleActive(t *testing.T) {
 	}
 	if active.Name != "b" {
 		t.Fatalf("expected b active, got %q", active.Name)
+	}
+}
+
+func TestActivateCombo_BadID_KeepsActive(t *testing.T) {
+	s, err := Open("file:badactivate?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	c, err := s.SaveCombo(RouteCombo{Name: "keep", Members: []string{"x"}})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := s.ActivateCombo(c.ID); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if err := s.ActivateCombo(c.ID + 9999); err == nil {
+		t.Fatal("expected error for bad combo id")
+	}
+	active, err := s.ActiveCombo()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if active.Name != "keep" {
+		t.Fatalf("expected keep still active, got %q", active.Name)
 	}
 }
