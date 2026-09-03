@@ -972,18 +972,22 @@ func copyPassthroughJSONBytes(dst io.Writer, body []byte) TokenUsage {
 }
 
 func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader) TokenUsage {
-	// Simple copy of SSE stream without transformation; respects context cancellation.
+	// Copy SSE stream while extracting Responses usage from final response.completed event.
+	var usage TokenUsage
+	var streamBuf bytes.Buffer
 	buf := make([]byte, 4096)
 	for {
 		select {
 		case <-ctx.Done():
-			return TokenUsage{}
+			return usage
 		default:
 		}
 		n, err := src.Read(buf)
 		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return TokenUsage{}
+			chunk := buf[:n]
+			streamBuf.Write(chunk)
+			if _, werr := dst.Write(chunk); werr != nil {
+				return usage
 			}
 			if fl, ok := dst.(http.Flusher); ok {
 				fl.Flush()
@@ -996,7 +1000,49 @@ func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader
 			break
 		}
 	}
-	return TokenUsage{}
+	// Parse accumulated stream for Responses usage in response.completed
+	// Format: event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":..., "output_tokens":...}}}
+	s := streamBuf.String()
+	// Find all data: lines that are response.completed
+	for _, block := range bytes.Split([]byte(s), []byte("\n\n")) {
+		if !bytes.Contains(block, []byte("response.completed")) {
+			continue
+		}
+		// Extract data: line
+		for _, line := range bytes.Split(block, []byte("\n")) {
+			if !bytes.HasPrefix(line, []byte("data: ")) {
+				continue
+			}
+			data := bytes.TrimPrefix(line, []byte("data: "))
+			var evt map[string]any
+			if err := json.Unmarshal(data, &evt); err != nil {
+				continue
+			}
+			// Try response.usage or usage
+			var u map[string]any
+			if resp, ok := evt["response"].(map[string]any); ok {
+				if usageMap, ok := resp["usage"].(map[string]any); ok {
+					u = usageMap
+				}
+			} else if usageMap, ok := evt["usage"].(map[string]any); ok {
+				u = usageMap
+			}
+			if u != nil {
+				if p, ok := u["input_tokens"].(float64); ok {
+					usage.Prompt = int(p)
+				} else if p, ok := u["prompt_tokens"].(float64); ok {
+					usage.Prompt = int(p)
+				}
+				if c, ok := u["output_tokens"].(float64); ok {
+					usage.Completion = int(c)
+				} else if c, ok := u["completion_tokens"].(float64); ok {
+					usage.Completion = int(c)
+				}
+				usage.Total = usage.Prompt + usage.Completion
+			}
+		}
+	}
+	return usage
 }
 
 func copyPassthroughJSON(dst io.Writer, src io.Reader) TokenUsage {

@@ -463,7 +463,45 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		if s.toolCallIndex > 0 {
 			finish = "tool_calls"
 		}
-		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{}, finish)}
+		// Extract usage if present
+		var usage map[string]any
+		if resp, ok := data["response"].(map[string]any); ok {
+			if u, ok := resp["usage"].(map[string]any); ok {
+				usage = u
+			}
+		} else if u, ok := data["usage"].(map[string]any); ok {
+			usage = u
+		}
+		// Build chunk with usage if present
+		chunkMap := map[string]any{
+			"id":      s.chatID,
+			"object":  "chat.completion.chunk",
+			"created": s.created,
+			"model":   "muse-spark",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}},
+		}
+		if usage != nil {
+			var prompt, completion int
+			if p, ok := usage["input_tokens"].(float64); ok {
+				prompt = int(p)
+			} else if p, ok := usage["prompt_tokens"].(float64); ok {
+				prompt = int(p)
+			}
+			if c, ok := usage["output_tokens"].(float64); ok {
+				completion = int(c)
+			} else if c, ok := usage["completion_tokens"].(float64); ok {
+				completion = int(c)
+			}
+			if prompt != 0 || completion != 0 {
+				chunkMap["usage"] = map[string]any{
+					"prompt_tokens":     prompt,
+					"completion_tokens": completion,
+					"total_tokens":      prompt + completion,
+				}
+			}
+		}
+		b, _ := json.Marshal(chunkMap)
+		return []string{fmt.Sprintf("data: %s\n\n", string(b))}
 	case "response.failed", "error":
 		if s.finishSent {
 			return nil
