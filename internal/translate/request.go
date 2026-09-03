@@ -6,6 +6,7 @@ import (
 	"freegate/internal/translate/claude"
 	"freegate/internal/translate/gemini"
 	"freegate/internal/translate/internal/prepost"
+	"freegate/internal/translate/responses"
 )
 
 // Request translates a request body from source format to target format.
@@ -131,6 +132,8 @@ func sourceToOpenAI(body []byte, source Format) ([]byte, error) {
 		return claude.ToOpenAI(body)
 	case FormatGemini:
 		return gemini.ToOpenAI(body)
+	case FormatOpenAIResponses:
+		return responses.ToOpenAI(body)
 	default:
 		// FormatOpenAI, "", or unknown — pass through.
 		return body, nil
@@ -143,6 +146,8 @@ func openAIToTarget(body []byte, target Format) ([]byte, error) {
 		return claude.FromOpenAI(body)
 	case FormatGemini:
 		return gemini.FromOpenAI(body)
+	case FormatOpenAIResponses:
+		return responses.FromOpenAI(body)
 	default:
 		// FormatOpenAI, "", or unknown — pass through.
 		return body, nil

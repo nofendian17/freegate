@@ -41,7 +41,7 @@ services:
       - VPNGATE_CTRL_PORT=8080
       - VPNGATE_ROTATE_INTERVAL=${VPNGATE_ROTATE_INTERVAL:-30}
       - PORT=1234
-      - LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-info}
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - API_KEY=${API_KEY:-}
       - RATE_LIMIT=${RATE_LIMIT:-60}
@@ -55,6 +55,8 @@ services:
       - UPSTREAM_REFRESH_KILO=${UPSTREAM_REFRESH_KILO:-60}
       - UPSTREAM_URL_LLM7=${UPSTREAM_URL_LLM7:-https://api.llm7.io/v1}
       - UPSTREAM_REFRESH_LLM7=${UPSTREAM_REFRESH_LLM7:-300}
+      # Direct config for Responses API models (comma-separated substrings, e.g. muse-spark)
+      - RESPONSE_MODELS=${RESPONSE_MODELS:-muse-spark,muse_spark}
       # Debug: raw upstream response logging via slog (stdout). Default
       # false; lines contain full conversation content, enable only while
       # debugging.

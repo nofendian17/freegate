@@ -26,9 +26,10 @@ import (
 type Format string
 
 const (
-	FormatOpenAI Format = "openai"
-	FormatClaude Format = "claude"
-	FormatGemini Format = "gemini"
+	FormatOpenAI          Format = "openai"
+	FormatClaude          Format = "claude"
+	FormatGemini          Format = "gemini"
+	FormatOpenAIResponses Format = "openai-responses"
 )
 
 var (

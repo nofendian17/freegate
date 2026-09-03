@@ -154,3 +154,24 @@ func TestExtractData(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestDetect_Responses_Basic(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	if f := Detect(body); f != Format("openai-responses") {
+		t.Errorf("expected openai-responses, got %s", f)
+	}
+}
+
+func TestDetect_Responses_StringInput(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","input":"hello"}`)
+	if f := Detect(body); f != Format("openai-responses") {
+		t.Errorf("expected openai-responses for string input, got %s", f)
+	}
+}
+
+func TestDetect_Responses_EmptyArray(t *testing.T) {
+	body := []byte(`{"model":"muse-spark-1.2-contributor-free","input":[]}`)
+	if f := Detect(body); f != Format("openai-responses") {
+		t.Errorf("expected openai-responses for empty input, got %s", f)
+	}
+}

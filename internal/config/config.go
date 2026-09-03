@@ -62,6 +62,11 @@ type Config struct {
 	UpstreamRefreshKilo     int
 	UpstreamRefreshLLM7     int
 
+	// ResponseModels is a direct config for models that use the OpenAI Responses API
+	// (e.g. muse-spark). Comma-separated substrings matched case-insensitively
+	// against the model ID. If empty, defaults to muse-spark.
+	ResponseModels []string
+
 	SOCKSAddr string
 }
 
@@ -112,6 +117,8 @@ func Load() *Config {
 		UpstreamRefreshOpenCode: envInt("UPSTREAM_REFRESH_OPENCODE", 60),
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
 		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
+
+		ResponseModels: envSlice("RESPONSE_MODELS", "muse-spark,muse_spark"),
 	}
 
 	// Single-binary mode: in-process SOCKS on 127.0.0.1:9050 when VPN enabled,

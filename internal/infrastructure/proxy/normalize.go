@@ -911,12 +911,121 @@ func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter,
 	model, reqID := correlationMeta(resp.Header)
 	if isStreaming {
 		rd := bufio.NewReader(resp.Body)
+		if isResponsesSSE(rd) {
+			return copyPassthroughStream(ctx, w, rd), nil
+		}
 		if isAnthropicSSE(rd) {
 			return normalizeClaudeStreamWithContext(ctx, w, rd), nil
 		}
 		return normalizeOpenAIStreamWithMeta(ctx, w, rd, model, reqID), nil
 	}
-	return normalizeJSONWithMeta(w, resp.Body, model, reqID), nil
+	// For non-streaming, peek body to detect Responses API JSON.
+	// We need to read without losing data; buffer it.
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return TokenUsage{}, err
+	}
+	if isResponsesJSONBytes(bodyBytes) {
+		return copyPassthroughJSONBytes(w, bodyBytes), nil
+	}
+	return normalizeJSONWithMeta(w, bytes.NewReader(bodyBytes), model, reqID), nil
+}
+
+// isResponsesSSE peeks at the stream to detect OpenAI Responses API SSE
+// (event: response.*). Responses SSE also starts with "event:" like Claude,
+// but its event names are response.* vs Claude's message_* / content_block_*.
+func isResponsesSSE(rd *bufio.Reader) bool {
+	peek, err := rd.Peek(512)
+	if err != nil && len(peek) == 0 {
+		return false
+	}
+	return bytes.Contains(peek, []byte("event: response.")) || bytes.Contains(peek, []byte(`"type":"response.`))
+}
+
+func isResponsesJSONBytes(b []byte) bool {
+	// Responses JSON has "object":"response" and "output" array
+	return bytes.Contains(b, []byte(`"object"`)) && bytes.Contains(b, []byte(`"response"`)) && bytes.Contains(b, []byte(`"output"`))
+}
+
+func copyPassthroughJSONBytes(dst io.Writer, body []byte) TokenUsage {
+	var resp map[string]any
+	if err := json.Unmarshal(body, &resp); err == nil {
+		if u, ok := resp["usage"].(map[string]any); ok {
+			var tu TokenUsage
+			if p, ok := u["input_tokens"].(float64); ok {
+				tu.Prompt = int(p)
+			} else if p, ok := u["prompt_tokens"].(float64); ok {
+				tu.Prompt = int(p)
+			}
+			if c, ok := u["output_tokens"].(float64); ok {
+				tu.Completion = int(c)
+			} else if c, ok := u["completion_tokens"].(float64); ok {
+				tu.Completion = int(c)
+			}
+			tu.Total = tu.Prompt + tu.Completion
+			dst.Write(body)
+			return tu
+		}
+	}
+	dst.Write(body)
+	return TokenUsage{}
+}
+
+func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader) TokenUsage {
+	// Simple copy of SSE stream without transformation; respects context cancellation.
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return TokenUsage{}
+		default:
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return TokenUsage{}
+			}
+			if fl, ok := dst.(http.Flusher); ok {
+				fl.Flush()
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	return TokenUsage{}
+}
+
+func copyPassthroughJSON(dst io.Writer, src io.Reader) TokenUsage {
+	body, err := io.ReadAll(src)
+	if err != nil {
+		return TokenUsage{}
+	}
+	// Try to extract usage if present
+	var resp map[string]any
+	if err := json.Unmarshal(body, &resp); err == nil {
+		if u, ok := resp["usage"].(map[string]any); ok {
+			var tu TokenUsage
+			if p, ok := u["input_tokens"].(float64); ok {
+				tu.Prompt = int(p)
+			} else if p, ok := u["prompt_tokens"].(float64); ok {
+				tu.Prompt = int(p)
+			}
+			if c, ok := u["output_tokens"].(float64); ok {
+				tu.Completion = int(c)
+			} else if c, ok := u["completion_tokens"].(float64); ok {
+				tu.Completion = int(c)
+			}
+			tu.Total = tu.Prompt + tu.Completion
+			dst.Write(body)
+			return tu
+		}
+	}
+	dst.Write(body)
+	return TokenUsage{}
 }
 
 func NormalizeDomainResponseWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
