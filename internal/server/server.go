@@ -215,9 +215,8 @@ func New(cfg *config.Config) (*Server, error) {
 		r.Get("/metrics", apiHandler.Metrics)
 		r.Post("/chat/completions", apiHandler.Chat)
 		r.Post("/responses", apiHandler.Chat)
+		r.Post("/messages", apiHandler.Chat)
 	})
-	r.With(rl.Middleware, apiAuth).Post("/v1/messages", apiHandler.Chat)
-	r.With(rl.Middleware, apiAuth).Post("/v1/responses", apiHandler.Chat)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpSrv := &http.Server{
