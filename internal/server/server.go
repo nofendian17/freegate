@@ -183,6 +183,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static(), cfg.AdminToken)
+	// Direct config for Responses models (e.g. muse-spark)
+	handler.SetResponseModels(cfg.ResponseModels)
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
@@ -212,8 +214,10 @@ func New(cfg *config.Config) (*Server, error) {
 		r.Get("/models", apiHandler.ListModels)
 		r.Get("/metrics", apiHandler.Metrics)
 		r.Post("/chat/completions", apiHandler.Chat)
+		r.Post("/responses", apiHandler.Chat)
 	})
 	r.With(rl.Middleware, apiAuth).Post("/v1/messages", apiHandler.Chat)
+	r.With(rl.Middleware, apiAuth).Post("/v1/responses", apiHandler.Chat)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	httpSrv := &http.Server{

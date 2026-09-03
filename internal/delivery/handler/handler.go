@@ -48,5 +48,6 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/v1/chat/completions", h.Chat)
 	// Claude-native endpoint (optional, clients can also POST Claude bodies to /v1/chat/completions)
 	r.Post("/v1/messages", h.Chat)
+	r.Post("/v1/responses", h.Chat)
 	return r
 }

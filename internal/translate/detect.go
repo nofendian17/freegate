@@ -5,10 +5,23 @@ import (
 	"strings"
 )
 
+// DetectByPath returns a format hint based on the request path.
+// /v1/responses is always openai-responses, /v1/messages is always claude.
+func DetectByPath(path string, body []byte) Format {
+	if strings.Contains(path, "/v1/responses") {
+		return FormatOpenAIResponses
+	}
+	if strings.Contains(path, "/v1/messages") {
+		return FormatClaude
+	}
+	return Detect(body)
+}
+
 // Detect inspects a raw JSON body and returns the detected API format.
 // Detection is based on structural hints in the body — no endpoint path needed.
 //
 // Priority:
+//  0. OpenAI Responses: top-level "input" (array or string) without "messages"
 //  1. Gemini: top-level "contents" (array) without "messages"
 //  2. Claude: "messages" present AND Claude-specific fields found
 //  3. OpenAI (default): everything else
@@ -20,6 +33,18 @@ func Detect(body []byte) Format {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return FormatOpenAI
+	}
+
+	// OpenAI Responses: has "input" (array or string) and no "messages"
+	if inp, hasInput := raw["input"]; hasInput {
+		if _, hasMessages := raw["messages"]; !hasMessages {
+			switch inp.(type) {
+			case string:
+				return FormatOpenAIResponses
+			case []any:
+				return FormatOpenAIResponses
+			}
+		}
 	}
 
 	// Gemini: top-level "contents" as an array (and no "messages")
@@ -105,7 +130,7 @@ func IsStreaming(body []byte, format Format) bool {
 		return false
 	}
 	switch format {
-	case FormatOpenAI:
+	case FormatOpenAI, FormatOpenAIResponses:
 		if s, ok := raw["stream"].(bool); ok {
 			return s
 		}

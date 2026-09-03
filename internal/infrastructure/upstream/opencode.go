@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -113,11 +114,43 @@ func (o *OpenCodeUpstream) Models() []model.Model {
 }
 
 func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
-	resp, err := o.client.Post(ctx, "/chat/completions", body)
+	// Muse Spark models use the Responses API (/zen/v1/responses).
+	endpoint := "/chat/completions"
+	if isResponsesBody(body) {
+		endpoint = "/responses"
+	}
+	resp, err := o.client.Post(ctx, endpoint, body)
 	if err != nil {
 		return nil, err
 	}
 	return domain.NewUpstreamResponse(resp), nil
+}
+
+func isResponsesBody(body []byte) bool {
+	// Fast check: responses bodies contain top-level "input" and no "messages"
+	if len(body) == 0 {
+		return false
+	}
+	hasInput := bytes.Contains(body, []byte(`"input"`))
+	if !hasInput {
+		return false
+	}
+	// If it has "input" but no "messages", treat as responses
+	hasMessages := bytes.Contains(body, []byte(`"messages"`))
+	if hasInput && !hasMessages {
+		return true
+	}
+	// More precise JSON check for edge cases where both appear
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	if _, ok := raw["input"]; ok {
+		if _, hasMsg := raw["messages"]; !hasMsg {
+			return true
+		}
+	}
+	return false
 }
 
 // genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.

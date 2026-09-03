@@ -10,15 +10,18 @@ import (
 
 	"freegate/internal/translate/claude"
 	"freegate/internal/translate/gemini"
+	"freegate/internal/translate/responses"
 )
 
 // streamState bundles the per-direction streaming state holders. Only
 // one of these is non-nil for any (src, dst) pair.
 type streamState struct {
-	oaiToClaude *claude.StreamState         // src=OpenAI, dst=Claude
-	claudeToOAI *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
-	oaiToGemini *gemini.StreamState         // src=OpenAI, dst=Gemini
-	geminiToOAI *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
+	oaiToClaude    *claude.StreamState         // src=OpenAI, dst=Claude
+	claudeToOAI    *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
+	oaiToGemini    *gemini.StreamState         // src=OpenAI, dst=Gemini
+	geminiToOAI    *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
+	oaiToResponses *responses.StreamState      // src=OpenAI, dst=Responses
+	responsesToOAI *responses.StreamState      // src=Responses, dst=OpenAI
 }
 
 // ResponseWriter wraps an http.ResponseWriter to translate upstream
@@ -139,6 +142,10 @@ func (rw *ResponseWriter) writeStream(p []byte) (int, error) {
 		return rw.streamOpenAIToGemini(p)
 	case rw.src == FormatGemini && rw.dst == FormatOpenAI:
 		return rw.streamGeminiToOpenAI(p)
+	case rw.src == FormatOpenAI && rw.dst == FormatOpenAIResponses:
+		return rw.streamOpenAIToResponses(p)
+	case rw.src == FormatOpenAIResponses && rw.dst == FormatOpenAI:
+		return rw.streamResponsesToOpenAI(p)
 	case rw.src == rw.dst:
 		// Pass-through.
 		return rw.passThrough(p)
@@ -302,6 +309,96 @@ func (rw *ResponseWriter) streamGeminiToOpenAI(p []byte) (int, error) {
 			continue
 		}
 		events := state.ProcessChunk(chunk)
+		for _, evt := range events {
+			rw.writeLine(evt)
+		}
+	}
+	return len(p), nil
+}
+
+// --- OpenAI → Responses streaming ---
+
+func (rw *ResponseWriter) streamOpenAIToResponses(p []byte) (int, error) {
+	if rw.state.oaiToResponses == nil {
+		rw.state.oaiToResponses = responses.NewStreamState()
+	}
+	state := rw.state.oaiToResponses
+	if state.IsClosed() {
+		return len(p), nil
+	}
+	blocks := state.Feed(p)
+	for _, block := range blocks {
+		// block is one SSE message: data: {...}
+		lines := strings.Split(block, "\n")
+		var dataStr string
+		for _, line := range lines {
+			if strings.HasPrefix(line, "data: ") {
+				dataStr = strings.TrimPrefix(line, "data: ")
+				dataStr = strings.TrimRight(dataStr, "\r\n ")
+				break
+			}
+		}
+		if dataStr == "" {
+			continue
+		}
+		if dataStr == "[DONE]" {
+			// flush remaining
+			for _, evt := range state.OpenAIChunkToResponses(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop"}}}) {
+				rw.writeLine(evt)
+			}
+			continue
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+			rw.writeLine(block + "\n\n")
+			continue
+		}
+		events := state.OpenAIChunkToResponses(chunk)
+		for _, evt := range events {
+			rw.writeLine(evt)
+		}
+	}
+	return len(p), nil
+}
+
+// --- Responses → OpenAI streaming ---
+
+func (rw *ResponseWriter) streamResponsesToOpenAI(p []byte) (int, error) {
+	if rw.state.responsesToOAI == nil {
+		rw.state.responsesToOAI = responses.NewStreamState()
+	}
+	state := rw.state.responsesToOAI
+	blocks := state.Feed(p)
+	for _, block := range blocks {
+		// block contains event: xxx\ndata: {...}
+		var eventName string
+		var dataStr string
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "event: ") {
+				eventName = strings.TrimPrefix(line, "event: ")
+			} else if strings.HasPrefix(line, "data: ") {
+				dataStr = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if dataStr == "" {
+			continue
+		}
+		dataStr = strings.TrimRight(dataStr, "\r\n ")
+		if dataStr == "[DONE]" {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+			rw.writeLine(block + "\n\n")
+			continue
+		}
+		// data may contain type at top level, but eventName is authoritative
+		if eventName == "" {
+			if t, ok := data["type"].(string); ok {
+				eventName = t
+			}
+		}
+		events := state.ResponsesEventToOpenAI(eventName, data)
 		for _, evt := range events {
 			rw.writeLine(evt)
 		}

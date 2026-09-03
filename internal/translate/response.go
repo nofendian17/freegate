@@ -5,6 +5,7 @@ import (
 
 	"freegate/internal/translate/claude"
 	"freegate/internal/translate/gemini"
+	"freegate/internal/translate/responses"
 )
 
 // ResponseJSON translates a non-streaming response body from source
@@ -39,6 +40,8 @@ func sourceJSONToOpenAI(body []byte, source Format) ([]byte, error) {
 		return claude.JSONToOpenAI(body)
 	case FormatGemini:
 		return gemini.JSONToOpenAI(body)
+	case FormatOpenAIResponses:
+		return responses.JSONToOpenAI(body)
 	case FormatOpenAI, "":
 		return body, nil
 	}
@@ -51,6 +54,8 @@ func openAIJSONToTarget(body []byte, target Format) ([]byte, error) {
 		return claude.JSONToClaude(body)
 	case FormatGemini:
 		return gemini.JSONToGemini(body)
+	case FormatOpenAIResponses:
+		return responses.JSONToResponses(body)
 	case FormatOpenAI, "":
 		return body, nil
 	}
