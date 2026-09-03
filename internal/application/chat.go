@@ -35,10 +35,11 @@ func (s *ChatService) candidates(modelID string) []domain.Upstream {
 }
 
 // ChatService orchestrates chat-completion requests: routing, request
-// logging, and metrics. Upstream responses — including 4xx/5xx statuses
-// such as 429 — are passed through to the client verbatim. There is no
-// automatic retry or IP rotation here: the user picks the VPN exit server
-// manually from the dashboard.
+// logging, and metrics. Ordered upstream candidates are tried in turn:
+// transport errors, 429s, and 5xx fail over to the next candidate; the
+// first success — or the last failure when exhausted — is passed through
+// to the client verbatim. There is no IP rotation here: the user picks
+// the VPN exit server manually from the dashboard.
 type ChatService struct {
 	router         Router
 	metrics        *metrics.Metrics
@@ -62,10 +63,12 @@ func (s *ChatService) WithRequestLogger(fn domain.RequestLogger) *ChatService {
 	return s
 }
 
-// ProxyChat routes the request to the appropriate upstream and streams the
-// response back to w. Whatever the upstream returns — success or an error
-// status like 429 — is forwarded to the client unchanged; the function
-// only returns an error for transport/selection failures.
+// ProxyChat routes the request to the ordered upstream candidates and
+// streams the response back to w. Transport errors, 429s, and 5xx fail
+// over to the next candidate; the first success — or the last failure
+// when the chain is exhausted — is forwarded to the client unchanged;
+// the function only returns an error for selection failures or when
+// every candidate fails at the transport level.
 func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http.Request, modelID string, body []byte) error {
 	start := time.Now()
 	requestID := ""
