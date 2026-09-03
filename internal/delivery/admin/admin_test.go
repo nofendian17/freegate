@@ -31,6 +31,31 @@ func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	var _ domain.Upstream
 }
 
+func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
+	s, _ := providers.Open("file:admin-keepkeys?mode=memory&cache=shared")
+	row, err := s.CreateProvider(providers.Provider{Name: "keepme", BaseURL: "https://api.keep.test/v1", APIKeys: []string{"sk-live-abc"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return nil }, nil, nil)
+	r := chi.NewRouter()
+	r.Mount("/", h.Routes())
+	body, _ := json.Marshal(map[string]any{"name": "keepme", "base_url": "https://api.keep.test/v1", "refresh_sec": 60, "enabled": true})
+	req := httptest.NewRequest("PUT", "/api/providers/1", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	raw, err := s.GetProviderRaw(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.APIKeys) != 1 || raw.APIKeys[0] != "sk-live-abc" {
+		t.Fatalf("keys not preserved: %q", raw.APIKeys)
+	}
+}
+
 func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 	s, err := providers.Open("file:admin-probe?mode=memory&cache=shared")
 	if err != nil {

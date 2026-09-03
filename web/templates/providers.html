@@ -78,9 +78,12 @@
       </div>
       <p class="subtitle">// ordered failover chain — first member is primary</p>
       <div id="combo-list"></div>
+      <div class="prov-field full" style="margin-top:var(--space-4)">
+        <span class="prov-label">new combo — tick providers in failover order (order = number, lowest first)</span>
+        <div id="combo-picker"></div>
+      </div>
       <div class="prov-actions">
         <input id="combo-name" class="prov-input" style="max-width:240px" placeholder="combo name">
-        <input id="combo-members" class="prov-input" style="max-width:320px" placeholder="members, comma-separated (e.g. opencode,kilo)">
         <button id="combo-save" class="btn-secondary" type="button">> save combo</button>
       </div>
     </div>
@@ -109,7 +112,7 @@
               <input id="f-base-url" class="prov-input" required placeholder="https://api.example.com/v1">
             </div>
             <div class="prov-field full">
-              <label class="prov-label" for="f-api-keys">api_keys (one per line)</label>
+              <label class="prov-label" for="f-api-keys">api_keys (one per line — leave blank to keep existing keys)</label>
               <textarea id="f-api-keys" class="prov-input" rows="2" placeholder="sk-..."></textarea>
             </div>
             <div class="prov-field full">
@@ -289,8 +292,24 @@
       .catch(function(e) { show(formErr, '! delete: ' + e); });
   });
 
-  function loadCombos() {
-    fetch('/api/combos', {credentials: 'same-origin'})
+  function loadComboPicker() {
+    fetch('/api/providers', {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(body) {
+        var rows = body.data || body || [];
+        var names = ['opencode', 'kilo', 'llm7'];
+        rows.forEach(function(p) { names.push('custom:' + p.name); });
+        var picker = document.getElementById('combo-picker');
+        picker.innerHTML = names.map(function(n, i) {
+          return '<label class="combo-row"><input type="checkbox" class="combo-check" value="' + esc(n) + '">' +
+            '<input type="number" class="prov-input combo-order" style="max-width:64px" min="1" value="' + (i + 1) + '" aria-label="order">' +
+            '<span>' + esc(n) + '</span></label>';
+        }).join('');
+      })
+      .catch(function(e) { show(errBox, '! load combo picker: ' + e); });
+  }
+
+  function loadCombos() {    fetch('/api/combos', {credentials: 'same-origin'})
       .then(function(r) { return r.json(); })
       .then(function(body) {
         var rows = body.data || body || [];
@@ -309,9 +328,18 @@
   }
 
   document.getElementById('combo-save').addEventListener('click', function() {
+    var picked = [];
+    document.querySelectorAll('#combo-picker .combo-row').forEach(function(row) {
+      var check = row.querySelector('.combo-check');
+      var order = row.querySelector('.combo-order');
+      if (check && check.checked) {
+        picked.push({name: check.value, order: parseInt(order.value, 10) || 0});
+      }
+    });
+    picked.sort(function(a, b) { return a.order - b.order; });
     var payload = {
       name: document.getElementById('combo-name').value.trim(),
-      members: document.getElementById('combo-members').value.split(',').map(function(s){return s.trim();}).filter(Boolean)
+      members: picked.map(function(p) { return p.name; })
     };
     fetch('/api/combos', {method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
@@ -319,7 +347,7 @@
       .then(function(res) {
         if (!res.ok) { show(errBox, '! save combo: ' + JSON.stringify(res.body)); return; }
         document.getElementById('combo-name').value = '';
-        document.getElementById('combo-members').value = '';
+        document.querySelectorAll('#combo-picker .combo-check').forEach(function(c) { c.checked = false; });
         loadCombos();
       })
       .catch(function(e) { show(errBox, '! save combo: ' + e); });
@@ -342,6 +370,7 @@
 
   loadProviders();
   loadCombos();
+  loadComboPicker();
 })();
 </script>
 </body>

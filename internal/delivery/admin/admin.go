@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -52,8 +53,18 @@ type providerIn struct {
 	Enabled    bool              `json:"enabled"`
 }
 
-func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListProviders()
+// nonEmpty drops blank keys; an update with no keys keeps existing ones.
+func nonEmpty(keys []string) []string {
+	out := keys[:0]
+	for _, k := range keys {
+		if strings.TrimSpace(k) != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {	rows, err := h.store.ListProviders()
 	if err != nil {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
@@ -96,7 +107,16 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, ModelAllow: in.ModelAllow, ModelBlock: in.ModelBlock, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled})
+	keys := nonEmpty(in.APIKeys)
+	if len(keys) == 0 {
+		cur, err := h.store.GetProviderRaw(uint(id))
+		if err != nil {
+			respond.JSONError(w, http.StatusNotFound, "not_found", "provider not found")
+			return
+		}
+		keys = cur.APIKeys
+	}
+	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, ModelAllow: in.ModelAllow, ModelBlock: in.ModelBlock, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
