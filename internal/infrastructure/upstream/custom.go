@@ -105,6 +105,8 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]model.Model, error) 
 
 func (u *CustomUpstream) Models() []model.Model { return u.cache.Get() }
 
+func (u *CustomUpstream) SeedModels(m []model.Model) { u.cache.Set(m) }
+
 func (u *CustomUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	resp, err := u.client.Post(ctx, "/chat/completions", body)
 	if err != nil {
