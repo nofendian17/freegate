@@ -161,6 +161,14 @@ func TestConfig_Validate_AdminTokenTooShort(t *testing.T) {
 	}
 }
 
+func TestLoad_ProvidersDBPath_Default(t *testing.T) {
+	t.Setenv("PROVIDERS_DB_PATH", "")
+	cfg := Load()
+	if cfg.ProvidersDBPath != "./data/providers.db" {
+		t.Fatalf("default providers db path, got %q", cfg.ProvidersDBPath)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:                  1234,

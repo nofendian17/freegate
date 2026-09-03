@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +17,14 @@ import (
 
 	"freegate/internal/application"
 	"freegate/internal/config"
+	"freegate/internal/delivery/admin"
 	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/delivery/ui"
+	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
+	"freegate/internal/infrastructure/providers"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/internal/infrastructure/vpn"
@@ -46,6 +50,9 @@ type Server struct {
 	opencode    *upstream.OpenCodeUpstream
 	kilo        *upstream.KiloUpstream
 	llm7        *upstream.LLM7Upstream
+	pstore      *providers.Store
+	manager     *upstream.ProviderManager
+	combo       *upstream.ComboRouter
 	rec         *recorder.Recorder
 	rateLimit   *middleware.RateLimiter
 	wg          sync.WaitGroup // tracks background workers
@@ -157,8 +164,52 @@ func New(cfg *config.Config) (*Server, error) {
 	sharedTr := buildSharedTransport(dialer)
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
+	pstore, err := providers.Open(cfg.ProvidersDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("open providers db: %w", err)
+	}
+	mgr := upstream.NewProviderManager(pstore, sharedTr)
+	if err := mgr.Rebuild(); err != nil {
+		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
+	}
+	combo := upstream.NewComboRouter(infraRouter)
+	combo.Register(opencode)
+	combo.Register(kilo)
+	combo.Register(llm7)
+	for _, u := range mgr.All() {
+		combo.Register(u)
+	}
+	lookup := func(name string) domain.Upstream {
+		switch name {
+		case "opencode":
+			return opencode
+		case "kilo":
+			return kilo
+		case "llm7":
+			return llm7
+		default:
+			if strings.HasPrefix(name, "custom:") {
+				for _, u := range mgr.All() {
+					if u.Name() == name {
+						return u
+					}
+				}
+			}
+			return nil
+		}
+	}
+	if active, err := pstore.ActiveCombo(); err == nil {
+		var chain []domain.Upstream
+		for _, m := range active.Members {
+			if u := lookup(m); u != nil {
+				chain = append(chain, u)
+			}
+		}
+		combo.SetChain(chain)
+	}
+
 	m := metrics.New()
-	ms := application.NewModelService(infraRouter)
+	ms := application.NewModelService(combo)
 	rec := recorder.NewRecorderWithDeps(recorder.Deps{
 		Metrics: m.Snapshot,
 		Models:  ms.AllModels,
@@ -169,7 +220,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return vpnProvider.CurrentIP()
 		},
 	})
-	cs := application.NewChatService(infraRouter, m)
+	cs := application.NewChatService(combo, m)
 	cs.WithRequestLogger(rec.RecordRequestLog)
 	// Raw upstream response logging via slog (stdout), for diagnosing
 	// degenerate upstream behavior. Off unless UPSTREAM_CAPTURE=true.
@@ -209,6 +260,18 @@ func New(cfg *config.Config) (*Server, error) {
 	// Dashboard (admin-only) — all uiHandler routes require AdminAuth.
 	r.With(adminAuth).Mount("/", uiHandler.Routes())
 
+	rebuild := func() error {
+		if err := mgr.Rebuild(); err != nil {
+			return err
+		}
+		for _, u := range mgr.All() {
+			combo.Register(u)
+		}
+		return nil
+	}
+	adminHandler := admin.New(pstore, rebuild, lookup, combo.SetChain)
+	r.With(adminAuth).Mount("/", adminHandler.Routes())
+
 	// API (OpenAI-compatible) — rate limit + auth apply to these only.
 	r.With(rl.Middleware, apiAuth).Route("/v1", func(r chi.Router) {
 		r.Get("/models", apiHandler.ListModels)
@@ -237,6 +300,9 @@ func New(cfg *config.Config) (*Server, error) {
 		opencode:    opencode,
 		kilo:        kilo,
 		llm7:        llm7,
+		pstore:      pstore,
+		manager:     mgr,
+		combo:       combo,
 		rec:         rec,
 		rateLimit:   rl,
 	}, nil
@@ -267,6 +333,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer s.wg.Done()
 		s.rec.Start(bgCtx)
 	}()
+	s.manager.Start(bgCtx)
 
 	// VPN provider in-process (replaces external supervisor sidecar)
 	s.wg.Add(1)
@@ -292,6 +359,7 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		if err != nil {
 			cancelBG()
+			s.manager.Stop()
 			s.wg.Wait()
 			_ = s.vpnProvider.Close()
 			s.rateLimit.Stop()
@@ -304,6 +372,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Signal background workers to stop
 	cancelBG()
+	s.manager.Stop()
 
 	// Wait for all background workers to finish
 	// But first wait for HTTP server to shut down
