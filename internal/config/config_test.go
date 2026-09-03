@@ -169,6 +169,14 @@ func TestLoad_ProvidersDBPath_Default(t *testing.T) {
 	}
 }
 
+func TestLoad_ProvidersDBPath_Custom(t *testing.T) {
+	t.Setenv("PROVIDERS_DB_PATH", "/tmp/x.db")
+	cfg := Load()
+	if cfg.ProvidersDBPath != "/tmp/x.db" {
+		t.Fatalf("custom providers db path, got %q", cfg.ProvidersDBPath)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:                  1234,

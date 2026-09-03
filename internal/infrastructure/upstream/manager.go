@@ -23,11 +23,13 @@ type ProviderManager struct {
 	tr        *http.Transport
 	customs   map[string]*CustomUpstream
 	intervals map[string]time.Duration
+	runCtx    context.Context
+	runs      map[string]context.CancelFunc
 	cancel    context.CancelFunc
 }
 
 func NewProviderManager(s *providers.Store, tr *http.Transport) *ProviderManager {
-	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}}
+	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
 func (m *ProviderManager) Rebuild() error {
@@ -58,7 +60,11 @@ func (m *ProviderManager) Rebuild() error {
 	m.mu.Lock()
 	m.customs = next
 	m.intervals = nextIntervals
+	started := m.runCtx != nil
 	m.mu.Unlock()
+	if started {
+		m.reconcile()
+	}
 	return nil
 }
 
@@ -73,35 +79,68 @@ func (m *ProviderManager) All() []*CustomUpstream {
 	return out
 }
 
-func (m *ProviderManager) Start(ctx context.Context) {
-	bg, cancel := context.WithCancel(ctx)
-	m.mu.Lock()
-	m.cancel = cancel
-	snap := make([]struct {
-		u *CustomUpstream
-		d time.Duration
-	}, 0)
-	for name, u := range m.customs {
-		d := m.intervals[name]
-		if d <= 0 {
-			d = 60 * time.Second
-		}
-		snap = append(snap, struct {
-			u *CustomUpstream
-			d time.Duration
-		}{u, d})
+func (m *ProviderManager) startOne(name string, u *CustomUpstream, d time.Duration) {
+	if d <= 0 {
+		d = 60 * time.Second
 	}
-	m.mu.Unlock()
-	for _, s := range snap {
-		go s.u.Start(bg, s.d)
+	child, cancel := context.WithCancel(m.runCtx)
+	m.runs[name] = cancel
+	go u.Start(child, d)
+}
+
+func (m *ProviderManager) reconcile() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, cancel := range m.runs {
+		if _, ok := m.customs[name]; !ok {
+			cancel()
+			delete(m.runs, name)
+		}
+	}
+	if m.runCtx == nil {
+		return
+	}
+	for name, u := range m.customs {
+		if cancel, ok := m.runs[name]; ok {
+			cancel()
+		}
+		m.startOne(name, u, m.intervals[name])
 	}
 }
 
-func (m *ProviderManager) Stop() {
-	m.mu.RLock()
-	c := m.cancel
-	m.mu.RUnlock()
-	if c != nil {
-		c()
+func (m *ProviderManager) Start(ctx context.Context) {
+	bg, cancel := context.WithCancel(ctx)
+	m.mu.Lock()
+	m.runCtx = bg
+	m.cancel = cancel
+	snap := make([]struct {
+		name string
+		u    *CustomUpstream
+		d    time.Duration
+	}, 0)
+	for name, u := range m.customs {
+		snap = append(snap, struct {
+			name string
+			u    *CustomUpstream
+			d    time.Duration
+		}{name, u, m.intervals[name]})
 	}
+	for _, s := range snap {
+		m.startOne(s.name, s.u, s.d)
+	}
+	m.mu.Unlock()
+}
+
+func (m *ProviderManager) Stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, c := range m.runs {
+		c()
+		delete(m.runs, name)
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.runCtx = nil
 }

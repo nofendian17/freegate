@@ -109,6 +109,29 @@ func (v *vpnUI) Direct() bool {
 	return v.dialer.IsDirect()
 }
 
+func customUpstreams(mgr *upstream.ProviderManager) []domain.Upstream {
+	all := mgr.All()
+	out := make([]domain.Upstream, 0, len(all))
+	for _, u := range all {
+		out = append(out, u)
+	}
+	return out
+}
+
+func resolveActiveChain(pstore *providers.Store, lookup func(string) domain.Upstream) []domain.Upstream {
+	active, err := pstore.ActiveCombo()
+	if err != nil {
+		return nil
+	}
+	var chain []domain.Upstream
+	for _, m := range active.Members {
+		if u := lookup(m); u != nil {
+			chain = append(chain, u)
+		}
+	}
+	return chain
+}
+
 // New constructs a Server from configuration. It wires all
 // dependencies (VPN, upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
@@ -198,15 +221,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return nil
 		}
 	}
-	if active, err := pstore.ActiveCombo(); err == nil {
-		var chain []domain.Upstream
-		for _, m := range active.Members {
-			if u := lookup(m); u != nil {
-				chain = append(chain, u)
-			}
-		}
-		combo.SetChain(chain)
-	}
+	combo.SetChain(resolveActiveChain(pstore, lookup))
 
 	m := metrics.New()
 	ms := application.NewModelService(combo)
@@ -264,9 +279,8 @@ func New(cfg *config.Config) (*Server, error) {
 		if err := mgr.Rebuild(); err != nil {
 			return err
 		}
-		for _, u := range mgr.All() {
-			combo.Register(u)
-		}
+		combo.SyncRegistered(append([]domain.Upstream{opencode, kilo, llm7}, customUpstreams(mgr)...))
+		combo.SetChain(resolveActiveChain(pstore, lookup))
 		return nil
 	}
 	adminHandler := admin.New(pstore, rebuild, lookup, combo.SetChain)
@@ -360,6 +374,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			cancelBG()
 			s.manager.Stop()
+			_ = s.pstore.Close()
 			s.wg.Wait()
 			_ = s.vpnProvider.Close()
 			s.rateLimit.Stop()
@@ -378,6 +393,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
+		_ = s.pstore.Close()
 		_ = s.vpnProvider.Close()
 		s.rateLimit.Stop()
 		return err
@@ -386,6 +402,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Wait for background workers to complete
 	s.wg.Wait()
 
+	_ = s.pstore.Close()
 	_ = s.vpnProvider.Close()
 	s.rateLimit.Stop()
 

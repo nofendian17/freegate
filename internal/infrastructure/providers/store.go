@@ -91,6 +91,14 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+func (s *Store) Close() error {
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
+
 func (s *Store) CreateProvider(p Provider) (Provider, error) {
 	if err := p.Validate(); err != nil {
 		return Provider{}, err

@@ -24,6 +24,18 @@ func (c *ComboRouter) Register(u domain.Upstream) {
 	c.byName[u.Name()] = u
 }
 
+func (c *ComboRouter) SyncRegistered(all []domain.Upstream) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make(map[string]domain.Upstream, len(all))
+	for _, u := range all {
+		if u != nil {
+			next[u.Name()] = u
+		}
+	}
+	c.byName = next
+}
+
 func (c *ComboRouter) SetChain(chain []domain.Upstream) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
