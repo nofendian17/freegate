@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>freegate — providers</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <style>
+    .prov-shell { max-width: 1080px; margin: 0 auto; padding: 0 var(--space-5) var(--space-7); }
+    .prov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+    .prov-field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
+    .prov-field.full { grid-column: 1 / -1; }
+    .prov-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .prov-input { width: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; border: 1px solid var(--border); padding: 8px 10px; outline: none; box-sizing: border-box; }
+    .prov-input:focus { border-color: var(--primary); }
+    textarea.prov-input { resize: vertical; min-height: 52px; }
+    .prov-check { display: flex; align-items: center; gap: var(--space-2); font-size: 13px; color: var(--text); cursor: pointer; }
+    .prov-check input { cursor: pointer; }
+    .prov-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); flex-wrap: wrap; }
+    .prov-err { background: rgba(255,0,64,0.08); border: 1px solid var(--error); color: var(--error); font-size: 12px; padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3); white-space: pre-wrap; overflow-wrap: break-word; }
+    .prov-ok { background: rgba(0,255,136,0.06); border: 1px solid var(--success); color: var(--success); font-size: 12px; padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3); white-space: pre-wrap; overflow-wrap: break-word; }
+    .combo-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+    .combo-row:last-child { border-bottom: 0; }
+    .combo-members { color: var(--text-dim); font-size: 12px; }
+    @media (max-width: 640px) { .prov-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="prov-shell">
+    <nav class="nav">
+      <div class="nav-left">
+        <div class="nav-brand">
+          <span class="brand-dot" id="status-dot"></span>
+          freegate
+        </div>
+        <a href="/" class="btn-tertiary" style="text-decoration:none">&lt; dashboard</a>
+      </div>
+      <div class="nav-meta">
+        <form method="POST" action="/logout" class="logout-form">
+          <button type="submit" class="btn-tertiary">> logout</button>
+        </form>
+      </div>
+    </nav>
+
+    <div class="page-header">
+      <h1>$ providers</h1>
+      <p class="subtitle">// custom upstream providers and routing combos</p>
+    </div>
+
+    <div class="card section-block">
+      <div class="card-header">
+        <span class="card-title"># Custom Providers</span>
+        <button id="provider-new" class="btn-primary" type="button">> new provider</button>
+      </div>
+      <div id="provider-err" class="prov-err" style="display:none"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>name</th>
+              <th>base_url</th>
+              <th style="width:80px">priority</th>
+              <th style="width:80px">enabled</th>
+              <th style="width:160px">actions</th>
+            </tr>
+          </thead>
+          <tbody id="provider-table">
+            <tr><td colspan="5" class="dim">// loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card section-block section-gap">
+      <div class="card-header">
+        <span class="card-title"># Routing Combos</span>
+      </div>
+      <p class="subtitle">// ordered failover chain — first member is primary</p>
+      <div id="combo-list"></div>
+      <div class="prov-actions">
+        <input id="combo-name" class="prov-input" style="max-width:240px" placeholder="combo name">
+        <input id="combo-members" class="prov-input" style="max-width:320px" placeholder="members, comma-separated (e.g. opencode,kilo)">
+        <button id="combo-save" class="btn-secondary" type="button">> save combo</button>
+      </div>
+    </div>
+
+    <footer class="footer" style="margin-top:var(--space-7)"># freegate — TerminalUI</footer>
+  </div>
+
+  <div id="provider-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
+    <div class="modal-panel" style="max-width:640px">
+      <div class="modal-header">
+        <span class="modal-title" id="provider-modal-title">// provider</span>
+        <span class="modal-close" id="provider-modal-close" role="button" tabindex="0" aria-label="Close provider modal">x</span>
+      </div>
+      <div style="padding:var(--space-4)">
+        <div id="provider-form-err" class="prov-err" style="display:none"></div>
+        <div id="provider-test-out" class="prov-ok" style="display:none"></div>
+        <form id="provider-form">
+          <input type="hidden" id="f-id">
+          <div class="prov-grid">
+            <div class="prov-field">
+              <label class="prov-label" for="f-name">name</label>
+              <input id="f-name" class="prov-input" required placeholder="my-provider">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-base-url">base_url</label>
+              <input id="f-base-url" class="prov-input" required placeholder="https://api.example.com/v1">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label" for="f-api-keys">api_keys (one per line)</label>
+              <textarea id="f-api-keys" class="prov-input" rows="2" placeholder="sk-..."></textarea>
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label" for="f-headers">headers (KEY=Value, one per line)</label>
+              <textarea id="f-headers" class="prov-input" rows="2" placeholder="X-Custom=1"></textarea>
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-allow">model allow (comma-separated)</label>
+              <input id="f-allow" class="prov-input" placeholder="gpt-*,claude-*">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-block">model block (comma-separated)</label>
+              <input id="f-block" class="prov-input" placeholder="*-vision">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-refresh">refresh_sec</label>
+              <input id="f-refresh" class="prov-input" type="number" min="0" value="60">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-priority">priority</label>
+              <input id="f-priority" class="prov-input" type="number" value="0">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-check"><input id="f-enabled" type="checkbox" checked> enabled</label>
+            </div>
+          </div>
+          <div class="prov-actions">
+            <button type="submit" class="btn-primary">> save</button>
+            <button id="provider-test" type="button" class="btn-secondary">> test</button>
+            <button id="provider-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function() {
+  "use strict";
+  var table = document.getElementById('provider-table');
+  var errBox = document.getElementById('provider-err');
+  var modal = document.getElementById('provider-modal');
+  var formErr = document.getElementById('provider-form-err');
+  var testOut = document.getElementById('provider-test-out');
+
+  function show(el, msg, ok) {
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+    el.className = ok ? 'prov-ok' : 'prov-err';
+  }
+
+  function lines(id) {
+    return document.getElementById(id).value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
+  }
+  function csv(id) {
+    return document.getElementById(id).value.split(',').map(function(s){return s.trim();}).filter(Boolean);
+  }
+  function parseHeaders() {
+    var out = {};
+    lines('f-headers').forEach(function(l) {
+      var i = l.indexOf('=');
+      if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+    });
+    return out;
+  }
+
+  function loadProviders() {
+    fetch('/api/providers', {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(body) {
+        var rows = body.data || body || [];
+        if (!rows.length) {
+          table.innerHTML = '<tr><td colspan="5" class="dim">// no custom providers yet</td></tr>';
+          return;
+        }
+        table.innerHTML = rows.map(function(p) {
+          return '<tr data-id="' + p.id + '">' +
+            '<td>' + esc(p.name) + '</td>' +
+            '<td class="dim">' + esc(p.base_url) + '</td>' +
+            '<td>' + (p.priority || 0) + '</td>' +
+            '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
+            '<td><button class="btn-tertiary prov-edit" type="button" data-id="' + p.id + '">> edit</button></td>' +
+            '</tr>';
+        }).join('');
+      })
+      .catch(function(e) { show(errBox, '! load providers: ' + e); });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+    });
+  }
+
+  function openModal(p) {
+    p = p || {};
+    document.getElementById('f-id').value = p.id || '';
+    document.getElementById('f-name').value = p.name || '';
+    document.getElementById('f-base-url').value = p.base_url || '';
+    document.getElementById('f-api-keys').value = '';
+    document.getElementById('f-headers').value = Object.entries(p.headers || {}).map(function(kv){return kv[0]+'='+kv[1];}).join('\n');
+    document.getElementById('f-allow').value = (p.model_allow || []).join(',');
+    document.getElementById('f-block').value = (p.model_block || []).join(',');
+    document.getElementById('f-refresh').value = p.refresh_sec != null ? p.refresh_sec : 60;
+    document.getElementById('f-priority').value = p.priority || 0;
+    document.getElementById('f-enabled').checked = p.enabled !== false;
+    document.getElementById('provider-delete').style.display = p.id ? '' : 'none';
+    document.getElementById('provider-test').style.display = p.id ? '' : 'none';
+    document.getElementById('provider-modal-title').textContent = p.id ? '// edit provider' : '// new provider';
+    show(formErr, ''); show(testOut, '');
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+  }
+  function closeModal() {
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+  }
+
+  document.getElementById('provider-new').addEventListener('click', function() { openModal(); });
+  document.getElementById('provider-modal-close').addEventListener('click', closeModal);
+  modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && modal.style.display === 'flex') closeModal(); });
+
+  table.addEventListener('click', function(e) {
+    var btn = e.target.closest('.prov-edit');
+    if (!btn) return;
+    fetch('/api/providers/' + btn.dataset.id, {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(openModal)
+      .catch(function(e2) { show(errBox, '! load provider: ' + e2); });
+  });
+
+  document.getElementById('provider-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var id = document.getElementById('f-id').value;
+    var payload = {
+      name: document.getElementById('f-name').value.trim(),
+      base_url: document.getElementById('f-base-url').value.trim(),
+      api_keys: lines('f-api-keys'),
+      headers: parseHeaders(),
+      model_allow: csv('f-allow'),
+      model_block: csv('f-block'),
+      refresh_sec: parseInt(document.getElementById('f-refresh').value, 10) || 0,
+      priority: parseInt(document.getElementById('f-priority').value, 10) || 0,
+      enabled: document.getElementById('f-enabled').checked
+    };
+    var method = id ? 'PUT' : 'POST';
+    var url = id ? '/api/providers/' + id : '/api/providers';
+    fetch(url, {method: method, credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
+      .then(function(r) { return r.json().then(function(b) { return {ok: r.ok, body: b}; }); })
+      .then(function(res) {
+        if (!res.ok) { show(formErr, '! save: ' + JSON.stringify(res.body)); return; }
+        closeModal(); loadProviders();
+      })
+      .catch(function(e2) { show(formErr, '! save: ' + e2); });
+  });
+
+  document.getElementById('provider-test').addEventListener('click', function() {
+    var id = document.getElementById('f-id').value;
+    if (!id) return;
+    show(testOut, '// testing…', true);
+    fetch('/api/providers/' + id + '/test', {method: 'POST', credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(b) { show(testOut, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok); })
+      .catch(function(e) { show(testOut, '! test: ' + e); });
+  });
+
+  document.getElementById('provider-delete').addEventListener('click', function() {
+    var id = document.getElementById('f-id').value;
+    if (!id || !confirm('delete provider ' + id + '?')) return;
+    fetch('/api/providers/' + id, {method: 'DELETE', credentials: 'same-origin'})
+      .then(function(r) {
+        if (!r.ok) return r.json().then(function(b) { show(formErr, '! delete: ' + JSON.stringify(b)); });
+        closeModal(); loadProviders();
+      })
+      .catch(function(e) { show(formErr, '! delete: ' + e); });
+  });
+
+  function loadCombos() {
+    fetch('/api/combos', {credentials: 'same-origin'})
+      .then(function(r) { return r.json(); })
+      .then(function(body) {
+        var rows = body.data || body || [];
+        var list = document.getElementById('combo-list');
+        if (!rows.length) { list.innerHTML = '<p class="subtitle">// no combos yet</p>'; return; }
+        list.innerHTML = rows.map(function(c) {
+          return '<div class="combo-row" data-id="' + c.id + '">' +
+            (c.is_active ? '<span class="pill tone-green">active</span>' : '<button class="btn-tertiary combo-activate" type="button" data-id="' + c.id + '">> activate</button>') +
+            '<strong>' + esc(c.name) + '</strong>' +
+            '<span class="combo-members">' + esc((c.members || []).join(' → ')) + '</span>' +
+            '<button class="btn-tertiary combo-delete" type="button" data-id="' + c.id + '" style="color:var(--error)">x</button>' +
+            '</div>';
+        }).join('');
+      })
+      .catch(function(e) { show(errBox, '! load combos: ' + e); });
+  }
+
+  document.getElementById('combo-save').addEventListener('click', function() {
+    var payload = {
+      name: document.getElementById('combo-name').value.trim(),
+      members: document.getElementById('combo-members').value.split(',').map(function(s){return s.trim();}).filter(Boolean)
+    };
+    fetch('/api/combos', {method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
+      .then(function(r) { return r.json().then(function(b) { return {ok: r.ok, body: b}; }); })
+      .then(function(res) {
+        if (!res.ok) { show(errBox, '! save combo: ' + JSON.stringify(res.body)); return; }
+        document.getElementById('combo-name').value = '';
+        document.getElementById('combo-members').value = '';
+        loadCombos();
+      })
+      .catch(function(e) { show(errBox, '! save combo: ' + e); });
+  });
+
+  document.getElementById('combo-list').addEventListener('click', function(e) {
+    var act = e.target.closest('.combo-activate');
+    var del = e.target.closest('.combo-delete');
+    if (act) {
+      fetch('/api/combos/' + act.dataset.id + '/activate', {method: 'POST', credentials: 'same-origin'})
+        .then(function() { loadCombos(); })
+        .catch(function(e2) { show(errBox, '! activate combo: ' + e2); });
+    } else if (del) {
+      if (!confirm('delete combo ' + del.dataset.id + '?')) return;
+      fetch('/api/combos/' + del.dataset.id, {method: 'DELETE', credentials: 'same-origin'})
+        .then(function() { loadCombos(); })
+        .catch(function(e2) { show(errBox, '! delete combo: ' + e2); });
+    }
+  });
+
+  loadProviders();
+  loadCombos();
+})();
+</script>
+</body>
+</html>

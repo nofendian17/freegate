@@ -139,6 +139,7 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 
 	r.Get("/", h.dashboard)
+	r.Get("/providers", h.providersPage)
 	r.Get("/index.html", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusMovedPermanently)
 	})
