@@ -127,11 +127,11 @@ func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
 	}
 	out := make([]upstream.ComboTierRow, 0, len(rows))
 	for _, c := range rows {
-		var ps []string
+		var ts []upstream.ComboTierInput
 		for _, tr := range c.Tiers {
-			ps = append(ps, tr.Provider)
+			ts = append(ts, upstream.ComboTierInput{Provider: tr.Provider, Model: tr.Model})
 		}
-		out = append(out, upstream.ComboTierRow{Name: c.Name, Providers: ps})
+		out = append(out, upstream.ComboTierRow{Name: c.Name, Tiers: ts})
 	}
 	return out, nil
 }
