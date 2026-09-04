@@ -68,6 +68,8 @@ type Config struct {
 	ResponseModels []string
 
 	SOCKSAddr string
+
+	ProvidersDBPath string
 }
 
 // IsDirect reports whether upstreams should bypass the VPN tunnel.
@@ -119,6 +121,8 @@ func Load() *Config {
 		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
 
 		ResponseModels: envSlice("RESPONSE_MODELS", "muse-spark,muse_spark"),
+
+		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
 
 	// Single-binary mode: in-process SOCKS on 127.0.0.1:9050 when VPN enabled,

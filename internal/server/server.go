@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +17,14 @@ import (
 
 	"freegate/internal/application"
 	"freegate/internal/config"
+	"freegate/internal/delivery/admin"
 	"freegate/internal/delivery/handler"
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/delivery/ui"
+	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
+	"freegate/internal/infrastructure/providers"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/internal/infrastructure/vpn"
@@ -46,6 +50,9 @@ type Server struct {
 	opencode    *upstream.OpenCodeUpstream
 	kilo        *upstream.KiloUpstream
 	llm7        *upstream.LLM7Upstream
+	pstore      *providers.Store
+	manager     *upstream.ProviderManager
+	combo       *upstream.ComboRouter
 	rec         *recorder.Recorder
 	rateLimit   *middleware.RateLimiter
 	wg          sync.WaitGroup // tracks background workers
@@ -100,6 +107,33 @@ func (v *vpnUI) SetDirect(direct bool) error {
 
 func (v *vpnUI) Direct() bool {
 	return v.dialer.IsDirect()
+}
+
+func upstreamToDomain(all []*upstream.CustomUpstream) []domain.Upstream {
+	out := make([]domain.Upstream, 0, len(all))
+	for _, u := range all {
+		if u == nil {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
+	rows, err := pstore.ListCombos()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]upstream.ComboTierRow, 0, len(rows))
+	for _, c := range rows {
+		var ps []string
+		for _, tr := range c.Tiers {
+			ps = append(ps, tr.Provider)
+		}
+		out = append(out, upstream.ComboTierRow{Name: c.Name, Providers: ps})
+	}
+	return out, nil
 }
 
 // New constructs a Server from configuration. It wires all
@@ -157,8 +191,44 @@ func New(cfg *config.Config) (*Server, error) {
 	sharedTr := buildSharedTransport(dialer)
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
+	pstore, err := providers.Open(cfg.ProvidersDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("open providers db: %w", err)
+	}
+	mgr := upstream.NewProviderManager(pstore, sharedTr)
+	if err := mgr.Rebuild(); err != nil {
+		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
+	}
+	combo := upstream.NewComboRouter(infraRouter)
+	lookup := func(name string) domain.Upstream {
+		switch name {
+		case "opencode":
+			return opencode
+		case "kilo":
+			return kilo
+		case "llm7":
+			return llm7
+		default:
+			if strings.HasPrefix(name, "custom:") {
+				for _, u := range mgr.All() {
+					if u.Name() == name {
+						return u
+					}
+				}
+			}
+			return nil
+		}
+	}
+	rows, err := comboRows(pstore)
+	if err != nil {
+		logger.Warn("combo rows load failed, keeping empty registry", "error", err)
+	} else {
+		combo.SetCustoms(upstreamToDomain(mgr.All()))
+		combo.RebuildCombos(rows, lookup)
+	}
+
 	m := metrics.New()
-	ms := application.NewModelService(infraRouter)
+	ms := application.NewModelService(combo)
 	rec := recorder.NewRecorderWithDeps(recorder.Deps{
 		Metrics: m.Snapshot,
 		Models:  ms.AllModels,
@@ -169,7 +239,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return vpnProvider.CurrentIP()
 		},
 	})
-	cs := application.NewChatService(infraRouter, m)
+	cs := application.NewChatService(combo, m)
 	cs.WithRequestLogger(rec.RecordRequestLog)
 	// Raw upstream response logging via slog (stdout), for diagnosing
 	// degenerate upstream behavior. Off unless UPSTREAM_CAPTURE=true.
@@ -206,8 +276,26 @@ func New(cfg *config.Config) (*Server, error) {
 	// It only reveals models-loaded state, same class as /api/health.
 	r.With(rl.Middleware).Get("/ready", apiHandler.Ready)
 
-	// Dashboard (admin-only) — all uiHandler routes require AdminAuth.
-	r.With(adminAuth).Mount("/", uiHandler.Routes())
+	rebuild := func() error {
+		if err := mgr.Rebuild(); err != nil {
+			return err
+		}
+		rows, err := comboRows(pstore)
+		if err != nil {
+			return err
+		}
+		combo.SetCustoms(upstreamToDomain(mgr.All()))
+		combo.RebuildCombos(rows, lookup)
+		return nil
+	}
+	adminHandler := admin.New(pstore, rebuild, sharedTr)
+
+	// Dashboard + provider/combo management (admin-only).
+	r.Group(func(r chi.Router) {
+		r.Use(adminAuth)
+		r.Mount("/", uiHandler.Routes())
+		adminHandler.Register(r)
+	})
 
 	// API (OpenAI-compatible) — rate limit + auth apply to these only.
 	r.With(rl.Middleware, apiAuth).Route("/v1", func(r chi.Router) {
@@ -237,6 +325,9 @@ func New(cfg *config.Config) (*Server, error) {
 		opencode:    opencode,
 		kilo:        kilo,
 		llm7:        llm7,
+		pstore:      pstore,
+		manager:     mgr,
+		combo:       combo,
 		rec:         rec,
 		rateLimit:   rl,
 	}, nil
@@ -267,6 +358,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer s.wg.Done()
 		s.rec.Start(bgCtx)
 	}()
+	s.manager.Start(bgCtx)
 
 	// VPN provider in-process (replaces external supervisor sidecar)
 	s.wg.Add(1)
@@ -292,6 +384,8 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		if err != nil {
 			cancelBG()
+			s.manager.Stop()
+			_ = s.pstore.Close()
 			s.wg.Wait()
 			_ = s.vpnProvider.Close()
 			s.rateLimit.Stop()
@@ -304,11 +398,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Signal background workers to stop
 	cancelBG()
+	s.manager.Stop()
 
 	// Wait for all background workers to finish
 	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
+		_ = s.pstore.Close()
 		_ = s.vpnProvider.Close()
 		s.rateLimit.Stop()
 		return err
@@ -317,6 +413,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Wait for background workers to complete
 	s.wg.Wait()
 
+	_ = s.pstore.Close()
 	_ = s.vpnProvider.Close()
 	s.rateLimit.Stop()
 
