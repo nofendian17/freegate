@@ -19,9 +19,15 @@ func NewComboRouter(legacy *Router) *ComboRouter {
 	return &ComboRouter{legacy: legacy, combos: map[string]*ComboUpstream{}}
 }
 
+type ComboTierInput struct {
+	Provider string
+	Model    string
+}
+
 type ComboTierRow struct {
 	Name      string
 	Providers []string
+	Tiers     []ComboTierInput
 }
 
 func (c *ComboRouter) RebuildCombos(rows []ComboTierRow, lookup func(string) domain.Upstream) {
@@ -30,10 +36,15 @@ func (c *ComboRouter) RebuildCombos(rows []ComboTierRow, lookup func(string) dom
 		if r.Name == "" {
 			continue
 		}
-		var tiers []domain.Upstream
-		for _, p := range r.Providers {
-			if u := lookup(p); u != nil {
-				tiers = append(tiers, u)
+		if len(r.Tiers) == 0 && len(r.Providers) > 0 {
+			for _, p := range r.Providers {
+				r.Tiers = append(r.Tiers, ComboTierInput{Provider: p})
+			}
+		}
+		var tiers []ComboTier
+		for _, t := range r.Tiers {
+			if u := lookup(t.Provider); u != nil {
+				tiers = append(tiers, ComboTier{Upstream: u, Model: t.Model})
 			}
 		}
 		if len(tiers) == 0 {

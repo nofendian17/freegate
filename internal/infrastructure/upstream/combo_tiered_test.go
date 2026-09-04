@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -38,7 +39,7 @@ func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
 	t1 := &tierStub{name: "opencode", status: 429, body: `{"error":"slow"}`}
 	t2 := &tierStub{name: "kilo", status: 500, body: `{"error":"boom"}`}
 	t3 := &tierStub{name: "custom:acme", status: 200, body: `{"ok":true}`}
-	cu := NewComboUpstream("hemat", []domain.Upstream{t1, t2, t3})
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}, {Upstream: t3}})
 	if !cu.Match("hemat") || cu.Match("other") {
 		t.Fatal("exact-name match broken")
 	}
@@ -62,7 +63,7 @@ func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
 func TestComboUpstream_Exhausted_ReturnsLast(t *testing.T) {
 	t1 := &tierStub{name: "a", status: 429, body: `{"error":"first"}`}
 	t2 := &tierStub{name: "b", status: 500, body: `{"error":"second"}`}
-	cu := NewComboUpstream("hemat", []domain.Upstream{t1, t2})
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
 	resp, err := cu.ChatCompletion(context.Background(), []byte(`{}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -77,7 +78,7 @@ func TestComboUpstream_Exhausted_ReturnsLast(t *testing.T) {
 func TestComboUpstream_NilResponse_FailsOver(t *testing.T) {
 	nilTier := &nilStub{name: "flaky"}
 	ok := &tierStub{name: "custom:acme", status: 200, body: `{"ok":true}`}
-	cu := &ComboUpstream{name: "hemat", tiers: []domain.Upstream{nilTier, ok}}
+	cu := &ComboUpstream{name: "hemat", tiers: []ComboTier{{Upstream: nilTier}, {Upstream: ok}}}
 	resp, err := cu.ChatCompletion(context.Background(), []byte(`{}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -94,7 +95,7 @@ func TestComboUpstream_AllNilResponse_ErrorNoPanic(t *testing.T) {
 			t.Fatalf("panicked: %v", rec)
 		}
 	}()
-	cu := &ComboUpstream{name: "hemat", tiers: []domain.Upstream{&nilStub{name: "a"}, &nilStub{name: "b"}}}
+	cu := &ComboUpstream{name: "hemat", tiers: []ComboTier{{Upstream: &nilStub{name: "a"}}, {Upstream: &nilStub{name: "b"}}}}
 	if _, err := cu.ChatCompletion(context.Background(), []byte(`{}`)); err == nil {
 		t.Fatal("expected error when all tiers return nil")
 	}
@@ -138,13 +139,81 @@ func TestComboRouter_AllModels_StableOrder(t *testing.T) {
 	}
 }
 
+func TestComboUpstream_RewritesModelPerTier(t *testing.T) {
+	t1 := &tierStub{name: "opencode", status: 500, body: `{"error":"busy"}`}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("sparky", []ComboTier{
+		{Upstream: t1, Model: "muse-spark-1.3-contributor-free"},
+		{Upstream: t2, Model: "minimax/minimax-m3:free"},
+	})
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"sparky","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if got := tierModel(t, t1.gotBody); got != "muse-spark-1.3-contributor-free" {
+		t.Fatalf("tier1 got model %q", got)
+	}
+	if got := tierModel(t, t2.gotBody); got != "minimax/minimax-m3:free" {
+		t.Fatalf("tier2 got model %q", got)
+	}
+}
+
+func TestComboUpstream_EmptyTierModel_SendsBodyAsIs(t *testing.T) {
+	t1 := &tierStub{name: "opencode", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("sparky", []ComboTier{{Upstream: t1}})
+	body := []byte(`{"model":"sparky","messages":[]}`)
+	resp, err := cu.ChatCompletion(context.Background(), body)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if string(t1.gotBody) != string(body) {
+		t.Fatalf("body rewritten: %q", t1.gotBody)
+	}
+}
+
+func tierModel(t *testing.T, body []byte) string {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal tier body: %v", err)
+	}
+	m, _ := raw["model"].(string)
+	return m
+}
+
+func TestComboRouter_Rebuild_PreservesTierModels(t *testing.T) {
+	def := &tierStub{name: "opencode", status: 200, body: `{"ok":true}`}
+	cr := NewComboRouter(NewRouter(def))
+	cr.RebuildCombos([]ComboTierRow{{
+		Name: "sparky",
+		Tiers: []ComboTierInput{
+			{Provider: "opencode", Model: "muse-spark-1.3-contributor-free"},
+		},
+	}}, func(name string) domain.Upstream { return def })
+	got := cr.SelectChain("sparky")
+	if len(got) != 1 {
+		t.Fatalf("no virtual match: %v", got)
+	}
+	if _, err := got[0].ChatCompletion(context.Background(), []byte(`{"model":"sparky"}`)); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if m := tierModel(t, def.gotBody); m != "muse-spark-1.3-contributor-free" {
+		t.Fatalf("tier got model %q", m)
+	}
+}
+
 func TestComboRouter_VirtualModel_ExactMatch(t *testing.T) {
 	def := &tierStub{name: "opencode"}
 	legacy := NewRouter(def)
 	cr := NewComboRouter(legacy)
 	cr.RebuildCombos([]ComboTierRow{{Name: "hemat", Providers: []string{"combo:hemat"}}}, func(name string) domain.Upstream {
 		if name == "combo:hemat" {
-			return NewComboUpstream("hemat", []domain.Upstream{def})
+			return NewComboUpstream("hemat", []ComboTier{{Upstream: def}})
 		}
 		return nil
 	})
