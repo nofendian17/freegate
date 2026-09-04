@@ -76,15 +76,21 @@
       <div class="card-header">
         <span class="card-title"># Routing Combos</span>
       </div>
-      <p class="subtitle">// ordered failover chain — first member is primary</p>
+      <p class="subtitle">// virtual models — ordered tiers, first tier is primary</p>
       <div id="combo-list"></div>
+      <div id="combo-test-out" class="prov-ok" style="display:none"></div>
       <div class="prov-field full" style="margin-top:var(--space-4)">
-        <span class="prov-label">new combo — tick providers in failover order (order = number, lowest first)</span>
-        <div id="combo-picker"></div>
+        <span class="prov-label">tiers — in failover order, first row is primary</span>
+        <div id="combo-tiers"></div>
+        <div class="prov-actions">
+          <button id="combo-add-tier" class="btn-tertiary" type="button">> add tier</button>
+        </div>
       </div>
       <div class="prov-actions">
-        <input id="combo-name" class="prov-input" style="max-width:240px" placeholder="combo name">
+        <input type="hidden" id="combo-id">
+        <input id="combo-name" class="prov-input" style="max-width:240px" placeholder="combo name (= model ID)">
         <button id="combo-save" class="btn-secondary" type="button">> save combo</button>
+        <button id="combo-cancel" class="btn-tertiary" type="button" style="display:none">x cancel</button>
       </div>
     </div>
 
@@ -292,34 +298,70 @@
       .catch(function(e) { show(formErr, '! delete: ' + e); });
   });
 
-  function loadComboPicker() {
+  var comboProviders = ['opencode', 'kilo', 'llm7'];
+  var combosCache = {};
+  var comboTestOut = document.getElementById('combo-test-out');
+
+  function addTierRow(provider, model) {
+    var wrap = document.getElementById('combo-tiers');
+    if (provider && comboProviders.indexOf(provider) < 0) comboProviders.push(provider);
+    var row = document.createElement('div');
+    row.className = 'combo-row';
+    row.innerHTML =
+      '<select class="prov-input combo-tier-provider" style="max-width:220px" aria-label="tier provider">' +
+        comboProviders.map(function(n) {
+          return '<option value="' + esc(n) + '"' + (n === provider ? ' selected' : '') + '>' + esc(n) + '</option>';
+        }).join('') +
+      '</select>' +
+      '<input class="prov-input combo-tier-model" style="max-width:200px" placeholder="model (optional)" value="' + esc(model || '') + '" aria-label="tier model">' +
+      '<button class="btn-tertiary tier-up" type="button" aria-label="move tier up">up</button>' +
+      '<button class="btn-tertiary tier-down" type="button" aria-label="move tier down">down</button>' +
+      '<button class="btn-tertiary tier-remove" type="button" aria-label="remove tier" style="color:var(--error)">x</button>';
+    wrap.appendChild(row);
+  }
+
+  function loadTierEditor() {
     fetch('/api/providers', {credentials: 'same-origin'})
       .then(function(r) { return r.json(); })
       .then(function(body) {
         var rows = body.data || body || [];
-        var names = ['opencode', 'kilo', 'llm7'];
-        rows.forEach(function(p) { names.push('custom:' + p.name); });
-        var picker = document.getElementById('combo-picker');
-        picker.innerHTML = names.map(function(n, i) {
-          return '<label class="combo-row"><input type="checkbox" class="combo-check" value="' + esc(n) + '">' +
-            '<input type="number" class="prov-input combo-order" style="max-width:64px" min="1" value="' + (i + 1) + '" aria-label="order">' +
-            '<span>' + esc(n) + '</span></label>';
-        }).join('');
+        comboProviders = ['opencode', 'kilo', 'llm7'];
+        rows.forEach(function(p) { comboProviders.push('custom:' + p.name); });
+        var wrap = document.getElementById('combo-tiers');
+        var kept = [];
+        wrap.querySelectorAll('.combo-row').forEach(function(row) {
+          kept.push({
+            provider: row.querySelector('.combo-tier-provider').value,
+            model: row.querySelector('.combo-tier-model').value
+          });
+        });
+        wrap.innerHTML = '';
+        if (!kept.length) kept.push({provider: 'opencode', model: ''});
+        kept.forEach(function(t) { addTierRow(t.provider, t.model); });
       })
-      .catch(function(e) { show(errBox, '! load combo picker: ' + e); });
+      .catch(function(e) { show(errBox, '! load tier providers: ' + e); });
   }
 
-  function loadCombos() {    fetch('/api/combos', {credentials: 'same-origin'})
+  function tierLabel(t) {
+    return t.model ? t.provider + ':' + t.model : t.provider;
+  }
+
+  function loadCombos() {
+    fetch('/api/combos', {credentials: 'same-origin'})
       .then(function(r) { return r.json(); })
       .then(function(body) {
         var rows = body.data || body || [];
+        combosCache = {};
         var list = document.getElementById('combo-list');
         if (!rows.length) { list.innerHTML = '<p class="subtitle">// no combos yet</p>'; return; }
         list.innerHTML = rows.map(function(c) {
+          combosCache[c.id] = c;
+          var tiers = (c.tiers || []).map(tierLabel).join(' → ');
           return '<div class="combo-row" data-id="' + c.id + '">' +
-            (c.is_active ? '<span class="pill tone-green">active</span>' : '<button class="btn-tertiary combo-activate" type="button" data-id="' + c.id + '">> activate</button>') +
             '<strong>' + esc(c.name) + '</strong>' +
-            '<span class="combo-members">' + esc((c.members || []).join(' → ')) + '</span>' +
+            '<span class="combo-members">' + esc(tiers) + '</span>' +
+            '<button class="btn-tertiary combo-test" type="button" data-id="' + c.id + '">> test</button>' +
+            '<button class="btn-tertiary combo-edit" type="button" data-id="' + c.id + '">> edit</button>' +
             '<button class="btn-tertiary combo-delete" type="button" data-id="' + c.id + '" style="color:var(--error)">x</button>' +
             '</div>';
         }).join('');
@@ -327,39 +369,87 @@
       .catch(function(e) { show(errBox, '! load combos: ' + e); });
   }
 
+  function resetComboForm() {
+    document.getElementById('combo-id').value = '';
+    document.getElementById('combo-name').value = '';
+    document.getElementById('combo-tiers').innerHTML = '';
+    addTierRow('opencode', '');
+    document.getElementById('combo-cancel').style.display = 'none';
+  }
+
+  document.getElementById('combo-add-tier').addEventListener('click', function() { addTierRow('opencode', ''); });
+  document.getElementById('combo-cancel').addEventListener('click', resetComboForm);
+
+  document.getElementById('combo-tiers').addEventListener('click', function(e) {
+    var row = e.target.closest('.combo-row');
+    if (!row) return;
+    if (e.target.closest('.tier-remove')) {
+      row.remove();
+      if (!document.querySelectorAll('#combo-tiers .combo-row').length) addTierRow('opencode', '');
+    } else if (e.target.closest('.tier-up')) {
+      var prev = row.previousElementSibling;
+      if (prev) row.parentNode.insertBefore(row, prev);
+    } else if (e.target.closest('.tier-down')) {
+      var next = row.nextElementSibling;
+      if (next) row.parentNode.insertBefore(next, row);
+    }
+  });
+
   document.getElementById('combo-save').addEventListener('click', function() {
-    var picked = [];
-    document.querySelectorAll('#combo-picker .combo-row').forEach(function(row) {
-      var check = row.querySelector('.combo-check');
-      var order = row.querySelector('.combo-order');
-      if (check && check.checked) {
-        picked.push({name: check.value, order: parseInt(order.value, 10) || 0});
-      }
+    var tiers = [];
+    document.querySelectorAll('#combo-tiers .combo-row').forEach(function(row) {
+      var t = {provider: row.querySelector('.combo-tier-provider').value};
+      var m = row.querySelector('.combo-tier-model').value.trim();
+      if (m) t.model = m;
+      tiers.push(t);
     });
-    picked.sort(function(a, b) { return a.order - b.order; });
+    var id = document.getElementById('combo-id').value;
     var payload = {
       name: document.getElementById('combo-name').value.trim(),
-      members: picked.map(function(p) { return p.name; })
+      tiers: tiers
     };
-    fetch('/api/combos', {method: 'POST', credentials: 'same-origin',
+    var method = id ? 'PUT' : 'POST';
+    var url = id ? '/api/combos/' + id : '/api/combos';
+    fetch(url, {method: method, credentials: 'same-origin',
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
       .then(function(r) { return r.json().then(function(b) { return {ok: r.ok, body: b}; }); })
       .then(function(res) {
         if (!res.ok) { show(errBox, '! save combo: ' + JSON.stringify(res.body)); return; }
-        document.getElementById('combo-name').value = '';
-        document.querySelectorAll('#combo-picker .combo-check').forEach(function(c) { c.checked = false; });
+        resetComboForm();
         loadCombos();
       })
       .catch(function(e) { show(errBox, '! save combo: ' + e); });
   });
 
   document.getElementById('combo-list').addEventListener('click', function(e) {
-    var act = e.target.closest('.combo-activate');
+    var tst = e.target.closest('.combo-test');
+    var edt = e.target.closest('.combo-edit');
     var del = e.target.closest('.combo-delete');
-    if (act) {
-      fetch('/api/combos/' + act.dataset.id + '/activate', {method: 'POST', credentials: 'same-origin'})
-        .then(function() { loadCombos(); })
-        .catch(function(e2) { show(errBox, '! activate combo: ' + e2); });
+    if (tst) {
+      show(comboTestOut, '// testing…', true);
+      fetch('/api/combos/' + tst.dataset.id + '/test', {method: 'POST', credentials: 'same-origin'})
+        .then(function(r) { return r.json(); })
+        .then(function(b) {
+          var lines = (b.tiers || []).map(function(t) {
+            var st = t.ok ? 'ok' : 'fail';
+            var lat = t.latencyMs != null ? ' ' + t.latencyMs + 'ms' : '';
+            var why = !t.ok && t.error ? ' ' + t.error : '';
+            return t.provider + ': ' + st + lat + why;
+          });
+          show(comboTestOut, (b.ok ? '// ok' : '// fail') + '\n' + lines.join('\n'), !!b.ok);
+        })
+        .catch(function(e2) { show(comboTestOut, '! test combo: ' + e2); });
+    } else if (edt) {
+      var c = combosCache[edt.dataset.id];
+      if (!c) return;
+      document.getElementById('combo-id').value = c.id;
+      document.getElementById('combo-name').value = c.name || '';
+      var wrap = document.getElementById('combo-tiers');
+      wrap.innerHTML = '';
+      (c.tiers || []).forEach(function(t) { addTierRow(t.provider, t.model); });
+      if (!(c.tiers || []).length) addTierRow('opencode', '');
+      document.getElementById('combo-cancel').style.display = '';
+      document.getElementById('combo-name').focus();
     } else if (del) {
       if (!confirm('delete combo ' + del.dataset.id + '?')) return;
       fetch('/api/combos/' + del.dataset.id, {method: 'DELETE', credentials: 'same-origin'})
@@ -370,7 +460,7 @@
 
   loadProviders();
   loadCombos();
-  loadComboPicker();
+  loadTierEditor();
 })();
 </script>
 </body>

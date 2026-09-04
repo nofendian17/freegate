@@ -26,6 +26,22 @@ func TestProvidersPage_RequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestProvidersPage_RendersComboSection(t *testing.T) {
+	h := newTestHandler(t)
+	h.adminToken = providersTestAdminToken
+	srv := middleware.AdminAuth(providersTestAdminToken)(h.Routes())
+	req := httptest.NewRequest("GET", "/providers", nil)
+	req.AddCookie(&http.Cookie{Name: "fg_admin", Value: middleware.HmacForToken(providersTestAdminToken)})
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "tiers") && !strings.Contains(w.Body.String(), "Tiers") {
+		t.Fatal("combo tier UI missing")
+	}
+}
+
 func TestProvidersPage_Renders(t *testing.T) {
 	h := newTestHandler(t)
 	h.adminToken = providersTestAdminToken
