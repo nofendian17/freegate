@@ -473,7 +473,8 @@ button.btn-secondary:hover {
   color: var(--bg);
 }
 
-button.btn-tertiary {
+button.btn-tertiary,
+a.btn-tertiary {
   background: transparent;
   color: var(--text-dim);
   font-family: var(--mono);
@@ -484,8 +485,12 @@ button.btn-tertiary {
   padding: 8px 12px;
   height: 32px;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
-button.btn-tertiary:hover {
+button.btn-tertiary:hover,
+a.btn-tertiary:hover {
   border-color: var(--border-hover);
 }
 
