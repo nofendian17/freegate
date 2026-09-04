@@ -11,29 +11,10 @@ type ComboRouter struct {
 	mu     sync.RWMutex
 	legacy *Router
 	chain  []domain.Upstream
-	byName map[string]domain.Upstream
 }
 
 func NewComboRouter(legacy *Router) *ComboRouter {
-	return &ComboRouter{legacy: legacy, byName: map[string]domain.Upstream{}}
-}
-
-func (c *ComboRouter) Register(u domain.Upstream) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.byName[u.Name()] = u
-}
-
-func (c *ComboRouter) SyncRegistered(all []domain.Upstream) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	next := make(map[string]domain.Upstream, len(all))
-	for _, u := range all {
-		if u != nil {
-			next[u.Name()] = u
-		}
-	}
-	c.byName = next
+	return &ComboRouter{legacy: legacy}
 }
 
 func (c *ComboRouter) SetChain(chain []domain.Upstream) {
@@ -83,8 +64,9 @@ func (c *ComboRouter) AllModels() []model.Model {
 		}
 	}
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, u := range c.chain {
+	chain := append([]domain.Upstream(nil), c.chain...)
+	c.mu.RUnlock()
+	for _, u := range chain {
 		for _, m := range u.Models() {
 			if !seen[m.ID] {
 				seen[m.ID] = true
@@ -100,8 +82,9 @@ func (c *ComboRouter) IsReady() bool {
 		return true
 	}
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, u := range c.chain {
+	chain := append([]domain.Upstream(nil), c.chain...)
+	c.mu.RUnlock()
+	for _, u := range chain {
 		if len(u.Models()) > 0 {
 			return true
 		}

@@ -22,8 +22,10 @@ type Provider struct {
 	ModelAllow []string          `gorm:"serializer:json" json:"model_allow,omitempty"`
 	ModelBlock []string          `gorm:"serializer:json" json:"model_block,omitempty"`
 	RefreshSec int               `gorm:"default:60" json:"refresh_sec"`
-	Priority   int               `json:"priority"`
-	Enabled    bool              `gorm:"default:true" json:"enabled"`
+	// Priority controls list ordering only; runtime chain order comes
+	// solely from combo members.
+	Priority int  `json:"priority"`
+	Enabled  bool `gorm:"default:true" json:"enabled"`
 }
 
 type RouteCombo struct {
@@ -163,7 +165,39 @@ func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
 	return p, nil
 }
 
-func (s *Store) DeleteProvider(id uint) error { return s.db.Delete(&Provider{}, id).Error }
+func (s *Store) DeleteProvider(id uint) error {
+	var cur Provider
+	if err := s.db.First(&cur, id).Error; err != nil {
+		return err
+	}
+	if err := s.db.Delete(&Provider{}, id).Error; err != nil {
+		return err
+	}
+	member := "custom:" + cur.Name
+	var combos []RouteCombo
+	if err := s.db.Find(&combos).Error; err != nil {
+		return err
+	}
+	for _, c := range combos {
+		var kept []string
+		changed := false
+		for _, m := range c.Members {
+			if m == member {
+				changed = true
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if !changed {
+			continue
+		}
+		c.Members = kept
+		if err := s.db.Save(&c).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (s *Store) ListCombos() ([]RouteCombo, error) {
 	var out []RouteCombo
@@ -204,11 +238,11 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 func (s *Store) DeleteCombo(id uint) error { return s.db.Delete(&RouteCombo{}, id).Error }
 
 func (s *Store) ActivateCombo(id uint) error {
-	var cur RouteCombo
-	if err := s.db.First(&cur, id).Error; err != nil {
-		return err
-	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		var cur RouteCombo
+		if err := tx.First(&cur, id).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&RouteCombo{}).Where("1 = 1").Update("is_active", false).Error; err != nil {
 			return err
 		}

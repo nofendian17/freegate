@@ -10,19 +10,17 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
 )
 
 type Handler struct {
-	store   *providers.Store
-	rebuild func() error
-	lookup  func(name string) domain.Upstream
-	onChain func(chain []domain.Upstream)
+	store     *providers.Store
+	rebuild   func() error
+	transport *http.Transport
 }
 
-func New(store *providers.Store, rebuild func() error, lookup func(string) domain.Upstream, onChain func([]domain.Upstream)) *Handler {
-	return &Handler{store: store, rebuild: rebuild, lookup: lookup, onChain: onChain}
+func New(store *providers.Store, rebuild func() error, transport *http.Transport) *Handler {
+	return &Handler{store: store, rebuild: rebuild, transport: transport}
 }
 
 func (h *Handler) Routes() chi.Router {
@@ -59,7 +57,7 @@ type providerIn struct {
 
 // nonEmpty drops blank keys; an update with no keys keeps existing ones.
 func nonEmpty(keys []string) []string {
-	out := keys[:0]
+	var out []string
 	for _, k := range keys {
 		if strings.TrimSpace(k) != "" {
 			out = append(out, k)
@@ -162,7 +160,12 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 	if len(row.APIKeys) > 0 {
 		req.Header.Set("Authorization", "Bearer "+row.APIKeys[0])
 	}
-	resp, err := http.DefaultClient.Do(req)
+	tr := h.transport
+	if tr == nil {
+		tr = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -234,25 +237,14 @@ func (h *Handler) activateCombo(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
 	}
-	active, err := h.store.ActiveCombo()
-	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
-		return
-	}
 	if err := h.rebuild(); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
 		return
 	}
-	var chain []domain.Upstream
-	for _, m := range active.Members {
-		if h.lookup != nil {
-			if u := h.lookup(m); u != nil {
-				chain = append(chain, u)
-			}
-		}
-	}
-	if h.onChain != nil {
-		h.onChain(chain)
+	active, err := h.store.ActiveCombo()
+	if err != nil {
+		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
 	}
 	respond.JSON(w, http.StatusOK, active)
 }

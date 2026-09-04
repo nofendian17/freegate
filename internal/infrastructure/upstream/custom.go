@@ -20,6 +20,8 @@ type CustomUpstream struct {
 	block  []string
 }
 
+var _ domain.Upstream = (*CustomUpstream)(nil)
+
 func NewCustomUpstream(name, baseURL string, keys []string, headers map[string]string, allow, block []string, tr *http.Transport) *CustomUpstream {
 	if headers == nil {
 		headers = map[string]string{}

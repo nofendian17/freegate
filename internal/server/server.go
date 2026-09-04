@@ -109,15 +109,6 @@ func (v *vpnUI) Direct() bool {
 	return v.dialer.IsDirect()
 }
 
-func customUpstreams(mgr *upstream.ProviderManager) []domain.Upstream {
-	all := mgr.All()
-	out := make([]domain.Upstream, 0, len(all))
-	for _, u := range all {
-		out = append(out, u)
-	}
-	return out
-}
-
 func resolveActiveChain(pstore *providers.Store, lookup func(string) domain.Upstream) []domain.Upstream {
 	active, err := pstore.ActiveCombo()
 	if err != nil {
@@ -196,12 +187,6 @@ func New(cfg *config.Config) (*Server, error) {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
 	combo := upstream.NewComboRouter(infraRouter)
-	combo.Register(opencode)
-	combo.Register(kilo)
-	combo.Register(llm7)
-	for _, u := range mgr.All() {
-		combo.Register(u)
-	}
 	lookup := func(name string) domain.Upstream {
 		switch name {
 		case "opencode":
@@ -276,11 +261,10 @@ func New(cfg *config.Config) (*Server, error) {
 		if err := mgr.Rebuild(); err != nil {
 			return err
 		}
-		combo.SyncRegistered(append([]domain.Upstream{opencode, kilo, llm7}, customUpstreams(mgr)...))
 		combo.SetChain(resolveActiveChain(pstore, lookup))
 		return nil
 	}
-	adminHandler := admin.New(pstore, rebuild, lookup, combo.SetChain)
+	adminHandler := admin.New(pstore, rebuild, sharedTr)
 
 	// Dashboard + provider/combo management (admin-only).
 	r.Group(func(r chi.Router) {

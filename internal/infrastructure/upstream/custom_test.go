@@ -6,9 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
-
-	"freegate/internal/model"
 )
 
 func TestCustom_Match_AllowBlock(t *testing.T) {
@@ -29,6 +26,4 @@ func TestCustom_Match_AllowBlock(t *testing.T) {
 	if u.Match("acme-embed-1") {
 		t.Fatal("expected blocked model to not match")
 	}
-	var _ = time.Second
-	var _ = model.Model{}
 }

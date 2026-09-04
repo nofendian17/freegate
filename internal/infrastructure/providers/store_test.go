@@ -54,6 +54,37 @@ func TestStore_Create_DefaultsRefreshSec(t *testing.T) {
 	}
 }
 
+func TestDeleteProvider_StripsComboMember(t *testing.T) {
+	s, err := Open("file:delstrip?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p, err := s.CreateProvider(Provider{Name: "x", BaseURL: "https://x.test/v1", APIKeys: []string{"k"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := s.SaveCombo(RouteCombo{Name: "mix", Members: []string{"opencode", "custom:x"}})
+	if err != nil {
+		t.Fatalf("save combo: %v", err)
+	}
+	if err := s.DeleteProvider(p.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, err := s.ListCombos()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, x := range list {
+		if x.ID == c.ID {
+			if len(x.Members) != 1 || x.Members[0] != "opencode" {
+				t.Fatalf("expected members [opencode], got %q", x.Members)
+			}
+			return
+		}
+	}
+	t.Fatal("combo missing after provider delete")
+}
+
 func TestCombo_Update_PreservesActive(t *testing.T) {
 	s, err := Open("file:updatecombo?mode=memory&cache=shared")
 	if err != nil {

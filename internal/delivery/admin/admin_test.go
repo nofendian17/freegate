@@ -15,7 +15,7 @@ import (
 func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	s, _ := providers.Open("file:admin-create?mode=memory&cache=shared")
 	rebuilt := 0
-	h := New(s, func() error { rebuilt++; return nil }, nil, nil)
+	h := New(s, func() error { rebuilt++; return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", h.Routes())
 	body, _ := json.Marshal(map[string]any{"name": "acme", "base_url": "https://api.acme.test/v1", "api_keys": []string{"sk-1"}, "refresh_sec": 60, "enabled": true})
@@ -37,7 +37,7 @@ func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil, nil)
+	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", h.Routes())
 	body, _ := json.Marshal(map[string]any{"name": "keepme", "base_url": "https://api.keep.test/v1", "refresh_sec": 60, "enabled": true})
@@ -70,7 +70,7 @@ func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 	if _, err := s.UpdateProvider(row.ID, bad); err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil, nil)
+	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", h.Routes())
 	req := httptest.NewRequest("POST", "/api/providers/1/test", nil)
