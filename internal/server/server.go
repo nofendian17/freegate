@@ -112,15 +112,18 @@ func (v *vpnUI) Direct() bool {
 func upstreamToDomain(all []*upstream.CustomUpstream) []domain.Upstream {
 	out := make([]domain.Upstream, 0, len(all))
 	for _, u := range all {
+		if u == nil {
+			continue
+		}
 		out = append(out, u)
 	}
 	return out
 }
 
-func comboRows(pstore *providers.Store) []upstream.ComboTierRow {
+func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
 	rows, err := pstore.ListCombos()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]upstream.ComboTierRow, 0, len(rows))
 	for _, c := range rows {
@@ -130,7 +133,7 @@ func comboRows(pstore *providers.Store) []upstream.ComboTierRow {
 		}
 		out = append(out, upstream.ComboTierRow{Name: c.Name, Providers: ps})
 	}
-	return out
+	return out, nil
 }
 
 // New constructs a Server from configuration. It wires all
@@ -216,8 +219,13 @@ func New(cfg *config.Config) (*Server, error) {
 			return nil
 		}
 	}
-	combo.SetCustoms(upstreamToDomain(mgr.All()))
-	combo.RebuildCombos(comboRows(pstore), lookup)
+	rows, err := comboRows(pstore)
+	if err != nil {
+		logger.Warn("combo rows load failed, keeping empty registry", "error", err)
+	} else {
+		combo.SetCustoms(upstreamToDomain(mgr.All()))
+		combo.RebuildCombos(rows, lookup)
+	}
 
 	m := metrics.New()
 	ms := application.NewModelService(combo)
@@ -272,8 +280,12 @@ func New(cfg *config.Config) (*Server, error) {
 		if err := mgr.Rebuild(); err != nil {
 			return err
 		}
+		rows, err := comboRows(pstore)
+		if err != nil {
+			return err
+		}
 		combo.SetCustoms(upstreamToDomain(mgr.All()))
-		combo.RebuildCombos(comboRows(pstore), lookup)
+		combo.RebuildCombos(rows, lookup)
 		return nil
 	}
 	adminHandler := admin.New(pstore, rebuild, sharedTr)
