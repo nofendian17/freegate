@@ -272,9 +272,6 @@ func New(cfg *config.Config) (*Server, error) {
 	// It only reveals models-loaded state, same class as /api/health.
 	r.With(rl.Middleware).Get("/ready", apiHandler.Ready)
 
-	// Dashboard (admin-only) — all uiHandler routes require AdminAuth.
-	r.With(adminAuth).Mount("/", uiHandler.Routes())
-
 	rebuild := func() error {
 		if err := mgr.Rebuild(); err != nil {
 			return err
@@ -284,7 +281,13 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil
 	}
 	adminHandler := admin.New(pstore, rebuild, lookup, combo.SetChain)
-	r.With(adminAuth).Mount("/", adminHandler.Routes())
+
+	// Dashboard + provider/combo management (admin-only).
+	r.Group(func(r chi.Router) {
+		r.Use(adminAuth)
+		r.Mount("/", uiHandler.Routes())
+		adminHandler.Register(r)
+	})
 
 	// API (OpenAI-compatible) — rate limit + auth apply to these only.
 	r.With(rl.Middleware, apiAuth).Route("/v1", func(r chi.Router) {

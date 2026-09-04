@@ -27,6 +27,11 @@ func New(store *providers.Store, rebuild func() error, lookup func(string) domai
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	h.Register(r)
+	return r
+}
+
+func (h *Handler) Register(r chi.Router) {
 	r.Get("/api/providers", h.listProviders)
 	r.Post("/api/providers", h.createProvider)
 	r.Get("/api/providers/{id}", h.getProvider)
@@ -38,7 +43,6 @@ func (h *Handler) Routes() chi.Router {
 	r.Put("/api/combos/{id}", h.updateCombo)
 	r.Delete("/api/combos/{id}", h.deleteCombo)
 	r.Post("/api/combos/{id}/activate", h.activateCombo)
-	return r
 }
 
 type providerIn struct {
@@ -64,7 +68,8 @@ func nonEmpty(keys []string) []string {
 	return out
 }
 
-func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {	rows, err := h.store.ListProviders()
+func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.store.ListProviders()
 	if err != nil {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
