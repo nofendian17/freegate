@@ -39,7 +39,7 @@ func TestCombo_SelectChain_OrderAndFallback(t *testing.T) {
 	}
 	a := &chainStub{name: "custom:a", models: []model.Model{{ID: "anything"}}}
 	b := &chainStub{name: "custom:b", models: []model.Model{{ID: "anything"}}}
-	cr.SetChain([]domain.Upstream{a, b})
+	cr.SetCustoms([]domain.Upstream{a, b})
 	chain := cr.SelectChain("anything")
 	if len(chain) != 2 || chain[0].Name() != "custom:a" || chain[1].Name() != "custom:b" {
 		t.Fatalf("bad chain order: %v", chain)

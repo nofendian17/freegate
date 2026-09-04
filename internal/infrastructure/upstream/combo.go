@@ -10,7 +10,6 @@ import (
 type ComboRouter struct {
 	mu      sync.RWMutex
 	legacy  *Router
-	chain   []domain.Upstream
 	combos  map[string]*ComboUpstream
 	customs []domain.Upstream
 }
@@ -52,17 +51,10 @@ func (c *ComboRouter) SetCustoms(all []domain.Upstream) {
 	c.mu.Unlock()
 }
 
-func (c *ComboRouter) SetChain(chain []domain.Upstream) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.chain = append([]domain.Upstream(nil), chain...)
-}
-
 func (c *ComboRouter) SelectChain(modelID string) []domain.Upstream {
 	c.mu.RLock()
 	combo := c.combos[modelID]
 	customs := append([]domain.Upstream(nil), c.customs...)
-	chain := append([]domain.Upstream(nil), c.chain...)
 	legacy := c.legacy
 	c.mu.RUnlock()
 	if combo != nil {
@@ -70,14 +62,6 @@ func (c *ComboRouter) SelectChain(modelID string) []domain.Upstream {
 	}
 	var out []domain.Upstream
 	for _, u := range customs {
-		if u != nil && u.Match(modelID) {
-			out = append(out, u)
-		}
-	}
-	if len(out) > 0 {
-		return out
-	}
-	for _, u := range chain {
 		if u != nil && u.Match(modelID) {
 			out = append(out, u)
 		}
@@ -116,7 +100,7 @@ func (c *ComboRouter) AllModels() []model.Model {
 	for _, cu := range c.combos {
 		combos = append(combos, cu)
 	}
-	chain := append([]domain.Upstream(nil), c.chain...)
+	customs := append([]domain.Upstream(nil), c.customs...)
 	c.mu.RUnlock()
 	for _, cu := range combos {
 		for _, m := range cu.Models() {
@@ -126,7 +110,7 @@ func (c *ComboRouter) AllModels() []model.Model {
 			}
 		}
 	}
-	for _, u := range chain {
+	for _, u := range customs {
 		for _, m := range u.Models() {
 			if !seen[m.ID] {
 				seen[m.ID] = true
@@ -142,9 +126,9 @@ func (c *ComboRouter) IsReady() bool {
 		return true
 	}
 	c.mu.RLock()
-	chain := append([]domain.Upstream(nil), c.chain...)
+	customs := append([]domain.Upstream(nil), c.customs...)
 	c.mu.RUnlock()
-	for _, u := range chain {
+	for _, u := range customs {
 		if len(u.Models()) > 0 {
 			return true
 		}

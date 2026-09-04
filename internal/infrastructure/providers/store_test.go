@@ -1,6 +1,11 @@
 package providers
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
 
 func TestStore_CRUD_AndMask(t *testing.T) {
 	s, err := Open("file::memory:?cache=shared")
@@ -63,7 +68,7 @@ func TestDeleteProvider_StripsComboMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	c, err := s.SaveCombo(RouteCombo{Name: "mix", Members: []string{"opencode", "custom:x"}})
+	c, err := s.SaveCombo(RouteCombo{Name: "mix", Tiers: []ComboTier{{Provider: "opencode"}, {Provider: "custom:x"}}})
 	if err != nil {
 		t.Fatalf("save combo: %v", err)
 	}
@@ -76,8 +81,8 @@ func TestDeleteProvider_StripsComboMember(t *testing.T) {
 	}
 	for _, x := range list {
 		if x.ID == c.ID {
-			if len(x.Members) != 1 || x.Members[0] != "opencode" {
-				t.Fatalf("expected members [opencode], got %q", x.Members)
+			if len(x.Tiers) != 1 || x.Tiers[0].Provider != "opencode" {
+				t.Fatalf("expected tiers [opencode], got %+v", x.Tiers)
 			}
 			return
 		}
@@ -85,27 +90,24 @@ func TestDeleteProvider_StripsComboMember(t *testing.T) {
 	t.Fatal("combo missing after provider delete")
 }
 
-func TestCombo_Update_PreservesActive(t *testing.T) {
+func TestCombo_Update_PreservesID(t *testing.T) {
 	s, err := Open("file:updatecombo?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	c, err := s.SaveCombo(RouteCombo{Name: "upd", Members: []string{"opencode"}})
+	c, err := s.SaveCombo(RouteCombo{Name: "upd", Tiers: []ComboTier{{Provider: "opencode"}}})
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if err := s.ActivateCombo(c.ID); err != nil {
-		t.Fatalf("activate: %v", err)
-	}
-	u, err := s.UpdateCombo(c.ID, RouteCombo{Name: "upd", Members: []string{"opencode", "kilo"}})
+	u, err := s.UpdateCombo(c.ID, RouteCombo{Name: "upd", Tiers: []ComboTier{{Provider: "opencode"}, {Provider: "kilo"}}})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if u.ID != c.ID {
 		t.Fatalf("expected same ID %d, got %d", c.ID, u.ID)
 	}
-	if !u.IsActive {
-		t.Fatal("expected IsActive preserved")
+	if len(u.Tiers) != 2 {
+		t.Fatalf("expected 2 tiers, got %+v", u.Tiers)
 	}
 	list, err := s.ListCombos()
 	if err != nil {
@@ -147,52 +149,6 @@ func TestGetProvider_Masked_AndRaw(t *testing.T) {
 	}
 }
 
-func TestCombo_SingleActive(t *testing.T) {
-	s, err := Open("file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	a, _ := s.SaveCombo(RouteCombo{Name: "a", Members: []string{"opencode"}})
-	b, _ := s.SaveCombo(RouteCombo{Name: "b", Members: []string{"kilo"}})
-	if err := s.ActivateCombo(a.ID); err != nil {
-		t.Fatalf("activate a: %v", err)
-	}
-	if err := s.ActivateCombo(b.ID); err != nil {
-		t.Fatalf("activate b: %v", err)
-	}
-	active, err := s.ActiveCombo()
-	if err != nil {
-		t.Fatalf("active: %v", err)
-	}
-	if active.Name != "b" {
-		t.Fatalf("expected b active, got %q", active.Name)
-	}
-}
-
-func TestActivateCombo_BadID_KeepsActive(t *testing.T) {
-	s, err := Open("file:badactivate?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	c, err := s.SaveCombo(RouteCombo{Name: "keep", Members: []string{"opencode"}})
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	if err := s.ActivateCombo(c.ID); err != nil {
-		t.Fatalf("activate: %v", err)
-	}
-	if err := s.ActivateCombo(c.ID + 9999); err == nil {
-		t.Fatal("expected error for bad combo id")
-	}
-	active, err := s.ActiveCombo()
-	if err != nil {
-		t.Fatalf("active: %v", err)
-	}
-	if active.Name != "keep" {
-		t.Fatalf("expected keep still active, got %q", active.Name)
-	}
-}
-
 func TestCombo_Tiers_CRUD(t *testing.T) {
 	s, err := Open("file:tiercrud?mode=memory&cache=shared")
 	if err != nil {
@@ -225,13 +181,20 @@ func TestCombo_Tiers_Validation(t *testing.T) {
 }
 
 func TestCombo_Members_Migrated_To_Tiers(t *testing.T) {
-	s, err := Open("file:tiermig?mode=memory&cache=shared")
+	dsn := "file:tiermig?mode=memory&cache=shared"
+	raw, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatalf("open raw: %v", err)
 	}
-	if err := s.db.Exec("INSERT INTO route_combos (name, members, is_active) VALUES (?,?,?)", "legacy", `["opencode","custom:acme"]`, false).Error; err != nil {
+	if err := raw.Exec(`CREATE TABLE route_combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, tiers TEXT, members TEXT, is_active NUMERIC)`).Error; err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+	if err := raw.Exec(`INSERT INTO route_combos (name, tiers, members, is_active) VALUES (?,?,?,?)`, "legacy", `[]`, `["opencode","custom:acme"]`, false).Error; err != nil {
 		t.Fatalf("seed legacy: %v", err)
 	}
+	sqlDB, _ := raw.DB()
+	defer sqlDB.Close()
+	s := &Store{db: raw}
 	if err := s.migrateMembersToTiers(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

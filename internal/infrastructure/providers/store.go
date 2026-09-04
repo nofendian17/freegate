@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,8 +23,8 @@ type Provider struct {
 	ModelAllow []string          `gorm:"serializer:json" json:"model_allow,omitempty"`
 	ModelBlock []string          `gorm:"serializer:json" json:"model_block,omitempty"`
 	RefreshSec int               `gorm:"default:60" json:"refresh_sec"`
-	// Priority controls list ordering only; runtime chain order comes
-	// solely from combo members.
+	// Priority controls list ordering only; runtime order comes
+	// solely from combo tiers.
 	Priority int  `json:"priority"`
 	Enabled  bool `gorm:"default:true" json:"enabled"`
 }
@@ -58,11 +59,15 @@ func validateTiers(tiers []ComboTier) error {
 }
 
 type RouteCombo struct {
-	ID       uint        `gorm:"primaryKey" json:"id"`
-	Name     string      `gorm:"uniqueIndex;not null" json:"name"`
-	Tiers    []ComboTier `gorm:"serializer:json" json:"tiers"`
-	Members  []string    `gorm:"serializer:json" json:"-"`
-	IsActive bool        `gorm:"index" json:"-"`
+	ID    uint        `gorm:"primaryKey" json:"id"`
+	Name  string      `gorm:"uniqueIndex;not null" json:"name"`
+	Tiers []ComboTier `gorm:"serializer:json" json:"tiers"`
+}
+
+type legacyComboRow struct {
+	ID      uint
+	Tiers   []ComboTier `gorm:"serializer:json"`
+	Members []string    `gorm:"serializer:json"`
 }
 
 func (p *Provider) Validate() error {
@@ -128,8 +133,11 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) migrateMembersToTiers() error {
-	var rows []RouteCombo
-	if err := s.db.Find(&rows).Error; err != nil {
+	if !s.db.Migrator().HasColumn(&RouteCombo{}, "members") {
+		return nil
+	}
+	var rows []legacyComboRow
+	if err := s.db.Table("route_combos").Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, c := range rows {
@@ -140,8 +148,11 @@ func (s *Store) migrateMembersToTiers() error {
 		for _, m := range c.Members {
 			tiers = append(tiers, ComboTier{Provider: m})
 		}
-		c.Tiers = tiers
-		if err := s.db.Save(&c).Error; err != nil {
+		raw, err := json.Marshal(tiers)
+		if err != nil {
+			return err
+		}
+		if err := s.db.Table("route_combos").Where("id = ?", c.ID).Update("tiers", string(raw)).Error; err != nil {
 			return err
 		}
 	}
@@ -234,16 +245,8 @@ func (s *Store) DeleteProvider(id uint) error {
 		return err
 	}
 	for _, c := range combos {
-		var kept []string
 		var keptTiers []ComboTier
 		changed := false
-		for _, m := range c.Members {
-			if m == member {
-				changed = true
-				continue
-			}
-			kept = append(kept, m)
-		}
 		for _, tr := range c.Tiers {
 			if tr.Provider == member {
 				changed = true
@@ -254,7 +257,6 @@ func (s *Store) DeleteProvider(id uint) error {
 		if !changed {
 			continue
 		}
-		c.Members = kept
 		c.Tiers = keptTiers
 		if err := s.db.Save(&c).Error; err != nil {
 			return err
@@ -275,23 +277,10 @@ func (s *Store) SaveCombo(c RouteCombo) (RouteCombo, error) {
 	if !nameRe.MatchString(c.Name) {
 		return RouteCombo{}, fmt.Errorf("combo needs valid name")
 	}
-	if len(c.Tiers) == 0 {
-		if len(c.Members) == 0 {
-			return RouteCombo{}, fmt.Errorf("combo needs at least one tier")
-		}
-		for _, m := range c.Members {
-			c.Tiers = append(c.Tiers, ComboTier{Provider: m})
-		}
-	}
 	if err := validateTiers(c.Tiers); err != nil {
 		return RouteCombo{}, err
 	}
-	c.Members = nil
-	for _, tr := range c.Tiers {
-		c.Members = append(c.Members, tr.Provider)
-	}
 	c.ID = 0
-	c.IsActive = false
 	if err := s.db.Create(&c).Error; err != nil {
 		return RouteCombo{}, err
 	}
@@ -306,23 +295,10 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 	if !nameRe.MatchString(c.Name) {
 		return RouteCombo{}, fmt.Errorf("combo needs valid name")
 	}
-	if len(c.Tiers) == 0 {
-		if len(c.Members) == 0 {
-			return RouteCombo{}, fmt.Errorf("combo needs at least one tier")
-		}
-		for _, m := range c.Members {
-			c.Tiers = append(c.Tiers, ComboTier{Provider: m})
-		}
-	}
 	if err := validateTiers(c.Tiers); err != nil {
 		return RouteCombo{}, err
 	}
-	c.Members = nil
-	for _, tr := range c.Tiers {
-		c.Members = append(c.Members, tr.Provider)
-	}
 	c.ID = cur.ID
-	c.IsActive = cur.IsActive
 	if err := s.db.Save(&c).Error; err != nil {
 		return RouteCombo{}, err
 	}
@@ -330,24 +306,3 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 }
 
 func (s *Store) DeleteCombo(id uint) error { return s.db.Delete(&RouteCombo{}, id).Error }
-
-func (s *Store) ActivateCombo(id uint) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var cur RouteCombo
-		if err := tx.First(&cur, id).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&RouteCombo{}).Where("1 = 1").Update("is_active", false).Error; err != nil {
-			return err
-		}
-		return tx.Model(&RouteCombo{}).Where("id = ?", id).Update("is_active", true).Error
-	})
-}
-
-func (s *Store) ActiveCombo() (RouteCombo, error) {
-	var c RouteCombo
-	if err := s.db.Where("is_active = ?", true).First(&c).Error; err != nil {
-		return RouteCombo{}, err
-	}
-	return c, nil
-}
