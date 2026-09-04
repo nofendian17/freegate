@@ -40,7 +40,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/api/combos", h.createCombo)
 	r.Put("/api/combos/{id}", h.updateCombo)
 	r.Delete("/api/combos/{id}", h.deleteCombo)
-	r.Post("/api/combos/{id}/activate", h.activateCombo)
+	r.Post("/api/combos/{id}/test", h.testCombo)
 }
 
 type providerIn struct {
@@ -187,18 +187,24 @@ func (h *Handler) listCombos(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
 }
 
+type comboIn struct {
+	Name  string                `json:"name"`
+	Tiers []providers.ComboTier `json:"tiers"`
+}
+
 func (h *Handler) createCombo(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Name    string   `json:"name"`
-		Members []string `json:"members"`
-	}
+	var in comboIn
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	row, err := h.store.SaveCombo(providers.RouteCombo{Name: in.Name, Members: in.Members})
+	row, err := h.store.SaveCombo(providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	if err := h.rebuild(); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
 		return
 	}
 	respond.JSON(w, http.StatusCreated, row)
@@ -206,17 +212,18 @@ func (h *Handler) createCombo(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateCombo(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	var in struct {
-		Name    string   `json:"name"`
-		Members []string `json:"members"`
-	}
+	var in comboIn
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	row, err := h.store.UpdateCombo(uint(id), providers.RouteCombo{Name: in.Name, Members: in.Members})
+	row, err := h.store.UpdateCombo(uint(id), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	if err := h.rebuild(); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
 		return
 	}
 	respond.JSON(w, http.StatusOK, row)
@@ -231,20 +238,84 @@ func (h *Handler) deleteCombo(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) activateCombo(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	if err := h.store.ActivateCombo(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
-		return
-	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
-		return
-	}
-	active, err := h.store.ActiveCombo()
+	combos, err := h.store.ListCombos()
 	if err != nil {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}
-	respond.JSON(w, http.StatusOK, active)
+	var combo *providers.RouteCombo
+	for i := range combos {
+		if combos[i].ID == uint(id) {
+			combo = &combos[i]
+			break
+		}
+	}
+	if combo == nil {
+		respond.JSONError(w, http.StatusNotFound, "not_found", "combo not found")
+		return
+	}
+	rows, err := h.store.ListProviders()
+	if err != nil {
+		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	byName := make(map[string]uint, len(rows))
+	for _, p := range rows {
+		byName[p.Name] = p.ID
+	}
+	tr := h.transport
+	if tr == nil {
+		tr = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	tiers := make([]map[string]any, 0, len(combo.Tiers))
+	anyOK := false
+	for _, tier := range combo.Tiers {
+		res := h.probeTier(w, r, client, byName, tier.Provider)
+		if ok, _ := res["ok"].(bool); ok {
+			anyOK = true
+		}
+		tiers = append(tiers, res)
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"ok": anyOK, "tiers": tiers})
+}
+
+var builtinTier = map[string]bool{"opencode": true, "kilo": true, "llm7": true}
+
+func (h *Handler) probeTier(w http.ResponseWriter, r *http.Request, client *http.Client, byName map[string]uint, provider string) map[string]any {
+	if builtinTier[provider] {
+		return map[string]any{"provider": provider, "ok": true, "skipped": true, "note": "builtin, see provider health"}
+	}
+	name := strings.TrimPrefix(provider, "custom:")
+	pid, ok := byName[name]
+	if !strings.HasPrefix(provider, "custom:") || !ok {
+		return map[string]any{"provider": provider, "ok": false, "error": "unknown provider"}
+	}
+	row, err := h.store.GetProviderRaw(pid)
+	if err != nil {
+		return map[string]any{"provider": provider, "ok": false, "error": "unknown provider"}
+	}
+	if !row.Enabled {
+		return map[string]any{"provider": provider, "ok": false, "error": "provider disabled"}
+	}
+	start := time.Now()
+	req, err := http.NewRequestWithContext(r.Context(), "GET", row.BaseURL+"/models", nil)
+	if err != nil {
+		return map[string]any{"provider": provider, "ok": false, "error": err.Error()}
+	}
+	if len(row.APIKeys) > 0 {
+		req.Header.Set("Authorization", "Bearer "+row.APIKeys[0])
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]any{"provider": provider, "ok": false, "error": err.Error()}
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []any `json:"data"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, resp.Body, 10<<20)).Decode(&list)
+	return map[string]any{"provider": provider, "ok": resp.StatusCode < 300, "latencyMs": time.Since(start).Milliseconds(), "status": resp.StatusCode, "modelCount": len(list.Data)}
 }
