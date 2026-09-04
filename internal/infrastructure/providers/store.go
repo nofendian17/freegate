@@ -100,6 +100,9 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) CreateProvider(p Provider) (Provider, error) {
+	if p.RefreshSec == 0 {
+		p.RefreshSec = 60
+	}
 	if err := p.Validate(); err != nil {
 		return Provider{}, err
 	}
@@ -147,6 +150,9 @@ func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
 		return Provider{}, err
 	}
 	p.ID = cur.ID
+	if p.RefreshSec == 0 {
+		p.RefreshSec = 60
+	}
 	if err := p.Validate(); err != nil {
 		return Provider{}, err
 	}

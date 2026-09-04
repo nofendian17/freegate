@@ -33,6 +33,27 @@ func TestProvider_Validate_RejectsBadName(t *testing.T) {
 	}
 }
 
+func TestStore_Create_DefaultsRefreshSec(t *testing.T) {
+	s, err := Open("file:defrefresh?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p, err := s.CreateProvider(Provider{Name: "defref", BaseURL: "https://r.test/v1", APIKeys: []string{"k"}, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if p.RefreshSec != 60 {
+		t.Fatalf("expected RefreshSec 60, got %d", p.RefreshSec)
+	}
+	raw, err := s.GetProviderRaw(p.ID)
+	if err != nil {
+		t.Fatalf("get raw: %v", err)
+	}
+	if raw.RefreshSec != 60 {
+		t.Fatalf("expected stored RefreshSec 60, got %d", raw.RefreshSec)
+	}
+}
+
 func TestCombo_Update_PreservesActive(t *testing.T) {
 	s, err := Open("file:updatecombo?mode=memory&cache=shared")
 	if err != nil {
