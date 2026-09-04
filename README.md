@@ -16,6 +16,8 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button and a **direct** (no-VPN) option
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
+- **Custom providers** — any OpenAI-compatible base URL + keys in SQLite (`PROVIDERS_DB_PATH`), managed at `/providers` or `/api/providers` (keys masked, test probe, live rebuild, no restart)
+- **Tiered combos** — combos are virtual models: `model=hemat` tries Tier1→Tier2→Tier3 in order, failing over on transport errors, 429s, and 5xx; managed at `/providers` or `/api/combos`, listed in `/v1/models` as `combo:<name>`
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy, with SSE streaming (default), a stop button, and one-shot non-streaming mode
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
@@ -86,6 +88,8 @@ curl -X POST http://localhost:1234/v1/messages \
 ## Routing Rules
 
 A model ID is served by:
+- **Combo** — exact-name match on a tiered combo first (`model=hemat` → Tier1→Tier2→Tier3, failover on transport errors/429s/5xx)
+- **Custom provider** — if a custom provider's catalog contains it
 - **Kilo** — if Kilo's free catalog contains it (`isFree == true`)
 - **LLM7** — if LLM7's free catalog contains it (keyless gateway; free = not usage-based or `turbo` tier)
 - **OpenCode** — everything else (default upstream)
@@ -118,9 +122,12 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated model IDs that are free on the OpenCode upstream but don't carry the `-free` suffix |
 | `UPSTREAM_URL_KILO` | `https://api.kilo.ai/api/openrouter` | Kilo upstream URL |
 | `UPSTREAM_KEY_KILO` | `anonymous` | Kilo API key |
-| `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models |
+| `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models (`opencode`, `kilo`, or `llm7`) |
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
+| `PROVIDERS_DB_PATH` | `./data/providers.db` | SQLite file for custom providers, tiered combos, and seeded auth + upstream settings. Auto-created; mount a volume over `./data` in docker. |
+
+Custom providers, combos, and seeded auth/upstream settings live in SQLite and are managed at `/providers` or via `/api/providers`, `/api/combos` (no restart needed).
 
 ## API Endpoints
 
@@ -132,6 +139,9 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `GET` | `/v1/metrics` | Request metrics (counts per upstream, errors, tokens) |
 | `GET` | `/ready` | Health check |
 | `GET` | `/` | Terminal-style monitoring dashboard (see below) |
+| `GET` | `/providers` | Custom providers + tiered combos management UI (admin-only) |
+| `GET/POST` | `/api/providers`, `/api/providers/{id}`, `/api/providers/{id}/test` | Custom provider CRUD + live `/models` probe (admin-only, keys masked) |
+| `GET/POST` | `/api/combos`, `/api/combos/{id}`, `/api/combos/{id}/test` | Tiered combo CRUD + per-tier probe (admin-only) |
 
 ### Format Translation
 
@@ -211,8 +221,8 @@ The dashboard follows the **TerminalUI** design system:
 ### Notes
 
 - **Admin login required.** The dashboard (and VPN switching) is behind `ADMIN_TOKEN` (`/login`). The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default; `GET /ready` stays public for health probes.
-- **In-memory only.** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
-- **No persistence layer.** A future revision could add SQLite for historical requests; for now, this is a live-only monitoring surface.
+- **In-memory only (metrics).** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
+- **SQLite persistence (config).** Custom providers, tiered combos, and seeded auth + upstream settings persist in `PROVIDERS_DB_PATH` (default `./data/providers.db`). Mount a volume over `./data` in docker or the file is lost with the container.
 
 ## Playground
 

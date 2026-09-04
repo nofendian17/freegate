@@ -143,8 +143,8 @@ The rate limiter is per-IP, sharded 32-way (`middleware.RateLimiter` 32 `shard{m
 
 The rate limiter is **in-memory only**; restarting the proxy clears all counters.
 
-### Upstream returns 429 → pass-through
-The `ChatService` forwards upstream responses — including 429 — to the client verbatim. There is no automatic retry or IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button). The client sees the provider's original 429 body and status.
+### Upstream returns 429 → pass-through or tier failover
+Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client. There is no automatic IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button).
 
 ### Client sees empty replies / tool-call parameter errors
 
@@ -182,8 +182,8 @@ The dashboard's VPN Server card offers "direct (no VPN)" as the first option: se
 
 Routing could not find a free upstream for the model. Verify:
 
-1. The model is in `GET /v1/models` (it must be free on either Kilo or OpenCode)
-2. `UPSTREAM_DEFAULT` is set to a reachable upstream
+1. The model is in `GET /v1/models` — built-ins must be free upstream; custom models come from custom providers; combos appear as their own entries (`provider: combo:<name>`)
+2. `UPSTREAM_DEFAULT` is set to a reachable upstream (`opencode`, `kilo`, or `llm7`)
 3. The `vpn` container is healthy
 
 ### Dashboard shows `vpn ip: —`
@@ -236,13 +236,30 @@ kill $(pgrep -f './server')
 ```
 
 State to be aware of:
-- **No persistent state.** All counters, request logs, and model caches are in-memory. A rollback to a previous binary does not require data migration.
+- **SQLite state in `providers.db`.** Custom providers, tiered combos, and (once seeded) auth + upstream settings persist in `PROVIDERS_DB_PATH` (default `./data/providers.db`). Counters, request logs, and model caches are still in-memory. A rollback to a previous binary does not require data migration, but back up `providers.db` first — downgrading across schema changes (e.g. combo tiers) may leave rows the old binary can't read.
 - **Rate-limit state is lost on restart** — clients will briefly regain full quota.
 - **Upstream catalog is re-fetched on startup**, so the first ~1 second of traffic after a rollback may show empty `/v1/models`.
 
+Persist the DB in docker: the image keeps `./data` on the container filesystem, so add a volume or it is lost with the container:
+
+```yaml
+services:
+  proxy:
+    volumes:
+      - fg-data:/app/data   # adjust to the WORKDIR-relative ./data path
+volumes:
+  fg-data:
+```
+
+Or bind-mount: `./data:/app/data`. Back up with `docker cp fg-proxy:/app/data/providers.db ./providers-$(date +%F).db`.
+
 ## Configuration changes without restart
 
-Most config requires a restart. The exception is the rate limiter, but it is not currently hot-reloadable. To rotate config:
+Provider/combo/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/config/*` rebuild live — no restart. Everything else requires one:
+
+## Configuration changes without restart
+
+Provider/combo/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/config/*` rebuild live — no restart. Env-only settings (PORT, VPN, rate limit, log level) still need one:
 
 ```bash
 # 1. Edit .env
@@ -272,11 +289,12 @@ Wire these into your existing monitor (Uptime Kuma, Healthchecks.io, Datadog HTT
 
 ## Disaster recovery
 
-There is no persistent data to recover. The entire state of a running freegate is reconstructable from:
+Metrics/request logs are in-memory and need no recovery, but `providers.db` (custom providers, combos, auth, upstream settings) does. Keep a backup:
 
 1. Source code (`git clone`)
 2. `.env` (kept in your secret manager, **not** in the repo)
-3. Compose file (in the repo)
+3. `providers.db` backup (custom providers, combos, auth + upstream settings)
+4. Compose file (in the repo)
 
 To rebuild from scratch on a new host:
 

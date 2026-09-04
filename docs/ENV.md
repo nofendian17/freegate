@@ -65,7 +65,16 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models that don't appear in Kilo's free catalog. Accepts `opencode` or `kilo`. |
+| `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models claimed by nothing else. Accepts `opencode`, `kilo`, or `llm7`. |
+| `PROVIDERS_DB_PATH` | No | `./data/providers.db` | SQLite file (GORM, pure-Go, CGO-free) holding custom providers, tiered combos, and — once seeded — auth + upstream settings. Auto-created on boot. Persist it: mount a volume over `./data` in docker; back up the file before upgrades. |
+
+## Custom providers + tiered combos (SQLite)
+
+Built-in upstreams (opencode/kilo/llm7) stay env-configured. User providers live in `PROVIDERS_DB_PATH`:
+
+- **Custom providers** — any OpenAI-compatible base URL + API keys + optional headers/allow/block lists + per-provider refresh interval, managed at `/providers` (dashboard, admin-only) or `GET/POST/PUT/DELETE /api/providers` (+ `POST /api/providers/{id}/test`). Keys are masked on read (last-4).
+- **Tiered combos** — each combo is a virtual model: `{"name":"hemat","tiers":[{"provider":"opencode"},{"provider":"custom:acme"}]}`. Request `model=hemat` and tiers are tried in order; transport errors, 429s, and 5xx fail over to the next tier (body sent as-is, failed tier bodies closed). Other 4xx (e.g. 401) pass through verbatim by design. Combos appear in `GET /v1/models` with `provider: combo:<name>`. Managed at `/providers` or `GET/POST/PUT/DELETE /api/combos` (+ `POST /api/combos/{id}/test` per-tier probe). No activate step — every combo is always routable.
+- **Live rebuild** — provider/combo CRUD rebuilds upstreams synchronously (failure → 400, old chain kept). No restart needed. Deleted providers are pruned from combo tiers (combos left with zero tiers are deleted).
 
 ## Debugging
 
