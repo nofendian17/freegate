@@ -28,11 +28,41 @@ type Provider struct {
 	Enabled  bool `gorm:"default:true" json:"enabled"`
 }
 
+type ComboTier struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
+}
+
+var knownBuiltin = map[string]bool{"opencode": true, "kilo": true, "llm7": true}
+
+func validTierProvider(p string) bool {
+	if knownBuiltin[p] {
+		return true
+	}
+	if strings.HasPrefix(p, "custom:") {
+		return nameRe.MatchString(strings.TrimPrefix(p, "custom:"))
+	}
+	return false
+}
+
+func validateTiers(tiers []ComboTier) error {
+	if len(tiers) == 0 {
+		return fmt.Errorf("combo needs at least one tier")
+	}
+	for i, tr := range tiers {
+		if !validTierProvider(strings.TrimSpace(tr.Provider)) {
+			return fmt.Errorf("tier %d: unknown provider %q", i+1, tr.Provider)
+		}
+	}
+	return nil
+}
+
 type RouteCombo struct {
-	ID       uint     `gorm:"primaryKey" json:"id"`
-	Name     string   `gorm:"uniqueIndex;not null" json:"name"`
-	Members  []string `gorm:"serializer:json;not null" json:"members"`
-	IsActive bool     `gorm:"index" json:"is_active"`
+	ID       uint        `gorm:"primaryKey" json:"id"`
+	Name     string      `gorm:"uniqueIndex;not null" json:"name"`
+	Tiers    []ComboTier `gorm:"serializer:json" json:"tiers"`
+	Members  []string    `gorm:"serializer:json" json:"-"`
+	IsActive bool        `gorm:"index" json:"-"`
 }
 
 func (p *Provider) Validate() error {
@@ -90,7 +120,32 @@ func Open(path string) (*Store, error) {
 	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}); err != nil {
 		return nil, fmt.Errorf("migrate providers db: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.migrateMembersToTiers(); err != nil {
+		return nil, fmt.Errorf("migrate members to tiers: %w", err)
+	}
+	return s, nil
+}
+
+func (s *Store) migrateMembersToTiers() error {
+	var rows []RouteCombo
+	if err := s.db.Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, c := range rows {
+		if len(c.Tiers) > 0 || len(c.Members) == 0 {
+			continue
+		}
+		tiers := make([]ComboTier, 0, len(c.Members))
+		for _, m := range c.Members {
+			tiers = append(tiers, ComboTier{Provider: m})
+		}
+		c.Tiers = tiers
+		if err := s.db.Save(&c).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -180,6 +235,7 @@ func (s *Store) DeleteProvider(id uint) error {
 	}
 	for _, c := range combos {
 		var kept []string
+		var keptTiers []ComboTier
 		changed := false
 		for _, m := range c.Members {
 			if m == member {
@@ -188,10 +244,18 @@ func (s *Store) DeleteProvider(id uint) error {
 			}
 			kept = append(kept, m)
 		}
+		for _, tr := range c.Tiers {
+			if tr.Provider == member {
+				changed = true
+				continue
+			}
+			keptTiers = append(keptTiers, tr)
+		}
 		if !changed {
 			continue
 		}
 		c.Members = kept
+		c.Tiers = keptTiers
 		if err := s.db.Save(&c).Error; err != nil {
 			return err
 		}
@@ -208,8 +272,23 @@ func (s *Store) ListCombos() ([]RouteCombo, error) {
 }
 
 func (s *Store) SaveCombo(c RouteCombo) (RouteCombo, error) {
-	if !nameRe.MatchString(c.Name) || len(c.Members) == 0 {
-		return RouteCombo{}, fmt.Errorf("combo needs valid name and >=1 member")
+	if !nameRe.MatchString(c.Name) {
+		return RouteCombo{}, fmt.Errorf("combo needs valid name")
+	}
+	if len(c.Tiers) == 0 {
+		if len(c.Members) == 0 {
+			return RouteCombo{}, fmt.Errorf("combo needs at least one tier")
+		}
+		for _, m := range c.Members {
+			c.Tiers = append(c.Tiers, ComboTier{Provider: m})
+		}
+	}
+	if err := validateTiers(c.Tiers); err != nil {
+		return RouteCombo{}, err
+	}
+	c.Members = nil
+	for _, tr := range c.Tiers {
+		c.Members = append(c.Members, tr.Provider)
 	}
 	c.ID = 0
 	c.IsActive = false
@@ -224,8 +303,23 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 	if err := s.db.First(&cur, id).Error; err != nil {
 		return RouteCombo{}, err
 	}
-	if !nameRe.MatchString(c.Name) || len(c.Members) == 0 {
-		return RouteCombo{}, fmt.Errorf("combo needs valid name and >=1 member")
+	if !nameRe.MatchString(c.Name) {
+		return RouteCombo{}, fmt.Errorf("combo needs valid name")
+	}
+	if len(c.Tiers) == 0 {
+		if len(c.Members) == 0 {
+			return RouteCombo{}, fmt.Errorf("combo needs at least one tier")
+		}
+		for _, m := range c.Members {
+			c.Tiers = append(c.Tiers, ComboTier{Provider: m})
+		}
+	}
+	if err := validateTiers(c.Tiers); err != nil {
+		return RouteCombo{}, err
+	}
+	c.Members = nil
+	for _, tr := range c.Tiers {
+		c.Members = append(c.Members, tr.Provider)
 	}
 	c.ID = cur.ID
 	c.IsActive = cur.IsActive

@@ -90,14 +90,14 @@ func TestCombo_Update_PreservesActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	c, err := s.SaveCombo(RouteCombo{Name: "upd", Members: []string{"a"}})
+	c, err := s.SaveCombo(RouteCombo{Name: "upd", Members: []string{"opencode"}})
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if err := s.ActivateCombo(c.ID); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	u, err := s.UpdateCombo(c.ID, RouteCombo{Name: "upd", Members: []string{"a", "b"}})
+	u, err := s.UpdateCombo(c.ID, RouteCombo{Name: "upd", Members: []string{"opencode", "kilo"}})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestActivateCombo_BadID_KeepsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	c, err := s.SaveCombo(RouteCombo{Name: "keep", Members: []string{"x"}})
+	c, err := s.SaveCombo(RouteCombo{Name: "keep", Members: []string{"opencode"}})
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -190,5 +190,56 @@ func TestActivateCombo_BadID_KeepsActive(t *testing.T) {
 	}
 	if active.Name != "keep" {
 		t.Fatalf("expected keep still active, got %q", active.Name)
+	}
+}
+
+func TestCombo_Tiers_CRUD(t *testing.T) {
+	s, err := Open("file:tiercrud?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	c, err := s.SaveCombo(RouteCombo{Name: "hemat", Tiers: []ComboTier{{Provider: "opencode"}, {Provider: "kilo", Model: "kilo-auto"}}})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if len(c.Tiers) != 2 || c.Tiers[0].Provider != "opencode" {
+		t.Fatalf("bad tiers: %+v", c.Tiers)
+	}
+	list, err := s.ListCombos()
+	if err != nil || len(list) != 1 || len(list[0].Tiers) != 2 {
+		t.Fatalf("list: %v %+v", err, list)
+	}
+}
+
+func TestCombo_Tiers_Validation(t *testing.T) {
+	s, err := Open("file:tiervalid?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := s.SaveCombo(RouteCombo{Name: "bad", Tiers: nil}); err == nil {
+		t.Fatal("expected error for empty tiers")
+	}
+	if _, err := s.SaveCombo(RouteCombo{Name: "bad2", Tiers: []ComboTier{{Provider: "nope"}}}); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestCombo_Members_Migrated_To_Tiers(t *testing.T) {
+	s, err := Open("file:tiermig?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := s.db.Exec("INSERT INTO route_combos (name, members, is_active) VALUES (?,?,?)", "legacy", `["opencode","custom:acme"]`, false).Error; err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+	if err := s.migrateMembersToTiers(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	list, err := s.ListCombos()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list: %v %+v", err, list)
+	}
+	if len(list[0].Tiers) != 2 || list[0].Tiers[1].Provider != "custom:acme" {
+		t.Fatalf("not migrated: %+v", list[0].Tiers)
 	}
 }
