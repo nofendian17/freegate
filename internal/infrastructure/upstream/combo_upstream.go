@@ -58,6 +58,14 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			}
 			return nil, fmt.Errorf("combo %q: %w", u.name, err)
 		}
+		if resp == nil {
+			lastErr = fmt.Errorf("combo %q tier %q returned nil response", u.name, tier.Name())
+			if last {
+				return nil, fmt.Errorf("combo %q: %w", u.name, lastErr)
+			}
+			slog.Warn("combo tier returned nil response, trying next", "combo", u.name, "tier", tier.Name())
+			continue
+		}
 		if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) && !last {
 			slog.Warn("combo tier retryable status, trying next", "combo", u.name, "tier", tier.Name(), "status", resp.StatusCode)
 			resp.Close()
@@ -65,5 +73,5 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 		}
 		return resp, nil
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("combo %q: %w", u.name, lastErr)
 }

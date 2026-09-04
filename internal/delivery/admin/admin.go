@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -174,7 +175,7 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 	var list struct {
 		Data []any `json:"data"`
 	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, resp.Body, 10<<20)).Decode(&list)
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&list)
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode < 300, "modelCount": len(list.Data), "latencyMs": time.Since(start).Milliseconds(), "status": resp.StatusCode})
 }
 
@@ -235,6 +236,10 @@ func (h *Handler) deleteCombo(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}
+	if err := h.rebuild(); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -273,7 +278,7 @@ func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 	tiers := make([]map[string]any, 0, len(combo.Tiers))
 	anyOK := false
 	for _, tier := range combo.Tiers {
-		res := h.probeTier(w, r, client, byName, tier.Provider)
+		res := h.probeTier(r, client, byName, tier.Provider)
 		if ok, _ := res["ok"].(bool); ok {
 			anyOK = true
 		}
@@ -282,10 +287,8 @@ func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": anyOK, "tiers": tiers})
 }
 
-var builtinTier = map[string]bool{"opencode": true, "kilo": true, "llm7": true}
-
-func (h *Handler) probeTier(w http.ResponseWriter, r *http.Request, client *http.Client, byName map[string]uint, provider string) map[string]any {
-	if builtinTier[provider] {
+func (h *Handler) probeTier(r *http.Request, client *http.Client, byName map[string]uint, provider string) map[string]any {
+	if providers.IsBuiltin(provider) {
 		return map[string]any{"provider": provider, "ok": true, "skipped": true, "note": "builtin, see provider health"}
 	}
 	name := strings.TrimPrefix(provider, "custom:")
@@ -316,6 +319,6 @@ func (h *Handler) probeTier(w http.ResponseWriter, r *http.Request, client *http
 	var list struct {
 		Data []any `json:"data"`
 	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, resp.Body, 10<<20)).Decode(&list)
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 10<<20)).Decode(&list)
 	return map[string]any{"provider": provider, "ok": resp.StatusCode < 300, "latencyMs": time.Since(start).Milliseconds(), "status": resp.StatusCode, "modelCount": len(list.Data)}
 }

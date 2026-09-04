@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"sort"
 	"sync"
 
 	"freegate/internal/domain"
@@ -96,9 +97,14 @@ func (c *ComboRouter) AllModels() []model.Model {
 		}
 	}
 	c.mu.RLock()
-	combos := make([]*ComboUpstream, 0, len(c.combos))
-	for _, cu := range c.combos {
-		combos = append(combos, cu)
+	names := make([]string, 0, len(c.combos))
+	for name := range c.combos {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	combos := make([]*ComboUpstream, 0, len(names))
+	for _, name := range names {
+		combos = append(combos, c.combos[name])
 	}
 	customs := append([]domain.Upstream(nil), c.customs...)
 	c.mu.RUnlock()

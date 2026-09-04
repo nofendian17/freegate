@@ -90,6 +90,103 @@ func TestDeleteProvider_StripsComboMember(t *testing.T) {
 	t.Fatal("combo missing after provider delete")
 }
 
+func TestDeleteProvider_EmptiedCombo_Deleted(t *testing.T) {
+	s, err := Open("file:delempty?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	p, err := s.CreateProvider(Provider{Name: "solo", BaseURL: "https://solo.test/v1", APIKeys: []string{"k"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	c, err := s.SaveCombo(RouteCombo{Name: "only", Tiers: []ComboTier{{Provider: "custom:solo"}}})
+	if err != nil {
+		t.Fatalf("save combo: %v", err)
+	}
+	if err := s.DeleteProvider(p.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, err := s.ListCombos()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, x := range list {
+		if x.ID == c.ID {
+			t.Fatalf("emptied combo row not deleted: %+v", x)
+		}
+	}
+}
+
+func TestSaveCombo_UnknownCustom_Rejected(t *testing.T) {
+	s, err := Open("file:ghostcombo?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := s.SaveCombo(RouteCombo{Name: "ghost", Tiers: []ComboTier{{Provider: "custom:ghost"}}}); err == nil {
+		t.Fatal("expected error for unknown custom provider")
+	}
+	p, err := s.CreateProvider(Provider{Name: "off", BaseURL: "https://off.test/v1", APIKeys: []string{"k"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p.Enabled = false
+	if _, err := s.UpdateProvider(p.ID, p); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if _, err := s.SaveCombo(RouteCombo{Name: "ghost2", Tiers: []ComboTier{{Provider: "custom:off"}}}); err == nil {
+		t.Fatal("expected error for disabled custom provider")
+	}
+	if _, err := s.UpdateCombo(1, RouteCombo{Name: "ghost3", Tiers: []ComboTier{{Provider: "custom:ghost"}}}); err == nil {
+		t.Fatal("expected error for unknown custom provider on update")
+	}
+}
+
+func TestSaveCombo_TrimsTierProviders(t *testing.T) {
+	s, err := Open("file:trimcombo?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	c, err := s.SaveCombo(RouteCombo{Name: "trim", Tiers: []ComboTier{{Provider: " opencode "}}})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if c.Tiers[0].Provider != "opencode" {
+		t.Fatalf("provider not trimmed: %q", c.Tiers[0].Provider)
+	}
+}
+
+func TestOpen_NullTiers_Backfilled(t *testing.T) {
+	path := t.TempDir() + "/providers.db"
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	raw, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	if err := raw.Exec(`INSERT INTO route_combos (name, tiers) VALUES (?, NULL)`, "legacy-null").Error; err != nil {
+		t.Fatalf("seed null tiers: %v", err)
+	}
+	sqlDB, _ := raw.DB()
+	_ = sqlDB.Close()
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+	list, err := s2.ListCombos()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 || len(list[0].Tiers) != 0 {
+		t.Fatalf("expected one combo with empty tiers, got %+v", list)
+	}
+}
+
 func TestCombo_Update_PreservesID(t *testing.T) {
 	s, err := Open("file:updatecombo?mode=memory&cache=shared")
 	if err != nil {

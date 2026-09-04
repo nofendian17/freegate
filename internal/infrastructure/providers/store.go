@@ -34,7 +34,11 @@ type ComboTier struct {
 	Model    string `json:"model,omitempty"`
 }
 
+var KnownBuiltins = []string{"opencode", "kilo", "llm7"}
+
 var knownBuiltin = map[string]bool{"opencode": true, "kilo": true, "llm7": true}
+
+func IsBuiltin(name string) bool { return knownBuiltin[name] }
 
 func validTierProvider(p string) bool {
 	if knownBuiltin[p] {
@@ -132,16 +136,20 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+func (s *Store) backfillNullTiers() error {
+	return s.db.Table("route_combos").Where("tiers IS NULL").Update("tiers", "[]").Error
+}
+
 func (s *Store) migrateMembersToTiers() error {
 	if !s.db.Migrator().HasColumn(&RouteCombo{}, "members") {
-		return nil
+		return s.backfillNullTiers()
 	}
 	var rows []legacyComboRow
 	if err := s.db.Table("route_combos").Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, c := range rows {
-		if len(c.Tiers) > 0 || len(c.Members) == 0 {
+		if len(c.Tiers) > 0 {
 			continue
 		}
 		tiers := make([]ComboTier, 0, len(c.Members))
@@ -156,7 +164,7 @@ func (s *Store) migrateMembersToTiers() error {
 			return err
 		}
 	}
-	return nil
+	return s.backfillNullTiers()
 }
 
 func (s *Store) Close() error {
@@ -200,6 +208,32 @@ func (s *Store) GetProvider(id uint) (Provider, error) {
 	}
 	p.APIKeys = MaskKeys(p.APIKeys)
 	return p, nil
+}
+
+// GetProviderByName returns the provider with raw (unmasked) API keys.
+func (s *Store) GetProviderByName(name string) (Provider, error) {
+	var p Provider
+	if err := s.db.Where("name = ?", name).First(&p).Error; err != nil {
+		return Provider{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) checkTiersExist(tiers []ComboTier) error {
+	for i, tr := range tiers {
+		p := strings.TrimSpace(tr.Provider)
+		if IsBuiltin(p) {
+			continue
+		}
+		if !strings.HasPrefix(p, "custom:") {
+			continue
+		}
+		row, err := s.GetProviderByName(strings.TrimPrefix(p, "custom:"))
+		if err != nil || !row.Enabled {
+			return fmt.Errorf("tier %d: unknown or disabled provider %q", i+1, tr.Provider)
+		}
+	}
+	return nil
 }
 
 // GetProviderRaw returns the provider with raw (unmasked) API keys.
@@ -257,6 +291,12 @@ func (s *Store) DeleteProvider(id uint) error {
 		if !changed {
 			continue
 		}
+		if len(keptTiers) == 0 {
+			if err := s.db.Delete(&RouteCombo{}, c.ID).Error; err != nil {
+				return err
+			}
+			continue
+		}
 		c.Tiers = keptTiers
 		if err := s.db.Save(&c).Error; err != nil {
 			return err
@@ -277,7 +317,13 @@ func (s *Store) SaveCombo(c RouteCombo) (RouteCombo, error) {
 	if !nameRe.MatchString(c.Name) {
 		return RouteCombo{}, fmt.Errorf("combo needs valid name")
 	}
+	for i := range c.Tiers {
+		c.Tiers[i].Provider = strings.TrimSpace(c.Tiers[i].Provider)
+	}
 	if err := validateTiers(c.Tiers); err != nil {
+		return RouteCombo{}, err
+	}
+	if err := s.checkTiersExist(c.Tiers); err != nil {
 		return RouteCombo{}, err
 	}
 	c.ID = 0
@@ -295,7 +341,13 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 	if !nameRe.MatchString(c.Name) {
 		return RouteCombo{}, fmt.Errorf("combo needs valid name")
 	}
+	for i := range c.Tiers {
+		c.Tiers[i].Provider = strings.TrimSpace(c.Tiers[i].Provider)
+	}
 	if err := validateTiers(c.Tiers); err != nil {
+		return RouteCombo{}, err
+	}
+	if err := s.checkTiersExist(c.Tiers); err != nil {
 		return RouteCombo{}, err
 	}
 	c.ID = cur.ID

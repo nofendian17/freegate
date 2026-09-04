@@ -74,6 +74,70 @@ func TestComboUpstream_Exhausted_ReturnsLast(t *testing.T) {
 	}
 }
 
+func TestComboUpstream_NilResponse_FailsOver(t *testing.T) {
+	nilTier := &nilStub{name: "flaky"}
+	ok := &tierStub{name: "custom:acme", status: 200, body: `{"ok":true}`}
+	cu := &ComboUpstream{name: "hemat", tiers: []domain.Upstream{nilTier, ok}}
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestComboUpstream_AllNilResponse_ErrorNoPanic(t *testing.T) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("panicked: %v", rec)
+		}
+	}()
+	cu := &ComboUpstream{name: "hemat", tiers: []domain.Upstream{&nilStub{name: "a"}, &nilStub{name: "b"}}}
+	if _, err := cu.ChatCompletion(context.Background(), []byte(`{}`)); err == nil {
+		t.Fatal("expected error when all tiers return nil")
+	}
+}
+
+type nilStub struct{ name string }
+
+func (s *nilStub) Name() string                                          { return s.name }
+func (s *nilStub) Match(id string) bool                                  { return true }
+func (s *nilStub) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
+func (s *nilStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
+	return nil, nil
+}
+func (s *nilStub) Models() []model.Model                      { return nil }
+func (s *nilStub) Start(ctx context.Context, d time.Duration) {}
+
+func TestComboRouter_AllModels_StableOrder(t *testing.T) {
+	def := &tierStub{name: "opencode"}
+	cr := NewComboRouter(NewRouter(def))
+	lookup := func(name string) domain.Upstream { return def }
+	cr.RebuildCombos([]ComboTierRow{
+		{Name: "zeta", Providers: []string{"opencode"}},
+		{Name: "alpha", Providers: []string{"opencode"}},
+	}, lookup)
+	first := cr.AllModels()
+	second := cr.AllModels()
+	if len(first) != len(second) {
+		t.Fatalf("length changed: %d vs %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i].ID != second[i].ID {
+			t.Fatalf("unstable order: %v vs %v", first, second)
+		}
+	}
+	seen := map[string]int{}
+	for i, m := range first {
+		seen[m.ID] = i
+	}
+	if seen["alpha"] > seen["zeta"] {
+		t.Fatalf("combos not sorted: %v", first)
+	}
+}
+
 func TestComboRouter_VirtualModel_ExactMatch(t *testing.T) {
 	def := &tierStub{name: "opencode"}
 	legacy := NewRouter(def)

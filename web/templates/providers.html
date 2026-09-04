@@ -22,7 +22,7 @@
     .prov-ok { background: rgba(0,255,136,0.06); border: 1px solid var(--success); color: var(--success); font-size: 12px; padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3); white-space: pre-wrap; overflow-wrap: break-word; }
     .combo-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
     .combo-row:last-child { border-bottom: 0; }
-    .combo-members { color: var(--text-dim); font-size: 12px; }
+    .combo-tiers { color: var(--text-dim); font-size: 12px; }
     @media (max-width: 640px) { .prov-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -359,7 +359,7 @@
           var tiers = (c.tiers || []).map(tierLabel).join(' → ');
           return '<div class="combo-row" data-id="' + c.id + '">' +
             '<strong>' + esc(c.name) + '</strong>' +
-            '<span class="combo-members">' + esc(tiers) + '</span>' +
+            '<span class="combo-tiers">' + esc(tiers) + '</span>' +
             '<button class="btn-tertiary combo-test" type="button" data-id="' + c.id + '">> test</button>' +
             '<button class="btn-tertiary combo-edit" type="button" data-id="' + c.id + '">> edit</button>' +
             '<button class="btn-tertiary combo-delete" type="button" data-id="' + c.id + '" style="color:var(--error)">x</button>' +

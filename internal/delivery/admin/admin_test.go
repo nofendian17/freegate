@@ -3,14 +3,18 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
 	"github.com/go-chi/chi/v5"
 )
+
+var errRebuildSentinel = errors.New("rebuild boom")
 
 func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	s, _ := providers.Open("file:admin-create?mode=memory&cache=shared")
@@ -96,7 +100,7 @@ func TestAdmin_TestCombo_PerTier(t *testing.T) {
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", h.Routes())
-	req := httptest.NewRequest("POST", "/api/combos/"+itoa(combo.ID)+"/test", nil)
+	req := httptest.NewRequest("POST", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10)+"/test", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -125,18 +129,71 @@ func TestAdmin_TestCombo_PerTier(t *testing.T) {
 	}
 }
 
-func itoa(v uint) string {
-	if v == 0 {
-		return "0"
+func TestAdmin_DeleteCombo_TriggersRebuild(t *testing.T) {
+	s, _ := providers.Open("file:admin-delcombo?mode=memory&cache=shared")
+	rebuilt := 0
+	var rebuildErr error
+	h := New(s, func() error { rebuilt++; return rebuildErr }, nil)
+	r := chi.NewRouter()
+	r.Mount("/", h.Routes())
+	body, _ := json.Marshal(map[string]any{"name": "gone", "tiers": []any{
+		map[string]any{"provider": "opencode"},
+	}})
+	req := httptest.NewRequest("POST", "/api/combos", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
 	}
-	var b [20]byte
-	i := len(b)
-	for v > 0 {
-		i--
-		b[i] = byte('0' + v%10)
-		v /= 10
+	var created struct {
+		ID uint `json:"id"`
 	}
-	return string(b[i:])
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if rebuilt != 1 {
+		t.Fatalf("expected rebuild after create, got %d", rebuilt)
+	}
+	req = httptest.NewRequest("DELETE", "/api/combos/"+strconv.FormatUint(uint64(created.ID), 10), nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", w.Code, w.Body.String())
+	}
+	if rebuilt != 2 {
+		t.Fatalf("expected rebuild after delete, got %d", rebuilt)
+	}
+	req = httptest.NewRequest("GET", "/api/combos", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var list struct {
+		Data []providers.RouteCombo `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, c := range list.Data {
+		if c.ID == created.ID {
+			t.Fatalf("deleted combo still listed: %+v", c)
+		}
+	}
+}
+
+func TestAdmin_DeleteCombo_RebuildError(t *testing.T) {
+	s, _ := providers.Open("file:admin-delcombo-err?mode=memory&cache=shared")
+	combo, err := s.SaveCombo(providers.RouteCombo{Name: "gone", Tiers: []providers.ComboTier{{Provider: "opencode"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return errRebuildSentinel }, nil)
+	r := chi.NewRouter()
+	r.Mount("/", h.Routes())
+	req := httptest.NewRequest("DELETE", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
 }
 
 func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
