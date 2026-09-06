@@ -6,7 +6,7 @@ import (
 
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/ringbuffer"
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 const (
@@ -17,9 +17,9 @@ const (
 // Recorder holds the in-memory ring buffers that back the dashboard.
 type Recorder struct {
 	metricsFn  func() map[string]any
-	requests   *ringbuffer.RingBuffer[model.RequestLogEntry]
-	timeseries *ringbuffer.RingBuffer[model.TimeseriesEntry]
-	modelsFn   func() []model.Model
+	requests   *ringbuffer.RingBuffer[domain.RequestLogEntry]
+	timeseries *ringbuffer.RingBuffer[domain.TimeseriesEntry]
+	modelsFn   func() []domain.Model
 	vpnIPFn    func() string
 	startedAt  time.Time
 }
@@ -33,7 +33,7 @@ func NewRecorder(metricsFn func() map[string]any) *Recorder {
 // Deps groups Recorder dependencies for constructor injection.
 type Deps struct {
 	Metrics func() map[string]any
-	Models  func() []model.Model
+	Models  func() []domain.Model
 	VPNIP   func() string
 }
 
@@ -44,14 +44,14 @@ func NewRecorderWithDeps(d Deps) *Recorder {
 		metricsFn:  d.Metrics,
 		modelsFn:   d.Models,
 		vpnIPFn:    d.VPNIP,
-		requests:   ringbuffer.New[model.RequestLogEntry](100),
-		timeseries: ringbuffer.New[model.TimeseriesEntry](TimeseriesCapacity),
+		requests:   ringbuffer.New[domain.RequestLogEntry](100),
+		timeseries: ringbuffer.New[domain.TimeseriesEntry](TimeseriesCapacity),
 		startedAt:  time.Now(),
 	}
 }
 
 // RecordRequestLog stores a single request entry.
-func (r *Recorder) RecordRequestLog(e model.RequestLogEntry) {
+func (r *Recorder) RecordRequestLog(e domain.RequestLogEntry) {
 	if e.Ts.IsZero() {
 		e.Ts = time.Now()
 	}
@@ -59,12 +59,12 @@ func (r *Recorder) RecordRequestLog(e model.RequestLogEntry) {
 }
 
 // Requests returns the most recent requests, oldest first.
-func (r *Recorder) Requests() []model.RequestLogEntry {
+func (r *Recorder) Requests() []domain.RequestLogEntry {
 	return r.requests.Snapshot()
 }
 
 // Timeseries returns the timeseries history, oldest first.
-func (r *Recorder) Timeseries() []model.TimeseriesEntry {
+func (r *Recorder) Timeseries() []domain.TimeseriesEntry {
 	return r.timeseries.Snapshot()
 }
 
@@ -84,7 +84,7 @@ func (r *Recorder) StartedAtUnix() int64 {
 }
 
 // SetModelsFunc wires a callback that returns the current model list.
-func (r *Recorder) SetModelsFunc(fn func() []model.Model) {
+func (r *Recorder) SetModelsFunc(fn func() []domain.Model) {
 	r.modelsFn = fn
 }
 
@@ -94,7 +94,7 @@ func (r *Recorder) SetVPNIPFunc(fn func() string) {
 }
 
 // Models returns the current model list, or empty if no callback is set.
-func (r *Recorder) Models() []model.Model {
+func (r *Recorder) Models() []domain.Model {
 	if r.modelsFn == nil {
 		return nil
 	}
@@ -139,7 +139,7 @@ func (r *Recorder) Start(ctx context.Context) {
 				}
 			}
 
-			entry := model.TimeseriesEntry{
+			entry := domain.TimeseriesEntry{
 				Ts:            t,
 				TotalRequests: httputil.Int64(snap["total_requests"]),
 				Errors:        httputil.Int64(snap["upstream_errors"]),

@@ -229,8 +229,11 @@ func (s *Store) checkTiersExist(tiers []ComboTier) error {
 			continue
 		}
 		row, err := s.GetProviderByName(strings.TrimPrefix(p, "custom:"))
-		if err != nil || !row.Enabled {
-			return fmt.Errorf("tier %d: unknown or disabled provider %q", i+1, tr.Provider)
+		if err != nil {
+			return fmt.Errorf("tier %d: failed to look up provider %q: %w", i+1, tr.Provider, err)
+		}
+		if !row.Enabled {
+			return fmt.Errorf("tier %d: provider %q is disabled", i+1, tr.Provider)
 		}
 	}
 	return nil

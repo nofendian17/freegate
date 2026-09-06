@@ -12,7 +12,6 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
-	"freegate/internal/model"
 )
 
 type OpenCodeUpstream struct {
@@ -69,7 +68,7 @@ func (o *OpenCodeUpstream) Match(modelID string) bool {
 	return true
 }
 
-func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
+func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	body, err := o.client.ReadAll(ctx, "/models")
 	if err != nil {
 		return nil, fmt.Errorf("opencode: fetch models: %w", err)
@@ -87,7 +86,7 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 	// small allowlist for known exceptions that don't follow that
 	// convention (e.g. big-pickle, which is served as deepseek-v4-flash
 	// with cost 0 by the upstream).
-	var free []model.Model
+	var free []domain.Model
 	seen := make(map[string]bool)
 	for _, m := range list.Data {
 		if seen[m.ID] {
@@ -95,7 +94,7 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 		}
 		seen[m.ID] = true
 		if strings.HasSuffix(m.ID, "-free") || o.allowlist[m.ID] {
-			free = append(free, model.Model{
+			free = append(free, domain.Model{
 				ID:       m.ID,
 				Object:   m.Object,
 				Created:  m.Created,
@@ -109,7 +108,7 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]model.Model, error
 	return free, nil
 }
 
-func (o *OpenCodeUpstream) Models() []model.Model {
+func (o *OpenCodeUpstream) Models() []domain.Model {
 	return o.cache.Get()
 }
 

@@ -9,7 +9,6 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
-	"freegate/internal/model"
 )
 
 type KiloUpstream struct {
@@ -51,7 +50,7 @@ func (k *KiloUpstream) Match(modelID string) bool {
 	return k.cache.Has(modelID)
 }
 
-func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
+func (k *KiloUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	body, err := k.client.ReadAll(ctx, "/models")
 	if err != nil {
 		return nil, fmt.Errorf("kilo: fetch models: %w", err)
@@ -62,7 +61,7 @@ func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
 		return nil, fmt.Errorf("kilo: parse models: %w", err)
 	}
 
-	var free []model.Model
+	var free []domain.Model
 	seen := make(map[string]bool)
 	for _, m := range list.Data {
 		if seen[m.ID] {
@@ -70,7 +69,7 @@ func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
 		}
 		seen[m.ID] = true
 		if m.IsFree {
-			free = append(free, model.Model{
+			free = append(free, domain.Model{
 				ID:       m.ID,
 				Object:   "model",
 				Created:  m.Created,
@@ -84,7 +83,7 @@ func (k *KiloUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
 	return free, nil
 }
 
-func (k *KiloUpstream) Models() []model.Model {
+func (k *KiloUpstream) Models() []domain.Model {
 	return k.cache.Get()
 }
 

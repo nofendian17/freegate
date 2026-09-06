@@ -11,15 +11,15 @@ import (
 
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/infrastructure/vpngate"
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 // DataSource provides the data the UI needs to render.
 type DataSource interface {
 	Metrics() map[string]any
-	Models() []model.Model
-	Requests() []model.RequestLogEntry
-	Timeseries() []model.TimeseriesEntry
+	Models() []domain.Model
+	Requests() []domain.RequestLogEntry
+	Timeseries() []domain.TimeseriesEntry
 	UptimeSeconds() int64
 	StartedAtUnix() int64
 	VPNIP() string

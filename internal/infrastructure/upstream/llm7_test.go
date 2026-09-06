@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"freegate/internal/infrastructure/upstream/types"
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 func newTestLLM7(t *testing.T, body string) *LLM7Upstream {
@@ -147,7 +147,7 @@ func TestLLM7_ListModels_IgnoresExtraFields(t *testing.T) {
 
 func TestLLM7_Match_ByCache(t *testing.T) {
 	u := NewLLM7Upstream("", nil)
-	u.cache.Set([]model.Model{
+	u.cache.Set([]domain.Model{
 		{ID: "model-a", Provider: "llm7"},
 		{ID: "model-b", Provider: "llm7"},
 	})

@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
@@ -14,6 +14,6 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := model.ModelList{Object: "list", Data: models}
+	resp := domain.ModelList{Object: "list", Data: models}
 	respond.JSON(w, http.StatusOK, resp)
 }

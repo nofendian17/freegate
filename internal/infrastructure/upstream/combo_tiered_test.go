@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 type tierStub struct {
@@ -23,7 +22,7 @@ type tierStub struct {
 
 func (s *tierStub) Name() string                                          { return s.name }
 func (s *tierStub) Match(id string) bool                                  { return true }
-func (s *tierStub) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
+func (s *tierStub) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (s *tierStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	s.calls++
 	s.gotBody = append([]byte(nil), b...)
@@ -32,7 +31,7 @@ func (s *tierStub) ChatCompletion(ctx context.Context, b []byte) (*domain.Upstre
 	_, _ = io.WriteString(rec, s.body)
 	return domain.NewUpstreamResponse(rec.Result()), nil
 }
-func (s *tierStub) Models() []model.Model                      { return nil }
+func (s *tierStub) Models() []domain.Model                      { return nil }
 func (s *tierStub) Start(ctx context.Context, d time.Duration) {}
 
 func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
@@ -105,11 +104,11 @@ type nilStub struct{ name string }
 
 func (s *nilStub) Name() string                                          { return s.name }
 func (s *nilStub) Match(id string) bool                                  { return true }
-func (s *nilStub) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
+func (s *nilStub) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (s *nilStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
-func (s *nilStub) Models() []model.Model                      { return nil }
+func (s *nilStub) Models() []domain.Model                      { return nil }
 func (s *nilStub) Start(ctx context.Context, d time.Duration) {}
 
 func TestComboRouter_AllModels_StableOrder(t *testing.T) {

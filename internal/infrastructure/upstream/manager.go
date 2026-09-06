@@ -79,6 +79,10 @@ func (m *ProviderManager) All() []*CustomUpstream {
 	return out
 }
 
+// startOne launches a background refresher for a custom upstream. It must
+// be called with m.mu held because it writes to m.runs. The goroutine
+// launch (go u.Start) is non-blocking, so lock hold time stays O(n) where
+// n is the number of upstreams — safe for the small counts involved.
 func (m *ProviderManager) startOne(name string, u *CustomUpstream, d time.Duration) {
 	if d <= 0 {
 		d = 60 * time.Second

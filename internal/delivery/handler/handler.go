@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 const MaxRequestBodySize = 10 << 20
@@ -18,7 +18,7 @@ type ChatProxy interface {
 
 // ModelLister is the interface the handler needs from the model service.
 type ModelLister interface {
-	AllModels() []model.Model
+	AllModels() []domain.Model
 	IsReady() bool
 }
 

@@ -3,12 +3,12 @@ package upstream
 import (
 	"testing"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 func TestKilo_Match_PrefixInCache(t *testing.T) {
 	k := NewKiloUpstream("", "", nil)
-	k.cache.Set([]model.Model{
+	k.cache.Set([]domain.Model{
 		{ID: "kilo-auto/free", Provider: "kilo"},
 		{ID: "openrouter/owl-alpha", Provider: "kilo"},
 		{ID: "openrouter/free", Provider: "kilo"},
@@ -37,7 +37,7 @@ func TestKilo_Match_PrefixInCache(t *testing.T) {
 
 func TestKilo_Match_FreeSuffixInCache(t *testing.T) {
 	k := NewKiloUpstream("", "", nil)
-	k.cache.Set([]model.Model{
+	k.cache.Set([]domain.Model{
 		{ID: "nvidia/nemotron-3-super-120b-a12b:free", Provider: "kilo"},
 		{ID: "poolside/laguna-m.1:free", Provider: "kilo"},
 		{ID: "poolside/laguna-xs.2:free", Provider: "kilo"},

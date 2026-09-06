@@ -569,9 +569,11 @@ func (s *Supervisor) Ping() PingResult {
 				res.EgressIP = ip
 				return res
 			}
+			lastErr = fmt.Sprintf("status %d, empty body", resp.StatusCode)
+		} else {
+			resp.Body.Close()
+			lastErr = fmt.Sprintf("status %d", resp.StatusCode)
 		}
-		resp.Body.Close()
-		lastErr = fmt.Sprintf("status %d", resp.StatusCode)
 	}
 	res.EgressErr = lastErr
 	if res.EgressErr == "" {

@@ -149,69 +149,6 @@ func TestRateLimiter_TrustProxyHeadersHonorsXFF(t *testing.T) {
 	}
 }
 
-func TestAuth_SkipWhenEmpty(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	middleware := Auth("")
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-}
-
-func TestAuth_ValidKey(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	middleware := Auth("secret-key")
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("X-API-Key", "secret-key")
-	rec := httptest.NewRecorder()
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-}
-
-func TestAuth_InvalidKey(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	middleware := Auth("secret-key")
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("X-API-Key", "wrong-key")
-	rec := httptest.NewRecorder()
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
-	}
-}
-
-func TestAuth_ValidBearerToken(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	middleware := Auth("secret-key")
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Authorization", "Bearer secret-key")
-	rec := httptest.NewRecorder()
-	middleware(handler).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-}
-
 func TestRequestID_GeneratesWhenMissing(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")

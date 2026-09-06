@@ -6,22 +6,21 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 type mockUpstream struct {
 	name   string
 	match  func(string) bool
-	models []model.Model
+	models []domain.Model
 }
 
 func (m *mockUpstream) Name() string                                          { return m.name }
 func (m *mockUpstream) Match(modelID string) bool                             { return m.match(modelID) }
-func (m *mockUpstream) ListModels(ctx context.Context) ([]model.Model, error) { return nil, nil }
+func (m *mockUpstream) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
-func (m *mockUpstream) Models() []model.Model                                    { return m.models }
+func (m *mockUpstream) Models() []domain.Model                                    { return m.models }
 func (m *mockUpstream) Start(ctx context.Context, refreshInterval time.Duration) {}
 
 func TestRouter_Select_Match(t *testing.T) {
@@ -61,14 +60,14 @@ func TestRouter_Select_Fallback(t *testing.T) {
 func TestRouter_AllModels_Dedup(t *testing.T) {
 	kilo := &mockUpstream{
 		name: "kilo",
-		models: []model.Model{
+		models: []domain.Model{
 			{ID: "model-a", OwnedBy: "kilo"},
 			{ID: "model-b", OwnedBy: "kilo"},
 		},
 	}
 	oc := &mockUpstream{
 		name: "opencode",
-		models: []model.Model{
+		models: []domain.Model{
 			{ID: "model-a", OwnedBy: "opencode"},
 			{ID: "model-c", OwnedBy: "opencode"},
 		},
@@ -104,7 +103,7 @@ func TestRouter_IsReady_AllEmpty(t *testing.T) {
 func TestRouter_IsReady_KiloReady(t *testing.T) {
 	kilo := &mockUpstream{
 		name:   "kilo",
-		models: []model.Model{{ID: "model-a"}},
+		models: []domain.Model{{ID: "model-a"}},
 	}
 	oc := &mockUpstream{name: "opencode", models: nil}
 
@@ -118,7 +117,7 @@ func TestRouter_IsReady_DefaultReady(t *testing.T) {
 	kilo := &mockUpstream{name: "kilo", models: nil}
 	oc := &mockUpstream{
 		name:   "opencode",
-		models: []model.Model{{ID: "model-a"}},
+		models: []domain.Model{{ID: "model-a"}},
 	}
 
 	r := NewRouter(oc, kilo)

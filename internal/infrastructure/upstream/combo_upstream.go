@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 var _ domain.Upstream = (*ComboUpstream)(nil)
@@ -40,11 +39,11 @@ func (u *ComboUpstream) Name() string { return "combo:" + u.name }
 
 func (u *ComboUpstream) Match(modelID string) bool { return modelID == u.name }
 
-func (u *ComboUpstream) Models() []model.Model {
-	return []model.Model{{ID: u.name, Object: "model", OwnedBy: "combo", IsFree: true, Provider: "combo:" + u.name}}
+func (u *ComboUpstream) Models() []domain.Model {
+	return []domain.Model{{ID: u.name, Object: "model", OwnedBy: "combo", IsFree: true, Provider: "combo:" + u.name}}
 }
 
-func (u *ComboUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
+func (u *ComboUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	return u.Models(), nil
 }
 

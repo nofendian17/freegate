@@ -3,12 +3,12 @@ package upstream
 import (
 	"sync"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 type ModelCache struct {
 	mu     sync.RWMutex
-	models []model.Model
+	models []domain.Model
 	index  map[string]struct{}
 }
 
@@ -16,7 +16,7 @@ func NewModelCache() *ModelCache {
 	return &ModelCache{index: make(map[string]struct{})}
 }
 
-func (c *ModelCache) Set(models []model.Model) {
+func (c *ModelCache) Set(models []domain.Model) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.models = models
@@ -27,13 +27,13 @@ func (c *ModelCache) Set(models []model.Model) {
 	c.index = idx
 }
 
-func (c *ModelCache) Get() []model.Model {
+func (c *ModelCache) Get() []domain.Model {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.models == nil {
 		return nil
 	}
-	result := make([]model.Model, len(c.models))
+	result := make([]domain.Model, len(c.models))
 	copy(result, c.models)
 	return result
 }
