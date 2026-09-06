@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 // mockChat implements handler.ChatProxy for testing.
@@ -33,11 +33,11 @@ func (m *mockChat) ProxyChat(ctx context.Context, w http.ResponseWriter, r *http
 }
 
 type mockModels struct {
-	models []model.Model
+	models []domain.Model
 	ready  bool
 }
 
-func (m *mockModels) AllModels() []model.Model { return m.models }
+func (m *mockModels) AllModels() []domain.Model { return m.models }
 func (m *mockModels) IsReady() bool            { return m.ready }
 
 type mockMetrics struct {
@@ -116,7 +116,7 @@ func TestHandler_ListModels_Empty(t *testing.T) {
 
 func TestHandler_ListModels_WithData(t *testing.T) {
 	h, _, models, _ := newMockHandler()
-	models.models = []model.Model{
+	models.models = []domain.Model{
 		{ID: "model-a", Object: "model", OwnedBy: "opencode", IsFree: true},
 		{ID: "model-b", Object: "model", OwnedBy: "kilo", IsFree: true},
 	}
@@ -128,7 +128,7 @@ func TestHandler_ListModels_WithData(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
 	}
-	var result model.ModelList
+	var result domain.ModelList
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 const (
@@ -36,9 +35,9 @@ func (r *Router) Select(modelID string) domain.Upstream {
 	return r.defaultUpstream
 }
 
-func (r *Router) AllModels() []model.Model {
+func (r *Router) AllModels() []domain.Model {
 	seen := make(map[string]bool)
-	var result []model.Model
+	var result []domain.Model
 
 	for _, u := range r.upstreams {
 		for _, m := range u.Models() {

@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 type ComboRouter struct {
@@ -96,9 +95,9 @@ func (c *ComboRouter) Select(modelID string) domain.Upstream {
 	return nil
 }
 
-func (c *ComboRouter) AllModels() []model.Model {
+func (c *ComboRouter) AllModels() []domain.Model {
 	seen := map[string]bool{}
-	var out []model.Model
+	var out []domain.Model
 	if c.legacy != nil {
 		for _, m := range c.legacy.AllModels() {
 			if !seen[m.ID] {

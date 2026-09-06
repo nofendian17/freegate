@@ -10,7 +10,6 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
-	"freegate/internal/model"
 )
 
 // LLM7 (api.llm7.io) is a keyless free gateway: any non-empty bearer token
@@ -63,7 +62,7 @@ func llm7Free(m types.LLM7Model) bool {
 	return strings.EqualFold(m.Tier, "turbo")
 }
 
-func (u *LLM7Upstream) ListModels(ctx context.Context) ([]model.Model, error) {
+func (u *LLM7Upstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	body, err := u.client.ReadAll(ctx, "/models")
 	if err != nil {
 		return nil, fmt.Errorf("llm7: fetch models: %w", err)
@@ -74,14 +73,14 @@ func (u *LLM7Upstream) ListModels(ctx context.Context) ([]model.Model, error) {
 		return nil, fmt.Errorf("llm7: parse models: %w", err)
 	}
 
-	var out []model.Model
+	var out []domain.Model
 	seen := make(map[string]bool)
 	for _, m := range list.Data {
 		if seen[m.ID] || !llm7Free(m) {
 			continue
 		}
 		seen[m.ID] = true
-		out = append(out, model.Model{
+		out = append(out, domain.Model{
 			ID:       m.ID,
 			Object:   "model",
 			OwnedBy:  "llm7",
@@ -92,7 +91,7 @@ func (u *LLM7Upstream) ListModels(ctx context.Context) ([]model.Model, error) {
 	return out, nil
 }
 
-func (u *LLM7Upstream) Models() []model.Model { return u.cache.Get() }
+func (u *LLM7Upstream) Models() []domain.Model { return u.cache.Get() }
 
 func (u *LLM7Upstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	resp, err := u.client.Post(ctx, "/chat/completions", body)

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 // TestPlaygroundCSSNoDesignViolations asserts that the playground CSS block
@@ -216,7 +216,7 @@ func TestPlaygroundModelsPartial(t *testing.T) {
 
 	// Happy path: with models
 	var buf bytes.Buffer
-	models := []model.Model{
+	models := []domain.Model{
 		{ID: "test-model-1", Provider: "opencode", IsFree: true},
 		{ID: "test-model-2", Provider: "kilo", IsFree: true},
 	}
@@ -235,7 +235,7 @@ func TestPlaygroundModelsPartial(t *testing.T) {
 
 	// Empty path: no models
 	buf.Reset()
-	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", []model.Model{}); err != nil {
+	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", []domain.Model{}); err != nil {
 		t.Fatalf("execute empty: %v", err)
 	}
 	body = buf.String()

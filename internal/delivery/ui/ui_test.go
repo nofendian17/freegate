@@ -7,23 +7,23 @@ import (
 	"time"
 
 	"freegate/internal/infrastructure/vpngate"
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 type fakeData struct {
 	metrics map[string]any
-	models  []model.Model
-	reqs    []model.RequestLogEntry
-	ts      []model.TimeseriesEntry
+	models  []domain.Model
+	reqs    []domain.RequestLogEntry
+	ts      []domain.TimeseriesEntry
 	uptime  int64
 	start   int64
 	vpnIP   string
 }
 
 func (f *fakeData) Metrics() map[string]any             { return f.metrics }
-func (f *fakeData) Models() []model.Model               { return f.models }
-func (f *fakeData) Requests() []model.RequestLogEntry   { return f.reqs }
-func (f *fakeData) Timeseries() []model.TimeseriesEntry { return f.ts }
+func (f *fakeData) Models() []domain.Model               { return f.models }
+func (f *fakeData) Requests() []domain.RequestLogEntry   { return f.reqs }
+func (f *fakeData) Timeseries() []domain.TimeseriesEntry { return f.ts }
 func (f *fakeData) UptimeSeconds() int64                { return f.uptime }
 func (f *fakeData) StartedAtUnix() int64                { return f.start }
 func (f *fakeData) VPNIP() string                       { return f.vpnIP }
@@ -42,14 +42,14 @@ func newTestHandler(t *testing.T) *Handler {
 			"output_tokens":   int64(500),
 			"per_upstream":    map[string]int64{"opencode": 30, "kilo": 12},
 		},
-		models: []model.Model{
+		models: []domain.Model{
 			{ID: "test-model-1", Provider: "opencode", IsFree: true},
 			{ID: "test-model-2", Provider: "kilo", IsFree: true},
 		},
-		reqs: []model.RequestLogEntry{
+		reqs: []domain.RequestLogEntry{
 			{Ts: time.Now(), Method: "POST", Path: "/v1/chat/completions", Model: "test-model-1", Upstream: "opencode", Status: 200, DurationMs: 1234, IP: "127.0.0.1"},
 		},
-		ts: []model.TimeseriesEntry{
+		ts: []domain.TimeseriesEntry{
 			{Ts: time.Now(), TotalRequests: 10, Errors: 0, PerUpstream: map[string]int{"opencode": 10}},
 		},
 		uptime: 90,

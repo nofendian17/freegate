@@ -82,6 +82,14 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	}()
 	select {
 	case <-ctx.Done():
+		// Drain the goroutine: if Dial succeeded after cancellation, close
+		// the connection so it is not leaked.
+		go func() {
+			ce := <-ch
+			if ce.conn != nil {
+				ce.conn.Close()
+			}
+		}()
 		return nil, ctx.Err()
 	case ce := <-ch:
 		return ce.conn, ce.err

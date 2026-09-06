@@ -70,33 +70,33 @@ func NewController(host string, ctrlPort int, minInterval time.Duration) *Contro
 // NewIP rotates the exit IP unless the minimum interval has not elapsed.
 // Returns nil even when skipped.
 func (c *Controller) NewIP() error {
-	c.mu.Lock()
-	elapsed := time.Since(c.lastRot)
-	if elapsed < c.minInterval {
-		c.mu.Unlock()
-		slog.Debug("vpngate: IP rotation skipped, too soon", "elapsed", elapsed.Round(time.Millisecond), "min", c.minInterval)
-		return nil
-	}
-	c.mu.Unlock()
-	return c.rotate()
+	return c.rotate(true)
 }
 
 // ForceNewIP rotates immediately, ignoring the minimum interval.
 // Used when the upstream returns 429.
 func (c *Controller) ForceNewIP() error {
 	slog.Info("vpngate: forcing IP rotation (bypassing interval)")
-	return c.rotate()
+	return c.rotate(false)
 }
 
-// rotate performs the HTTP call without holding a lock. It serializes
-// rotations via a tryLock so concurrent calls block instead of hammering
-// the supervisor.
-func (c *Controller) rotate() error {
+// rotate performs the HTTP call while holding the lock for both the interval
+// check and the rotation itself, eliminating the TOCTOU gap. checkInterval
+// controls whether the minimum interval is enforced.
+func (c *Controller) rotate(checkInterval bool) error {
 	if !c.mu.TryLock() {
 		slog.Debug("vpngate: rotation already in progress, skipping")
 		return nil
 	}
 	defer c.mu.Unlock()
+
+	if checkInterval {
+		elapsed := time.Since(c.lastRot)
+		if elapsed < c.minInterval {
+			slog.Debug("vpngate: IP rotation skipped, too soon", "elapsed", elapsed.Round(time.Millisecond), "min", c.minInterval)
+			return nil
+		}
+	}
 
 	resp, err := c.client.Post(c.ctrlURL+"/rotate", "application/json", nil)
 	if err != nil {

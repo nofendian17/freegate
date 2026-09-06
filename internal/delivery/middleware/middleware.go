@@ -192,32 +192,6 @@ func AdminAuth(adminToken string) func(http.Handler) http.Handler {
 	}
 }
 
-// Auth validates the API key if configured. Skips validation if no API key is set.
-// Deprecated: use ApiAuth instead.
-func Auth(requiredKey string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if requiredKey == "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			key := r.Header.Get("X-API-Key")
-			if key == "" {
-				// Also check Authorization header: "Bearer <key>"
-				auth := r.Header.Get("Authorization")
-				if len(auth) > 7 && auth[:7] == "Bearer " {
-					key = auth[7:]
-				}
-			}
-			if subtle.ConstantTimeCompare([]byte(key), []byte(requiredKey)) != 1 {
-				respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // RateLimiter provides per-IP rate limiting with sharded maps to avoid
 // global mutex contention under high concurrency.
 type RateLimiter struct {

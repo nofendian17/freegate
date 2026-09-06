@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/model"
 )
 
 type CustomUpstream struct {
@@ -68,7 +67,7 @@ func (u *CustomUpstream) Match(modelID string) bool {
 	return u.cache.Has(modelID)
 }
 
-func (u *CustomUpstream) ListModels(ctx context.Context) ([]model.Model, error) {
+func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 	body, err := u.client.ReadAll(ctx, "/models")
 	if err != nil {
 		return nil, fmt.Errorf("custom %s: fetch models: %w", u.name, err)
@@ -85,7 +84,7 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]model.Model, error) 
 		return nil, fmt.Errorf("custom %s: parse models: %w", u.name, err)
 	}
 	seen := map[string]bool{}
-	out := make([]model.Model, 0, len(list.Data))
+	out := make([]domain.Model, 0, len(list.Data))
 	for _, m := range list.Data {
 		if m.ID == "" || seen[m.ID] {
 			continue
@@ -99,15 +98,15 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]model.Model, error) 
 		if owner == "" {
 			owner = "custom:" + u.name
 		}
-		out = append(out, model.Model{ID: m.ID, Object: obj, Created: m.Created, OwnedBy: owner, IsFree: true, Provider: "custom:" + u.name})
+		out = append(out, domain.Model{ID: m.ID, Object: obj, Created: m.Created, OwnedBy: owner, IsFree: true, Provider: "custom:" + u.name})
 	}
 	u.cache.Set(out)
 	return out, nil
 }
 
-func (u *CustomUpstream) Models() []model.Model { return u.cache.Get() }
+func (u *CustomUpstream) Models() []domain.Model { return u.cache.Get() }
 
-func (u *CustomUpstream) SeedModels(m []model.Model) { u.cache.Set(m) }
+func (u *CustomUpstream) SeedModels(m []domain.Model) { u.cache.Set(m) }
 
 func (u *CustomUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	resp, err := u.client.Post(ctx, "/chat/completions", body)

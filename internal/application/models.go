@@ -3,14 +3,14 @@ package application
 import (
 	"sync"
 
-	"freegate/internal/model"
+	"freegate/internal/domain"
 )
 
 // RouterRegistry is the read-only model catalog from a single router
 // (or any compatible source). ModelService aggregates one or more of
 // these into a unified view.
 type RouterRegistry interface {
-	AllModels() []model.Model
+	AllModels() []domain.Model
 	IsReady() bool
 }
 
@@ -34,7 +34,7 @@ func (s *ModelService) AddRouter(r RouterRegistry) {
 }
 
 // AllModels returns the deduplicated union of models from all routers.
-func (s *ModelService) AllModels() []model.Model {
+func (s *ModelService) AllModels() []domain.Model {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -44,7 +44,7 @@ func (s *ModelService) AllModels() []model.Model {
 		total += len(r.AllModels())
 	}
 	seen := make(map[string]bool, total)
-	out := make([]model.Model, 0, total)
+	out := make([]domain.Model, 0, total)
 	for _, r := range s.routers {
 		for _, m := range r.AllModels() {
 			if !seen[m.ID] {

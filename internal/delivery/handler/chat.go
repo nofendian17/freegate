@@ -8,27 +8,33 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"freegate/internal/delivery/respond"
 	"freegate/internal/translate"
 )
 
-var responseModels []string
+var responseModels atomic.Value // stores []string, set once at startup
 
 func init() {
 	// Direct config via env RESPONSE_MODELS (comma-separated substrings)
+	var models []string
 	if v := os.Getenv("RESPONSE_MODELS"); v != "" {
 		for _, s := range strings.Split(v, ",") {
 			s = strings.TrimSpace(s)
 			if s != "" {
-				responseModels = append(responseModels, strings.ToLower(s))
+				models = append(models, strings.ToLower(s))
 			}
 		}
 	} else {
 		// default direct config for muse family
-		responseModels = []string{"muse-spark", "muse_spark"}
+		models = []string{"muse-spark", "muse_spark"}
 	}
+	responseModels.Store(models)
 }
+
+var responseModelsOnce sync.Once
 
 // SetResponseModels overrides the direct config (called from server wiring).
 func SetResponseModels(models []string) {
@@ -42,9 +48,16 @@ func SetResponseModels(models []string) {
 			lower = append(lower, m)
 		}
 	}
-	if len(lower) > 0 {
-		responseModels = lower
+	if len(lower) == 0 {
+		return
 	}
+	responseModelsOnce.Do(func() {
+		responseModels.Store(lower)
+	})
+}
+
+func getResponseModels() []string {
+	return responseModels.Load().([]string)
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +104,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Determine upstream target format. Muse models are served by /zen/v1/responses.
 	targetFormat := targetFormatForModel(modelID)
 
-	slog.Debug("chat translate", "model", modelID, "src", format, "dst", targetFormat, "path", r.URL.Path, "response_models", responseModels)
+	slog.Debug("chat translate", "model", modelID, "src", format, "dst", targetFormat, "path", r.URL.Path, "response_models", getResponseModels())
 	if os.Getenv("LOG_LEVEL") == "debug" || os.Getenv("UPSTREAM_CAPTURE") == "true" {
 		slog.Info("chat FMT", "model", modelID, "fmt", string(format)+"→"+string(targetFormat), "path", r.URL.Path)
 	}
@@ -165,7 +178,7 @@ func targetFormatForModel(modelID string) translate.Format {
 		base = strings.TrimSpace(base[:idx])
 	}
 	base = strings.ToLower(strings.TrimSpace(base))
-	for _, pat := range responseModels {
+	for _, pat := range getResponseModels() {
 		if pat != "" && strings.Contains(base, pat) {
 			return translate.FormatOpenAIResponses
 		}

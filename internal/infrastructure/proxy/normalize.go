@@ -22,6 +22,29 @@ type TokenUsage struct {
 	Total      int
 }
 
+// extractUsageFromMap extracts token usage from a usage map, handling both
+// OpenAI (prompt_tokens/completion_tokens/total_tokens) and Responses API
+// (input_tokens/output_tokens) field names.
+func extractUsageFromMap(u map[string]any) TokenUsage {
+	var tu TokenUsage
+	if p, ok := u["input_tokens"].(float64); ok {
+		tu.Prompt = int(p)
+	} else if p, ok := u["prompt_tokens"].(float64); ok {
+		tu.Prompt = int(p)
+	}
+	if c, ok := u["output_tokens"].(float64); ok {
+		tu.Completion = int(c)
+	} else if c, ok := u["completion_tokens"].(float64); ok {
+		tu.Completion = int(c)
+	}
+	if t, ok := u["total_tokens"].(float64); ok {
+		tu.Total = int(t)
+	} else {
+		tu.Total = tu.Prompt + tu.Completion
+	}
+	return tu
+}
+
 func copyNormalizedWithContext(ctx context.Context, w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
@@ -555,15 +578,29 @@ func extractUsageFromSSE(line string, current TokenUsage) TokenUsage {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return current
 	}
 	if chunk.Usage != nil {
-		current.Prompt = chunk.Usage.PromptTokens
-		current.Completion = chunk.Usage.CompletionTokens
-		current.Total = chunk.Usage.TotalTokens
+		if chunk.Usage.PromptTokens > 0 {
+			current.Prompt = chunk.Usage.PromptTokens
+		} else {
+			current.Prompt = chunk.Usage.InputTokens
+		}
+		if chunk.Usage.CompletionTokens > 0 {
+			current.Completion = chunk.Usage.CompletionTokens
+		} else {
+			current.Completion = chunk.Usage.OutputTokens
+		}
+		if chunk.Usage.TotalTokens > 0 {
+			current.Total = chunk.Usage.TotalTokens
+		} else {
+			current.Total = current.Prompt + current.Completion
+		}
 	}
 	return current
 }
@@ -622,7 +659,9 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 	body, err := io.ReadAll(src)
 	if err != nil {
 		slog.Warn("failed to read response body", "error", err)
-		dst.Write(body)
+		// Write a proper error response instead of partial/corrupt body
+		errResp := []byte(`{"error":{"type":"upstream_error","message":"failed to read upstream response"}}`)
+		dst.Write(errResp)
 		return TokenUsage{}
 	}
 
@@ -635,15 +674,7 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 	// Extract usage before normalizing
 	usage := TokenUsage{}
 	if u, ok := resp["usage"].(map[string]interface{}); ok {
-		if p, ok := u["prompt_tokens"].(float64); ok {
-			usage.Prompt = int(p)
-		}
-		if c, ok := u["completion_tokens"].(float64); ok {
-			usage.Completion = int(c)
-		}
-		if t, ok := u["total_tokens"].(float64); ok {
-			usage.Total = int(t)
-		}
+		usage = extractUsageFromMap(u)
 	}
 
 	syncMessageReasoning(resp)
@@ -925,8 +956,8 @@ func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter,
 	if err != nil {
 		return TokenUsage{}, err
 	}
-	if isResponsesJSONBytes(bodyBytes) {
-		return copyPassthroughJSONBytes(w, bodyBytes), nil
+	if ok, usage := isResponsesJSONBytes(bodyBytes); ok {
+		return copyPassthroughJSONBytes(w, bodyBytes, usage), nil
 	}
 	return normalizeJSONWithMeta(w, bytes.NewReader(bodyBytes), model, reqID), nil
 }
@@ -942,39 +973,45 @@ func isResponsesSSE(rd *bufio.Reader) bool {
 	return bytes.Contains(peek, []byte("event: response.")) || bytes.Contains(peek, []byte(`"type":"response.`))
 }
 
-func isResponsesJSONBytes(b []byte) bool {
-	// Responses JSON has "object":"response" and "output" array
-	return bytes.Contains(b, []byte(`"object"`)) && bytes.Contains(b, []byte(`"response"`)) && bytes.Contains(b, []byte(`"output"`))
-}
-
-func copyPassthroughJSONBytes(dst io.Writer, body []byte) TokenUsage {
-	var resp map[string]any
-	if err := json.Unmarshal(body, &resp); err == nil {
-		if u, ok := resp["usage"].(map[string]any); ok {
-			var tu TokenUsage
-			if p, ok := u["input_tokens"].(float64); ok {
-				tu.Prompt = int(p)
-			} else if p, ok := u["prompt_tokens"].(float64); ok {
-				tu.Prompt = int(p)
-			}
-			if c, ok := u["output_tokens"].(float64); ok {
-				tu.Completion = int(c)
-			} else if c, ok := u["completion_tokens"].(float64); ok {
-				tu.Completion = int(c)
-			}
-			tu.Total = tu.Prompt + tu.Completion
-			dst.Write(body)
-			return tu
+func isResponsesJSONBytes(b []byte) (bool, TokenUsage) {
+	// Responses JSON has "object":"response" and "output" array.
+	// Use proper JSON parsing instead of naive substring matching to avoid
+	// false positives on regular chat completions that happen to contain
+	// these substrings in nested fields.
+	// Also extract usage during this pass to avoid a second unmarshal in
+	// copyPassthroughJSONBytes.
+	var probe struct {
+		Object string          `json:"object"`
+		Output json.RawMessage `json:"output"`
+		Usage  json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return false, TokenUsage{}
+	}
+	if probe.Object != "response" || len(probe.Output) == 0 {
+		return false, TokenUsage{}
+	}
+	var usage TokenUsage
+	if len(probe.Usage) > 0 {
+		var u map[string]any
+		if json.Unmarshal(probe.Usage, &u) == nil {
+			usage = extractUsageFromMap(u)
 		}
 	}
+	return true, usage
+}
+
+func copyPassthroughJSONBytes(dst io.Writer, body []byte, usage TokenUsage) TokenUsage {
 	dst.Write(body)
-	return TokenUsage{}
+	return usage
 }
 
 func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader) TokenUsage {
-	// Copy SSE stream while extracting Responses usage from final response.completed event.
+	// Copy SSE stream while extracting Responses usage from the final
+	// response.completed event. Instead of buffering the entire stream,
+	// we scan SSE lines incrementally and only keep the last usage found.
 	var usage TokenUsage
-	var streamBuf bytes.Buffer
+	var lineBuf []byte
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -985,12 +1022,24 @@ func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader
 		n, err := src.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
-			streamBuf.Write(chunk)
 			if _, werr := dst.Write(chunk); werr != nil {
 				return usage
 			}
 			if fl, ok := dst.(http.Flusher); ok {
 				fl.Flush()
+			}
+			// Scan for complete SSE lines and check for response.completed
+			lineBuf = append(lineBuf, chunk...)
+			for {
+				idx := bytes.IndexByte(lineBuf, '\n')
+				if idx < 0 {
+					break
+				}
+				line := lineBuf[:idx]
+				lineBuf = lineBuf[idx+1:]
+				if u := extractUsageFromCompletedLine(line); u != nil {
+					usage = *u
+				}
 			}
 		}
 		if err == io.EOF {
@@ -1000,49 +1049,46 @@ func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader
 			break
 		}
 	}
-	// Parse accumulated stream for Responses usage in response.completed
-	// Format: event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"input_tokens":..., "output_tokens":...}}}
-	s := streamBuf.String()
-	// Find all data: lines that are response.completed
-	for _, block := range bytes.Split([]byte(s), []byte("\n\n")) {
-		if !bytes.Contains(block, []byte("response.completed")) {
-			continue
-		}
-		// Extract data: line
-		for _, line := range bytes.Split(block, []byte("\n")) {
-			if !bytes.HasPrefix(line, []byte("data: ")) {
-				continue
-			}
-			data := bytes.TrimPrefix(line, []byte("data: "))
-			var evt map[string]any
-			if err := json.Unmarshal(data, &evt); err != nil {
-				continue
-			}
-			// Try response.usage or usage
-			var u map[string]any
-			if resp, ok := evt["response"].(map[string]any); ok {
-				if usageMap, ok := resp["usage"].(map[string]any); ok {
-					u = usageMap
-				}
-			} else if usageMap, ok := evt["usage"].(map[string]any); ok {
-				u = usageMap
-			}
-			if u != nil {
-				if p, ok := u["input_tokens"].(float64); ok {
-					usage.Prompt = int(p)
-				} else if p, ok := u["prompt_tokens"].(float64); ok {
-					usage.Prompt = int(p)
-				}
-				if c, ok := u["output_tokens"].(float64); ok {
-					usage.Completion = int(c)
-				} else if c, ok := u["completion_tokens"].(float64); ok {
-					usage.Completion = int(c)
-				}
-				usage.Total = usage.Prompt + usage.Completion
-			}
-		}
-	}
 	return usage
+}
+
+// extractUsageFromCompletedLine checks if an SSE line contains a
+// response.completed event with usage data, and returns it if found.
+func extractUsageFromCompletedLine(line []byte) *TokenUsage {
+	if !bytes.HasPrefix(line, []byte("data: ")) {
+		return nil
+	}
+	data := bytes.TrimPrefix(line, []byte("data: "))
+	data = bytes.TrimRight(data, "\r\n")
+	if len(data) == 0 || data[0] != '{' {
+		return nil
+	}
+	// Pre-filter: only response.completed events carry usage data.
+	// This avoids json.Unmarshal on every delta event (200-500+ per stream).
+	if !bytes.Contains(data, []byte("response.completed")) {
+		return nil
+	}
+	var evt map[string]any
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return nil
+	}
+	// Must be a response.completed event
+	if evt["type"] != "response.completed" {
+		return nil
+	}
+	var u map[string]any
+	if resp, ok := evt["response"].(map[string]any); ok {
+		if usageMap, ok := resp["usage"].(map[string]any); ok {
+			u = usageMap
+		}
+	} else if usageMap, ok := evt["usage"].(map[string]any); ok {
+		u = usageMap
+	}
+	if u == nil {
+		return nil
+	}
+	tu := extractUsageFromMap(u)
+	return &tu
 }
 
 func copyPassthroughJSON(dst io.Writer, src io.Reader) TokenUsage {
@@ -1054,18 +1100,7 @@ func copyPassthroughJSON(dst io.Writer, src io.Reader) TokenUsage {
 	var resp map[string]any
 	if err := json.Unmarshal(body, &resp); err == nil {
 		if u, ok := resp["usage"].(map[string]any); ok {
-			var tu TokenUsage
-			if p, ok := u["input_tokens"].(float64); ok {
-				tu.Prompt = int(p)
-			} else if p, ok := u["prompt_tokens"].(float64); ok {
-				tu.Prompt = int(p)
-			}
-			if c, ok := u["output_tokens"].(float64); ok {
-				tu.Completion = int(c)
-			} else if c, ok := u["completion_tokens"].(float64); ok {
-				tu.Completion = int(c)
-			}
-			tu.Total = tu.Prompt + tu.Completion
+			tu := extractUsageFromMap(u)
 			dst.Write(body)
 			return tu
 		}
