@@ -31,6 +31,7 @@ services:
     # Published by GoReleaser to GHCR on every tagged release.
     # To build from source instead: docker compose up -d --build
     image: ghcr.io/nofendian17/freegate:latest
+    pull_policy: always
     build: .
     container_name: fg-proxy
     ports:
@@ -61,6 +62,9 @@ services:
       # false; lines contain full conversation content, enable only while
       # debugging.
       - UPSTREAM_CAPTURE=${UPSTREAM_CAPTURE:-false}
+      - PROVIDERS_DB_PATH=/data/providers.db
+    volumes:
+      - fg-data:/data
     depends_on:
       vpn:
         condition: service_healthy
@@ -72,6 +76,9 @@ services:
     restart: unless-stopped
     networks:
       - fg-net
+
+volumes:
+  fg-data:
 
 networks:
   fg-net:
