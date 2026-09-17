@@ -143,6 +143,21 @@ func TestChatServiceProxyChatUpstreamError(t *testing.T) {
 	}
 }
 
+func TestChatService_Chain_NilLastIs502(t *testing.T) {
+	nilUp := &mockUpstream{name: "nil", response: nil}
+	r := &mockChainRouter{chain: []domain.Upstream{nilUp}}
+	svc := NewChatService(r, nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := &recordingResponseWriter{header: http.Header{}}
+	// Must return an error (mapped to 502 by the handler), not panic.
+	if err := svc.ProxyChat(context.Background(), w, req, "m", []byte(`{}`)); err == nil {
+		t.Fatal("expected error for nil last response")
+	}
+	if nilUp.calls != 1 {
+		t.Fatalf("calls=%d", nilUp.calls)
+	}
+}
+
 type mockChainRouter struct{ chain []domain.Upstream }
 
 func (m *mockChainRouter) Select(modelID string) domain.Upstream {
@@ -171,6 +186,29 @@ func TestChatService_Chain_FallsOverOn429(t *testing.T) {
 	}
 	if second.calls != 1 {
 		t.Fatalf("expected failover to second upstream, calls=%d", second.calls)
+	}
+}
+
+func TestChatService_Chain_FailsOverOnFreeTierRejection(t *testing.T) {
+	first := &mockUpstream{name: "opencode", response: &domain.UpstreamResponse{
+		StatusCode: 403,
+		Body:       io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"FreeTierError","message":"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"}}`)),
+		Header:     http.Header{},
+	}}
+	second := &mockUpstream{name: "custom:b", response: &domain.UpstreamResponse{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		Header:     http.Header{},
+	}}
+	r := &mockChainRouter{chain: []domain.Upstream{first, second}}
+	svc := NewChatService(r, nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	if err := svc.ProxyChat(context.Background(), w, req, "assistant", []byte(`{"model":"assistant"}`)); err != nil {
+		t.Fatalf("proxy: %v", err)
+	}
+	if first.calls != 1 || second.calls != 1 {
+		t.Fatalf("expected failover after free-tier rejection, calls=%d,%d", first.calls, second.calls)
 	}
 }
 

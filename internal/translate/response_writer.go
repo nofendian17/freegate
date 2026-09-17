@@ -16,12 +16,13 @@ import (
 // streamState bundles the per-direction streaming state holders. Only
 // one of these is non-nil for any (src, dst) pair.
 type streamState struct {
-	oaiToClaude    *claude.StreamState         // src=OpenAI, dst=Claude
-	claudeToOAI    *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
-	oaiToGemini    *gemini.StreamState         // src=OpenAI, dst=Gemini
-	geminiToOAI    *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
-	oaiToResponses *responses.StreamState      // src=OpenAI, dst=Responses
-	responsesToOAI *responses.StreamState      // src=Responses, dst=OpenAI
+	oaiToClaude     *claude.StreamState         // src=OpenAI, dst=Claude
+	claudeToOAI     *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
+	claudeToOAIDone bool                        // [DONE] already emitted for src=Claude, dst=OpenAI
+	oaiToGemini     *gemini.StreamState         // src=OpenAI, dst=Gemini
+	geminiToOAI     *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
+	oaiToResponses  *responses.StreamState      // src=OpenAI, dst=Responses
+	responsesToOAI  *responses.StreamState      // src=Responses, dst=OpenAI
 }
 
 // ResponseWriter wraps an http.ResponseWriter to translate upstream
@@ -108,6 +109,10 @@ func (rw *ResponseWriter) Close() error {
 		return nil
 	}
 	if rw.isStream {
+		if rw.src == FormatClaude && rw.dst == FormatOpenAI && rw.state != nil && !rw.state.claudeToOAIDone {
+			rw.state.claudeToOAIDone = true
+			rw.writeLine("data: [DONE]\n\n")
+		}
 		return nil
 	}
 	if rw.buf.Len() == 0 {
@@ -245,6 +250,10 @@ func (rw *ResponseWriter) streamClaudeToOpenAI(p []byte) (int, error) {
 		events := state.ProcessChunk(chunk)
 		for _, evt := range events {
 			rw.writeLine(evt)
+		}
+		if eventType, _ := chunk["type"].(string); eventType == "message_stop" && !rw.state.claudeToOAIDone {
+			rw.state.claudeToOAIDone = true
+			rw.writeLine("data: [DONE]\n\n")
 		}
 	}
 	return len(p), nil

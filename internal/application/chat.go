@@ -11,6 +11,7 @@ import (
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
 	proxyinfra "freegate/internal/infrastructure/proxy"
+	"freegate/internal/translate"
 )
 
 // Router selects an Upstream for a given model ID.
@@ -20,6 +21,19 @@ type Router interface {
 
 type chainSelector interface {
 	SelectChain(modelID string) []domain.Upstream
+}
+
+// isCandidateRetryable mirrors the combo tier policy: 429/5xx plus
+// free-tier access rejections, which are candidate-scoped rather than
+// request-scoped.
+func isCandidateRetryable(rsp *domain.UpstreamResponse) bool {
+	if rsp == nil {
+		return true
+	}
+	if rsp.StatusCode == http.StatusTooManyRequests || rsp.StatusCode >= 500 {
+		return true
+	}
+	return rsp.StatusCode >= 400 && domain.IsFreeTierRejection(rsp)
 }
 
 func (s *ChatService) candidates(modelID string) []domain.Upstream {
@@ -166,7 +180,24 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 			slog.Error("upstream request failed", "request_id", requestID, "upstream", u.Name(), "error", err)
 			return wrappedErr
 		}
-		if (rsp.StatusCode == http.StatusTooManyRequests || rsp.StatusCode >= 500) && !last {
+		if rsp == nil {
+			// Defensive: the contract forbids (nil, nil), but a nil
+			// response must fail over like a transport error, never panic
+			// on the status read below.
+			if !last {
+				slog.Warn("upstream returned nil response, trying next candidate", "request_id", requestID, "upstream", u.Name())
+				continue
+			}
+			wrappedErr := fmt.Errorf("upstream request: %s returned nil response", u.Name())
+			if s.metrics != nil {
+				s.metrics.UpstreamErrors.Add(1)
+			}
+			finalStatus = http.StatusBadGateway
+			finalErr = wrappedErr
+			slog.Error("upstream returned nil response", "request_id", requestID, "upstream", u.Name())
+			return wrappedErr
+		}
+		if isCandidateRetryable(rsp) && !last {
 			slog.Warn("upstream retryable status, trying next candidate", "request_id", requestID, "upstream", u.Name(), "status", rsp.StatusCode)
 			rsp.Close()
 			continue
@@ -208,6 +239,14 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	// the error pass-through above copies upstream headers verbatim and must
 	// not leak these to the client. NormalizeDomainResponseWithContext
 	// strips them before writing the client response.
+	if source := translate.Format(resp.Format); source != "" {
+		target := translate.RequestFormat(ctx, body)
+		if source != target {
+			wr := translate.NewResponseWriterWithDst(w, source, target)
+			defer wr.Close()
+			w = wr
+		}
+	}
 	resp.Header.Set("X-Fg-Model", modelID)
 	resp.Header.Set("X-Fg-Request-Id", requestID)
 	usage, err := proxyinfra.NormalizeDomainResponseWithContext(ctx, w, resp)

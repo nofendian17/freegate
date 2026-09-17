@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -20,8 +21,8 @@ type tierStub struct {
 	gotBody []byte
 }
 
-func (s *tierStub) Name() string                                          { return s.name }
-func (s *tierStub) Match(id string) bool                                  { return true }
+func (s *tierStub) Name() string                                           { return s.name }
+func (s *tierStub) Match(id string) bool                                   { return true }
 func (s *tierStub) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (s *tierStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	s.calls++
@@ -31,8 +32,46 @@ func (s *tierStub) ChatCompletion(ctx context.Context, b []byte) (*domain.Upstre
 	_, _ = io.WriteString(rec, s.body)
 	return domain.NewUpstreamResponse(rec.Result()), nil
 }
-func (s *tierStub) Models() []domain.Model                      { return nil }
+func (s *tierStub) Models() []domain.Model                     { return nil }
 func (s *tierStub) Start(ctx context.Context, d time.Duration) {}
+
+func TestComboUpstream_MessagesTierToolSchema(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw struct {
+			Model string `json:"model"`
+			Tools []struct {
+				Name        string         `json:"name"`
+				InputSchema map[string]any `json:"input_schema"`
+			} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path != "/messages" || raw.Model != "union-alpha" {
+			t.Errorf("path=%s model=%s", r.URL.Path, raw.Model)
+		}
+		if len(raw.Tools) != 1 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+			t.Errorf("invalid Messages tools: %+v", raw.Tools)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_test","type":"message","role":"assistant","model":"union-alpha","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer srv.Close()
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, http.DefaultTransport.(*http.Transport).Clone(), nil)
+	cu := NewComboUpstream("assistant", []ComboTier{{Upstream: u, Model: "union-alpha"}})
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"assistant","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{}}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
 
 func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
 	t1 := &tierStub{name: "opencode", status: 429, body: `{"error":"slow"}`}
@@ -56,6 +95,23 @@ func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
 	}
 	if string(t3.gotBody) != string(body) {
 		t.Fatalf("body rewritten: %q", t3.gotBody)
+	}
+}
+
+func TestComboUpstream_FreeTierRejection_FailsOver(t *testing.T) {
+	t1 := &tierStub{name: "opencode", status: 403, body: `{"type":"error","error":{"type":"FreeTierError","message":"Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"}}`}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("assistant", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"assistant","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if t1.calls != 1 || t2.calls != 1 {
+		t.Fatalf("calls=%d,%d", t1.calls, t2.calls)
 	}
 }
 
@@ -102,13 +158,13 @@ func TestComboUpstream_AllNilResponse_ErrorNoPanic(t *testing.T) {
 
 type nilStub struct{ name string }
 
-func (s *nilStub) Name() string                                          { return s.name }
-func (s *nilStub) Match(id string) bool                                  { return true }
+func (s *nilStub) Name() string                                           { return s.name }
+func (s *nilStub) Match(id string) bool                                   { return true }
 func (s *nilStub) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (s *nilStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
-func (s *nilStub) Models() []domain.Model                      { return nil }
+func (s *nilStub) Models() []domain.Model                     { return nil }
 func (s *nilStub) Start(ctx context.Context, d time.Duration) {}
 
 func TestComboRouter_AllModels_StableOrder(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,11 +16,12 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/upstream/types"
+	"freegate/internal/translate"
 )
 
-// OpenCode Zen User-Agent from 9router PR #4111:
-// feat(opencode): route union-alpha through Messages API with compliant Zen headers.
-const openCodeUA = "opencode/1.18.31 ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14"
+// OpenCode Zen client identity (User-Agent version cache, canonical
+// session IDs) lives in opencode_identity.go, mirroring 9router PR #10
+// (cherry-pick of decolua#4105) for the gateway's free-tier validation.
 
 // Models served by /zen/v1/messages (Anthropic Messages API).
 // Union Alpha is a Claude-format model on the Zen gateway.
@@ -51,11 +53,11 @@ func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http
 	// Static headers for catalog fetches (/models). Chat requests build
 	// compliant per-request Zen headers in ChatCompletion (see buildOpencodeHeaders),
 	// mirroring 9router's OpenCodeExecutor.buildHeaders: fresh session/request
-	// IDs per call, 40-hex project ID, cli client tag, and anthropic-version
+	// IDs per call, desktop client tag, global project, and anthropic-version
 	// for /messages models.
 	headers := map[string]string{
-		"x-opencode-client": "cli",
-		"User-Agent":        openCodeUA,
+		"x-opencode-client": "desktop",
+		"User-Agent":        openCodeUserAgent(),
 		"x-api-key":         "public",
 	}
 	al := make(map[string]bool, len(freeAllowlist))
@@ -106,6 +108,10 @@ func (o *OpenCodeUpstream) Name() string {
 }
 
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
+	// Client-version probe runs alongside the model catalog refresher so
+	// the advertised User-Agent tracks OpenCode releases. Fail-open: a
+	// failed probe keeps the fallback version.
+	go NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
 	refresher := NewRefresher("opencode", func(ctx context.Context) error {
 		models, err := o.ListModels(ctx)
 		if err != nil {
@@ -172,7 +178,17 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	if o.isMessagesModel(model) {
 		out = ensureMessagesMaxTokens(body)
 	}
-	headers := buildOpencodeHeaders(endpoint, out)
+	// Anonymous free-tier requests are only served as streams (verified
+	// live: non-streaming bodies get 403 FreeTierError on every endpoint).
+	// Upgrade non-streaming anonymous requests to stream:true and fold the
+	// SSE back into one native JSON object so callers see no difference.
+	// Keyed requests keep native behavior.
+	if !isStreamBody(out) && o.anonymousOnly() {
+		out = ensureStreamRequest(out, endpoint)
+		return o.chatCompletionStreamAssembled(ctx, endpoint, out)
+	}
+	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	logZenRequest(endpoint, headers, out)
 	// x-api-key/Authorization sync is handled per attempt inside
 	// HTTPClient.doWithHeaders: when Authorization carries a non-public key
 	// but x-api-key is still the default "public", the client mirrors the
@@ -181,7 +197,103 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	if err != nil {
 		return nil, err
 	}
-	return domain.NewUpstreamResponse(resp), nil
+	result := domain.NewUpstreamResponse(resp)
+	result.Format = string(o.RequestFormat(out))
+	return result, nil
+}
+
+// anonymousOnly reports whether every configured key is the anonymous
+// public marker (or unset). Deliberately configuration-based, not
+// selection-based: peeking at key rotation would advance it (currentKey
+// increments the round-robin counter), so the upgrade decision could end
+// up using a different key than the request.
+func (o *OpenCodeUpstream) anonymousOnly() bool {
+	if o == nil || o.client == nil {
+		return true
+	}
+	keys := o.client.apiKeys
+	if len(keys) == 0 {
+		return true
+	}
+	for _, k := range keys {
+		if k != "" && k != "public" {
+			return false
+		}
+	}
+	return true
+}
+
+// ensureStreamRequest enables streaming on a non-streaming body.
+// stream_options.include_usage is OpenAI-chat-only: Messages and Responses
+// bodies just get stream:true, which both natively support.
+func ensureStreamRequest(body []byte, endpoint string) []byte {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return body
+	}
+	raw["stream"] = true
+	if strings.HasSuffix(endpoint, "/chat/completions") {
+		if _, ok := raw["stream_options"]; !ok {
+			raw["stream_options"] = map[string]any{"include_usage": true}
+		}
+	}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// chatCompletionStreamAssembled posts a streaming request and folds the SSE
+// back into one native JSON response. Non-SSE replies (e.g. JSON errors)
+// pass through untouched for the usual failover handling.
+func (o *OpenCodeUpstream) chatCompletionStreamAssembled(ctx context.Context, endpoint string, out []byte) (*domain.UpstreamResponse, error) {
+	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	logZenRequest(endpoint, headers, out)
+	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || resp.Body == nil {
+		return nil, fmt.Errorf("opencode: nil upstream response")
+	}
+	// Only assemble 200 SSE streams. Anything else (e.g. a JSON error with
+	// an unusual content type) passes through untouched so failover sees
+	// the real status and body.
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		result := domain.NewUpstreamResponse(resp)
+		result.Format = string(o.RequestFormat(out))
+		return result, nil
+	}
+	defer resp.Body.Close()
+	model := extractOpencodeModel(out)
+	assembled, err := assembleUpstreamStream(endpoint, resp.Body, model, MaxResponseBodySize)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: assemble stream: %w", err)
+	}
+	header := resp.Header.Clone()
+	if header == nil {
+		header = make(http.Header)
+	}
+	header.Set("Content-Type", "application/json")
+	header.Del("Content-Length")
+	return &domain.UpstreamResponse{
+		Format:     string(o.RequestFormat(out)),
+		StatusCode: resp.StatusCode,
+		Header:     header,
+		Body:       io.NopCloser(bytes.NewReader(assembled)),
+	}, nil
+}
+
+func (o *OpenCodeUpstream) RequestFormat(body []byte) translate.Format {
+	switch o.buildURL(extractOpencodeModel(body), body) {
+	case "/messages":
+		return translate.FormatClaude
+	case "/responses":
+		return translate.FormatOpenAIResponses
+	default:
+		return translate.FormatOpenAI
+	}
 }
 
 func (o *OpenCodeUpstream) buildURL(model string, body []byte) string {
@@ -197,6 +309,39 @@ func (o *OpenCodeUpstream) buildURL(model string, body []byte) string {
 		return "/responses"
 	}
 	return "/chat/completions"
+}
+
+// genSessionID returns an x-opencode-session in canonical descending form:
+// ses_ + 12 lowercase hex chars (low 6 bytes of ~(ms*0x1000 + counter)) +
+// 14 Base62 chars. The bitwise complement makes lexicographic order
+// reverse-chronological; the gateway validates this shape for free-tier
+// requests (9router PR #10). Uses the shared module counter.
+// genRequestID returns an x-opencode-request in canonical form:
+// msg_ + 12 lowercase hex chars (low 6 bytes of ms*0x1000 + 1, no
+// complement) + 14 Base62 chars. The counter is fixed at 1 and the shared
+// module counter is left untouched, mirroring 9router exactly.
+func genSessionID() string {
+	return genOpencodeIDWithClock("ses", true)
+}
+
+func genRequestID() string {
+	val := uint64(time.Now().UnixMilli())*0x1000 + 1
+	var timeBytes [8]byte
+	binary.BigEndian.PutUint64(timeBytes[:], val)
+	timeHex := hex.EncodeToString(timeBytes[2:])
+	var sb strings.Builder
+	sb.WriteString("msg_")
+	sb.WriteString(timeHex)
+	var rb [14]byte
+	if _, err := rand.Read(rb[:]); err != nil {
+		for i := range rb {
+			rb[i] = byte(i % 62)
+		}
+	}
+	for _, b := range rb {
+		sb.WriteByte(opencodeIDChars[int(b)%62])
+	}
+	return sb.String()
 }
 
 // baseModelID strips the thinking suffix "model(level)" so registry lookups
@@ -292,24 +437,55 @@ func ensureMessagesMaxTokens(body []byte) []byte {
 }
 
 // buildOpencodeHeaders returns compliant per-request Zen headers per 9router
-// PR #4111: Bearer public + x-api-key public, first-party UA, cli client
-// tag, timestamp-encoded session/request IDs, 40-hex project ID, streaming
-// Accept, and anthropic-version for /messages.
-func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
+// PR #4111 and PR #10: Bearer public + x-api-key public, versioned
+// first-party UA, desktop client tag, canonical session/request IDs,
+// global project, streaming Accept, and anthropic-version for /messages.
+func buildOpencodeHeaders(ctx context.Context, endpoint string, body []byte) map[string]string {
 	stream := isStreamBody(body)
 	isMessages := strings.HasSuffix(endpoint, "/messages")
 	accept := "*/*"
 	if stream {
 		accept = "text/event-stream"
 	}
+	id := translate.DownstreamIdentityFrom(ctx)
+	ua := openCodeUserAgent()
+	if translate.ValidOpencodeVersion(id.UserAgent) {
+		ua = id.UserAgent
+	}
+	session := genSessionID()
+	if id.Session != "" {
+		tool := id.Client
+		if tool == "" {
+			tool = "generic"
+		}
+		session = translate.TranslateSessionID(id.Session, tool)
+	}
+	// Downstream request/client/project values pass through verbatim when
+	// present. Unlike sessions they are NOT canonicalized: genuine clients
+	// send stable non-canonical values here (account-bound user IDs, real
+	// project hashes), and forcing them into msg_/canonical shape would
+	// destroy exactly the identity a chained genuine client provides.
+	// Lengths are already capped at extraction (ClipIdentity).
+	request := genRequestID()
+	if id.RequestID != "" {
+		request = id.RequestID
+	}
+	client := "desktop"
+	if id.Client != "" {
+		client = id.Client
+	}
+	project := "global"
+	if id.Project != "" {
+		project = id.Project
+	}
 	headers := map[string]string{
 		"Content-Type":       "application/json",
 		"x-api-key":          "public",
-		"User-Agent":         openCodeUA,
-		"x-opencode-client":  "cli",
-		"x-opencode-session": genOpencodeID("ses"),
-		"x-opencode-request": genOpencodeID("msg"),
-		"x-opencode-project": genProjectID(),
+		"User-Agent":         ua,
+		"x-opencode-client":  client,
+		"x-opencode-session": session,
+		"x-opencode-request": request,
+		"x-opencode-project": project,
 		"Accept":             accept,
 	}
 	if isMessages {
@@ -355,13 +531,11 @@ func isResponsesBody(body []byte) bool {
 	return false
 }
 
-// genOpencodeID mirrors 9router's genId(prefix): (ms*0x1000+counter) rendered
-// as 12 hex chars (low 6 bytes, big-endian) + 14 alphanumerics.
-// Produces ses_/msg_ IDs matching /^(ses|msg)_[0-9a-f]{12}[0-9A-Za-z]{14}$/.
-// Note: at current epoch ms*0x1000 needs ~53 bits, so the low-48-bit slice
-// truncates the high bits — IDs are unique per process (counter + crypto
-// rand suffix) but not timestamp-decodable/monotonic long-term. Kept at 12
-// hex chars for 9router parity.
+// genOpencodeID mirrors 9router's request ID generation:
+// (ms*0x1000+counter) rendered as 12 hex chars (low 6 bytes, big-endian)
+// + 14 alphanumerics. Produces msg_ IDs matching
+// /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/. Session IDs (ses_) additionally
+// apply the canonical bitwise complement — see genSessionID.
 var (
 	opencodeIDMu      sync.Mutex
 	opencodeIDLast    int64
@@ -371,6 +545,10 @@ var (
 const opencodeIDChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 func genOpencodeID(prefix string) string {
+	return genOpencodeIDWithClock(prefix, false)
+}
+
+func genOpencodeIDWithClock(prefix string, complement bool) string {
 	now := time.Now().UnixMilli()
 	opencodeIDMu.Lock()
 	if now != opencodeIDLast {
@@ -382,6 +560,9 @@ func genOpencodeID(prefix string) string {
 	opencodeIDMu.Unlock()
 
 	val := uint64(now)*0x1000 + uint64(counter)
+	if complement {
+		val = ^val
+	}
 	var timeBytes [8]byte
 	binary.BigEndian.PutUint64(timeBytes[:], val)
 	// Take the low 6 bytes, rendered as 12 hex chars.
@@ -410,16 +591,6 @@ func genOpencodeID(prefix string) string {
 		sb.WriteByte(opencodeIDChars[int(b)%62])
 	}
 	return sb.String()
-}
-
-// genProjectID returns 40 lowercase hex chars (20 random bytes).
-// Mirrors 9router's generateProjectId (crypto.randomBytes(20).toString("hex")).
-func genProjectID() string {
-	var b [20]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return strings.Repeat("0", 40)
-	}
-	return hex.EncodeToString(b[:])
 }
 
 // genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.

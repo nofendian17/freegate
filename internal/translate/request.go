@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"context"
 	"fmt"
 
 	"freegate/internal/translate/claude"
@@ -36,6 +37,19 @@ import (
 // after both so any synthetic tool messages it inserts use the sanitized
 // ids. AdjustMaxTokens runs last so it sees the final tools array and
 // (possibly) inserted tool messages.
+type requestFormatKey struct{}
+
+func WithRequestFormat(ctx context.Context, format Format) context.Context {
+	return context.WithValue(ctx, requestFormatKey{}, format)
+}
+
+func RequestFormat(ctx context.Context, body []byte) Format {
+	if format, ok := ctx.Value(requestFormatKey{}).(Format); ok {
+		return format
+	}
+	return Detect(body)
+}
+
 func Request(body []byte, source, target Format) ([]byte, error) {
 	if source == target {
 		return prepost.NormalizeRoles(body)

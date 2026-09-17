@@ -42,7 +42,8 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPSTREAM_URL_OPENCODE` | No | `https://opencode.ai/zen/v1` | OpenCode base URL |
-| `UPSTREAM_KEY_OPENCODE` | No | `public` | Bearer token attached to every OpenCode request. OpenCode also gets `x-api-key: public`, `x-opencode-client: cli`, per-request `x-opencode-session`/`x-opencode-request` IDs, 40-hex `x-opencode-project`, first-party `User-Agent`, and `anthropic-version: 2023-06-01` for Messages models (per 9router PR #4111). |
+| `UPSTREAM_KEY_OPENCODE` | No | `public` | Bearer token attached to every OpenCode request. OpenCode also gets `x-api-key: public`, `x-opencode-client: desktop`, canonical per-request `x-opencode-session`/`x-opencode-request` IDs, `x-opencode-project: global`, first-party `User-Agent`, and `anthropic-version: 2023-06-01` for Messages models (per 9router PR #4111 and PR #10). When the downstream client sends its own Zen identity headers (`User-Agent: opencode/…`, `x-opencode-session`, `x-opencode-request`, `x-opencode-client`, `x-opencode-project`), valid values are forwarded upstream (foreign sessions are deterministically mapped to canonical form); otherwise freegate mints fresh ones. Note: the gateway now rejects anonymous free-tier use with 403 `FreeTierError` ("can only be used from within OpenCode"); set a real Zen API key here, use another upstream, or let combos fail over. |
+| `OPENCODE_CLIENT_VERSION` | No | _(auto)_ | Pins the `opencode/<version>` User-Agent sent to the Zen gateway. Empty = track the latest OpenCode release (refreshed every 12h, falls back to `1.18.31` offline). The gateway requires >= `1.17.0`. |
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | No | `big-pickle` | Comma-separated model IDs that are free on OpenCode but don't follow the `-free` naming convention. Default includes `big-pickle` (served as deepseek-v4-flash with cost 0). |
 | `UPSTREAM_REFRESH_OPENCODE` | No | `60` | How often to refresh the OpenCode `/models` catalog (seconds) |
 
@@ -80,7 +81,7 @@ Built-in upstreams (opencode/kilo/llm7) stay env-configured. User providers live
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `UPSTREAM_CAPTURE` | No | `false` | Raw upstream response logging via slog. When `true`, every upstream response line is printed to stdout/stderr as `INFO msg="upstream raw response"` carrying `request_id` and `model` — one record per SSE line, including streams that end without `[DONE]`/`finish_reason`. Lines contain full conversation content: enable only while debugging, on trusted machines. Wired in `server.go` → `ChatService.WithRawUpstreamLog` → `application/rawupstream.go::rawLineLogger`. |
+| `UPSTREAM_CAPTURE` | No | `false` | Raw upstream response logging via slog. When `true`, every upstream response line is printed to stdout/stderr as `INFO msg="upstream raw response"` carrying `request_id` and `model` — one record per SSE line, including streams that end without `[DONE]`/`finish_reason`. Also logs each outgoing Zen request as `INFO msg="upstream zen request"` with endpoint, wire headers, and body (credentials always redacted except the anonymous `public` markers). Lines contain full conversation content: enable only while debugging, on trusted machines. Wired in `server.go` → `ChatService.WithRawUpstreamLog` → `application/rawupstream.go::rawLineLogger`; request side in `upstream/logZenRequest`. |
 
 Related (no env needed): degenerate upstream responses — HTTP 200 with no content/tool calls at all — are always logged as `WARN msg="upstream empty completion"` with `model` + `request_id`, regardless of this switch.
 
