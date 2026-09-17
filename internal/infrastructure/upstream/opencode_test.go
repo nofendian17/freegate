@@ -443,9 +443,10 @@ func TestOpenCode_AnonymousInjectsNoopTools_KeyedDoesNot(t *testing.T) {
 		t.Fatalf("anon body not json: %v", err)
 	}
 	tools, ok := raw["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("anon body missing injected noop tools: %s", gotBody)
+	if !ok {
+		t.Fatalf("anon body missing injected stub tools: %s", gotBody)
 	}
+	expectGateNames(t, tools)
 
 	keyed := NewOpenCodeUpstream(srv.URL, []string{"sk-real"}, nil, nil)
 	resp, err = keyed.ChatCompletion(context.Background(), in)
