@@ -100,13 +100,17 @@ func (c *HTTPClient) Get(ctx context.Context, path string) (*http.Response, erro
 }
 
 func (c *HTTPClient) Post(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	return c.PostWithHeaders(ctx, path, body, nil)
+}
+
+func (c *HTTPClient) PostWithHeaders(ctx context.Context, path string, body []byte, extra map[string]string) (*http.Response, error) {
 	// Strip `n` parameter (number of choices). Most providers only support
 	// n=1 and return 422 if n > 1; freegate only processes the first choice.
 	cleaned, err := stripN(body)
 	if err != nil {
 		return nil, fmt.Errorf("strip n: %w", err)
 	}
-	return c.do(ctx, func() (*http.Request, error) {
+	return c.doWithHeaders(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewReader(cleaned))
 		if err != nil {
 			return nil, fmt.Errorf("build POST request: %w", err)
@@ -120,7 +124,7 @@ func (c *HTTPClient) Post(ctx context.Context, path string, body []byte) (*http.
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		return req, nil
-	})
+	}, extra)
 }
 
 // do sends a request, retrying on 429 with the next API key so a rate-limited
@@ -128,6 +132,10 @@ func (c *HTTPClient) Post(ctx context.Context, path string, body []byte) (*http.
 // into a short cooldown and are skipped by later requests. A single key keeps
 // the previous behavior: a 429 is returned as-is.
 func (c *HTTPClient) do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	return c.doWithHeaders(ctx, build, nil)
+}
+
+func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Request, error), extra map[string]string) (*http.Response, error) {
 	attempts := len(c.apiKeys)
 	if attempts < 1 {
 		attempts = 1
@@ -141,6 +149,17 @@ func (c *HTTPClient) do(ctx context.Context, build func() (*http.Request, error)
 		req.Header.Set("Authorization", "Bearer "+key)
 		for k, v := range c.headers {
 			req.Header.Set(k, v)
+		}
+		for k, v := range extra {
+			req.Header.Set(k, v)
+		}
+		// Keep x-api-key in sync with the bearer actually used. Callers
+		// (e.g. OpenCode) default x-api-key to "public"; when rotation
+		// selects a different key — including 429 failover to the next key
+		// — mirror it so the pair never mismatches. An explicitly
+		// non-public x-api-key is left untouched.
+		if key != "" && key != "public" && strings.EqualFold(req.Header.Get("x-api-key"), "public") {
+			req.Header.Set("x-api-key", key)
 		}
 
 		resp, err := c.client.Do(req)
