@@ -3,9 +3,13 @@ package upstream
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"freegate/internal/translate"
 )
 
 func newTestOpenCode(t *testing.T, body string) *OpenCodeUpstream {
@@ -193,18 +197,198 @@ func TestOpenCode_EnsureMessagesMaxTokens(t *testing.T) {
 	}
 }
 
+func TestOpenCode_BuildHeaders_ForwardsDownstreamIdentity(t *testing.T) {
+	ctx := translate.WithDownstreamIdentity(context.Background(), translate.DownstreamIdentity{
+		UserAgent: "opencode/1.18.31",
+		Session:   "ses_0afae3e4c001AmMPIe8RFqNeTF",
+		RequestID: "usr_testuser000000000000000001",
+		Client:    "cli",
+		Project:   "prj_test0000000000000000000001",
+	})
+	h := buildOpencodeHeaders(ctx, "/chat/completions", []byte(`{"model":"x"}`))
+	for k, want := range map[string]string{
+		"User-Agent":         "opencode/1.18.31",
+		"x-opencode-session": "ses_0afae3e4c001AmMPIe8RFqNeTF",
+		"x-opencode-request": "usr_testuser000000000000000001",
+		"x-opencode-client":  "cli",
+		"x-opencode-project": "prj_test0000000000000000000001",
+	} {
+		if h[k] != want {
+			t.Errorf("%s = %q, want %q", k, h[k], want)
+		}
+	}
+}
+
+func TestOpenCode_BuildHeaders_InvalidDownstreamIdentityFallsBack(t *testing.T) {
+	ctx := translate.WithDownstreamIdentity(context.Background(), translate.DownstreamIdentity{
+		UserAgent: "claude-code/1.0",
+		Session:   "claude:abc-123",
+	})
+	h := buildOpencodeHeaders(ctx, "/chat/completions", []byte(`{"model":"x"}`))
+	if !strings.HasPrefix(h["User-Agent"], "opencode/") {
+		t.Errorf("foreign UA forwarded: %q", h["User-Agent"])
+	}
+	if got := h["x-opencode-session"]; got != "ses_de183bb4be51r6rQJojApiDzDR" {
+		t.Errorf("foreign session not translated, got %q", got)
+	}
+	if h["x-opencode-client"] != "desktop" || h["x-opencode-project"] != "global" {
+		t.Errorf("defaults broken: %+v", h)
+	}
+	if !strings.HasPrefix(h["x-opencode-request"], "msg_") {
+		t.Errorf("request id not generated: %q", h["x-opencode-request"])
+	}
+}
+
 func TestOpenCode_BuildHeaders_Messages(t *testing.T) {
-	h := buildOpencodeHeaders("/messages", []byte(`{"model":"union-alpha"}`))
+	h := buildOpencodeHeaders(context.Background(), "/messages", []byte(`{"model":"union-alpha"}`))
 	if h["anthropic-version"] != "2023-06-01" {
 		t.Errorf("expected anthropic-version for /messages, got %q", h["anthropic-version"])
 	}
-	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
+	h2 := buildOpencodeHeaders(context.Background(), "/chat/completions", []byte(`{"model":"x"}`))
 	if _, ok := h2["anthropic-version"]; ok {
 		t.Errorf("did not expect anthropic-version for chat endpoint")
 	}
-	hs := buildOpencodeHeaders("/chat/completions", []byte(`{"stream":true}`))
+	hs := buildOpencodeHeaders(context.Background(), "/chat/completions", []byte(`{"stream":true}`))
 	if hs["Accept"] != "text/event-stream" {
 		t.Errorf("expected streaming Accept, got %q", hs["Accept"])
+	}
+}
+
+func TestOpenCode_AnonymousNonStreamUpgradedToStream(t *testing.T) {
+	var gotStream any
+	var gotStreamOptions any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		gotStream = raw["stream"]
+		gotStreamOptions = raw["stream_options"]
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, assembleChatSSE)
+	}))
+	defer srv.Close()
+	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if gotStream != true {
+		t.Fatalf("upstream did not receive stream:true, got %v", gotStream)
+	}
+	if _, ok := gotStreamOptions.(map[string]any); !ok {
+		t.Fatalf("stream_options missing: %v", gotStreamOptions)
+	}
+	rawBody, _ := io.ReadAll(resp.Body)
+	var out struct {
+		Object  string `json:"object"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(rawBody, &out); err != nil {
+		t.Fatalf("assembled body not json: %v\n%s", err, rawBody)
+	}
+	if out.Object != "chat.completion" || len(out.Choices) != 1 || out.Choices[0].Message.Content != "hello" {
+		t.Fatalf("bad assembled body: %s", rawBody)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if resp.Format != "openai" {
+		t.Fatalf("format = %q", resp.Format)
+	}
+}
+
+func TestOpenCode_MixedKeysNeverUpgrade(t *testing.T) {
+	var gotStream []any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		gotStream = append(gotStream, raw["stream"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+	// Mixed public/real keys: the upgrade decision must be deterministic
+	// and must not consume rotation slots, so it never upgrades.
+	u := NewOpenCodeUpstream(srv.URL, []string{"public", "sk-real"}, nil, nil)
+	for range 4 {
+		resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[]}`))
+		if err != nil {
+			t.Fatalf("chat: %v", err)
+		}
+		resp.Close()
+	}
+	for _, s := range gotStream {
+		if s != nil {
+			t.Fatalf("mixed keys upgraded to stream=%v", s)
+		}
+	}
+}
+
+func TestOpenCode_StreamOptionsOnlyOnChat(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"union-alpha","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if got["stream"] != true {
+		t.Fatalf("stream not enabled: %v", got["stream"])
+	}
+	if _, ok := got["stream_options"]; ok {
+		t.Fatalf("stream_options leaked into Messages body: %v", got["stream_options"])
+	}
+}
+
+func TestOpenCode_KeyedNonStreamPassesThrough(t *testing.T) {
+	var gotStream any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		gotStream = raw["stream"]
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+	u := NewOpenCodeUpstream(srv.URL, []string{"sk-real"}, nil, nil)
+	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if gotStream != nil {
+		t.Fatalf("keyed request unexpectedly upgraded, stream=%v", gotStream)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestOpenCode_UpgradeNonSSEErrorPassesThrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":"slow"}`)
+	}))
+	defer srv.Close()
+	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status=%d, want 429 passthrough", resp.StatusCode)
 	}
 }
 
@@ -218,7 +402,7 @@ func TestOpenCode_GenID_Format(t *testing.T) {
 			t.Errorf("%s: bad prefix %q", p, id)
 		}
 	}
-	if got := len(genProjectID()); got != 40 {
-		t.Errorf("expected 40-hex project ID, got len %d", got)
+	if id := genSessionID(); !openCodeSessionRE.MatchString(id) {
+		t.Errorf("genSessionID %q does not match canonical form", id)
 	}
 }

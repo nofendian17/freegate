@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/translate"
 )
 
 var _ domain.Upstream = (*ComboUpstream)(nil)
@@ -53,10 +54,23 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 	if len(u.tiers) == 0 {
 		return nil, fmt.Errorf("combo %q has no tiers", u.name)
 	}
+	source := translate.RequestFormat(ctx, body)
 	var lastErr error
 	for i, tier := range u.tiers {
 		last := i == len(u.tiers)-1
 		out, err := rewriteModel(body, tier.Model)
+		target := translate.FormatOpenAI
+		if provider, ok := tier.Upstream.(interface {
+			RequestFormat([]byte) translate.Format
+		}); ok {
+			target = provider.RequestFormat(out)
+		}
+		if err == nil && source != target {
+			out, err = translate.Request(out, source, target)
+		}
+		if err == nil && target == translate.FormatOpenAI {
+			out, err = translate.PrepareForUpstream(out)
+		}
 		if err != nil {
 			lastErr = err
 			if !last {
@@ -65,7 +79,7 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			}
 			return nil, fmt.Errorf("combo %q: %w", u.name, err)
 		}
-		resp, err := tier.Upstream.ChatCompletion(ctx, out)
+		resp, err := tier.Upstream.ChatCompletion(translate.WithRequestFormat(ctx, target), out)
 		if err != nil {
 			lastErr = err
 			if !last {
@@ -82,14 +96,31 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			slog.Warn("combo tier returned nil response, trying next", "combo", u.name, "tier", tier.Upstream.Name())
 			continue
 		}
-		if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) && !last {
+		if isTierRetryable(resp) && !last {
 			slog.Warn("combo tier retryable status, trying next", "combo", u.name, "tier", tier.Upstream.Name(), "status", resp.StatusCode)
 			resp.Close()
 			continue
 		}
+		if resp.Format == "" {
+			resp.Format = string(target)
+		}
 		return resp, nil
 	}
 	return nil, fmt.Errorf("combo %q: %w", u.name, lastErr)
+}
+
+// isTierRetryable reports whether a combo tier response is worth failing
+// over: transport-level retryables (429/5xx) plus free-tier access
+// rejections (e.g. opencode.ai FreeTierError), which are tier-scoped —
+// another tier may serve the same request.
+func isTierRetryable(resp *domain.UpstreamResponse) bool {
+	if resp == nil {
+		return true
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return true
+	}
+	return resp.StatusCode >= 400 && domain.IsFreeTierRejection(resp)
 }
 
 func rewriteModel(body []byte, m string) ([]byte, error) {

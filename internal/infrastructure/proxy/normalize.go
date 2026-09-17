@@ -12,6 +12,7 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/httputil"
+	"freegate/internal/translate"
 	"freegate/internal/translate/claude"
 )
 
@@ -940,6 +941,12 @@ func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter,
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
 	model, reqID := correlationMeta(resp.Header)
+	if resp.Format == string(translate.FormatClaude) {
+		if isStreaming {
+			return copyPassthroughClaudeStream(ctx, w, bufio.NewReader(resp.Body)), nil
+		}
+		return copyPassthroughJSON(w, resp.Body), nil
+	}
 	if isStreaming {
 		rd := bufio.NewReader(resp.Body)
 		if isResponsesSSE(rd) {
@@ -1050,6 +1057,77 @@ func copyPassthroughStream(ctx context.Context, dst io.Writer, src *bufio.Reader
 		}
 	}
 	return usage
+}
+
+// copyPassthroughClaudeStream copies a raw Claude Messages SSE stream while
+// extracting token usage from message_start/message_delta events. The bytes
+// pass through untouched so the translate layer downstream still sees the
+// Claude event shapes it expects.
+func copyPassthroughClaudeStream(ctx context.Context, dst io.Writer, src *bufio.Reader) TokenUsage {
+	var usage TokenUsage
+	var lineBuf []byte
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return usage
+		default:
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			if _, werr := dst.Write(chunk); werr != nil {
+				return usage
+			}
+			if fl, ok := dst.(http.Flusher); ok {
+				fl.Flush()
+			}
+			lineBuf = append(lineBuf, chunk...)
+			for {
+				idx := bytes.IndexByte(lineBuf, '\n')
+				if idx < 0 {
+					break
+				}
+				line := lineBuf[:idx]
+				lineBuf = lineBuf[idx+1:]
+				usage = extractClaudeUsageFromSSELine(string(line), usage)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	return usage
+}
+
+// extractClaudeUsageFromSSELine folds Claude message_start/message_delta
+// usage payloads into the running total. Non-usage lines are ignored.
+func extractClaudeUsageFromSSELine(line string, current TokenUsage) TokenUsage {
+	if !strings.HasPrefix(line, "data: ") {
+		return current
+	}
+	data := strings.TrimPrefix(line, "data: ")
+	data = strings.TrimRight(data, "\r\n")
+	var evt map[string]any
+	if err := json.Unmarshal([]byte(data), &evt); err != nil {
+		return current
+	}
+	switch evt["type"] {
+	case "message_start":
+		if msg, ok := evt["message"].(map[string]any); ok {
+			if u, ok := msg["usage"].(map[string]any); ok {
+				return extractClaudeUsage(u, current)
+			}
+		}
+	case "message_delta":
+		if u, ok := evt["usage"].(map[string]any); ok {
+			return extractClaudeUsage(u, current)
+		}
+	}
+	return current
 }
 
 // extractUsageFromCompletedLine checks if an SSE line contains a
