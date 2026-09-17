@@ -194,7 +194,7 @@ func TestLogZenRequest_RespectsFlag(t *testing.T) {
 func TestOpenCodeUserAgent_FallbackShape(t *testing.T) {
 	withClientVersion(t, openCodeFallbackVersion)
 	ua := openCodeUserAgent()
-	if ua != "opencode/1.18.31 ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14" {
+	if ua != "opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14" {
 		t.Fatalf("ua = %q", ua)
 	}
 }

@@ -277,3 +277,63 @@ func TestPostWithHeaders_PreservesExplicitXApiKey(t *testing.T) {
 		t.Errorf("expected explicit x-api-key preserved, got %q", apiKey)
 	}
 }
+
+func TestPostWithHeaders_StripsPublicXApiKey(t *testing.T) {
+	// The genuine OpenCode client authenticates anonymous requests with
+	// `Authorization: Bearer public` only and never sends x-api-key; the
+	// public marker is a non-genuine fingerprint the free-tier gate
+	// rejects with 403 FreeTierError.
+	type pair struct {
+		auth, apiKey string
+		hasApiKey    bool
+	}
+	var got []pair
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, has := r.Header["X-Api-Key"]
+		got = append(got, pair{r.Header.Get("Authorization"), r.Header.Get("x-api-key"), has})
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	for _, keys := range [][]string{{"public"}, nil} {
+		client := NewHTTPClient(srv.URL, keys, nil, nil)
+		resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
+			map[string]string{"x-api-key": "public", "Content-Type": "application/json"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(got))
+	}
+	for i, p := range got {
+		if p.hasApiKey {
+			t.Errorf("request %d: x-api-key = %q, want absent", i, p.apiKey)
+		}
+		if p.auth != "Bearer public" && p.auth != "Bearer" {
+			t.Errorf("request %d: Authorization = %q", i, p.auth)
+		}
+	}
+}
+
+func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) {
+	var apiKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKey = r.Header.Get("x-api-key")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, []string{"public"}, nil, nil)
+	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
+		map[string]string{"x-api-key": "explicit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if apiKey != "explicit" {
+		t.Errorf("expected explicit non-public x-api-key preserved, got %q", apiKey)
+	}
+}

@@ -18,7 +18,7 @@ services:
       - VPNGATE_REFRESH_SECONDS=${VPNGATE_REFRESH_SECONDS:-300}
     dns:
       - 1.1.1.1
-      - 8.8.8.8
+      - 1.0.0.1
     deploy:
       resources:
         limits:

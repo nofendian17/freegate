@@ -93,13 +93,16 @@ func init() {
 
 // openCodeUserAgent returns the User-Agent sent to the Zen gateway:
 // opencode/<cached-or-pinned-version> with the provider-utils/runtime
-// suffixes the genuine client sends.
+// suffixes the genuine client sends. Suffix versions match the official
+// 1.18.31 release wire capture (ai-sdk/provider-utils/4.0.23
+// runtime/bun/1.3.14; cf. anomalyco/opencode#49433 discussion and local
+// capture of the release binary against a logging mock).
 func openCodeUserAgent() string {
 	v, _ := openCodeClientVersion.Load().(string)
 	if v == "" {
 		v = openCodeFallbackVersion
 	}
-	return "opencode/" + v + " ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14"
+	return "opencode/" + v + " ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
 }
 
 var releaseTagRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
