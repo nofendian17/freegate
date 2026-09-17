@@ -1,11 +1,128 @@
 package providers
 
 import (
+	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestStore_CreateDisabled(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	p, err := s.CreateProvider(Provider{Name: "disabled", BaseURL: "https://example.test/v1", APIKeys: []string{}, Enabled: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Enabled {
+		t.Error("created provider must remain disabled")
+	}
+	raw, err := s.GetProviderRaw(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.Enabled {
+		t.Error("stored provider must remain disabled")
+	}
+}
+
+func TestStore_ProviderComboMutation(t *testing.T) {
+	for _, operation := range []string{"rename", "delete"} {
+		for _, fail := range []bool{false, true} {
+			name := operation
+			if fail {
+				name += "-rollback"
+			}
+			t.Run(name, func(t *testing.T) {
+				s, err := Open(t.TempDir() + "/providers.db")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = s.Close() })
+				p, err := s.CreateProvider(Provider{Name: "before", BaseURL: "https://example.test/v1", APIKeys: []string{"test-key"}, Enabled: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				original := []ComboTier{{Provider: "custom:before", Model: "first"}, {Provider: "opencode"}, {Provider: "custom:before", Model: "second"}}
+				if _, err := s.SaveCombo(RouteCombo{Name: "mixed", Tiers: original}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.SaveCombo(RouteCombo{Name: "solo", Tiers: []ComboTier{{Provider: "custom:before"}}}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.SaveCombo(RouteCombo{Name: "untouched", Tiers: []ComboTier{{Provider: "kilo"}}}); err != nil {
+					t.Fatal(err)
+				}
+				before, err := s.ListCombos()
+				if err != nil {
+					t.Fatal(err)
+				}
+				injected := errors.New("combo write failed")
+				if fail {
+					if err := s.db.Callback().Update().Before("gorm:update").Register("test:combo-failure", func(tx *gorm.DB) {
+						if tx.Statement.Table == "route_combos" {
+							tx.AddError(injected)
+						}
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if operation == "rename" {
+					p.Name = "after"
+					p.APIKeys = []string{"test-key"}
+					_, err = s.UpdateProvider(p.ID, p)
+				} else {
+					err = s.DeleteProvider(p.ID)
+				}
+				if fail {
+					if !errors.Is(err, injected) {
+						t.Fatalf("expected injected failure, got %v", err)
+					}
+					raw, err := s.GetProviderRaw(p.ID)
+					if err != nil || raw.Name != "before" {
+						t.Fatalf("provider not rolled back: %+v, %v", raw, err)
+					}
+					got, err := s.ListCombos()
+					if err != nil || !reflect.DeepEqual(got, before) {
+						t.Fatalf("combos not rolled back: %+v, %v", got, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := s.ListCombos()
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := before
+				if operation == "rename" {
+					for i := range want {
+						for j := range want[i].Tiers {
+							if want[i].Tiers[j].Provider == "custom:before" {
+								want[i].Tiers[j].Provider = "custom:after"
+							}
+						}
+					}
+				} else {
+					if _, err := s.GetProviderRaw(p.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+						t.Fatalf("provider still exists: %v", err)
+					}
+					want = []RouteCombo{before[0], before[2]}
+					want[0].Tiers = []ComboTier{{Provider: "opencode"}}
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("combos = %+v, want %+v", got, want)
+				}
+			})
+		}
+	}
+}
 
 func TestStore_CRUD_AndMask(t *testing.T) {
 	s, err := Open("file::memory:?cache=shared")

@@ -16,6 +16,68 @@ import (
 
 var errRebuildSentinel = errors.New("rebuild boom")
 
+func TestAdmin_CustomProviderLifecycle(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	rebuilt := 0
+	h := New(s, func() error { rebuilt++; return nil }, nil)
+	r := h.Routes()
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	request("POST", "/api/providers", `{"name":"default-on","base_url":"https://example.test/v1","api_keys":["test-key"]}`, http.StatusCreated)
+	defaulted, err := s.GetProviderByName("default-on")
+	if err != nil || !defaulted.Enabled {
+		t.Fatalf("omitted enabled should default true: %+v, %v", defaulted, err)
+	}
+	w := request("POST", "/api/providers", `{"name":"before","base_url":"https://example.test/v1","api_keys":[],"enabled":false}`, http.StatusCreated)
+	var created providers.Provider
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Enabled {
+		t.Fatal("response enabled a disabled provider")
+	}
+	raw, err := s.GetProviderRaw(created.ID)
+	if err != nil || raw.Enabled {
+		t.Fatalf("disabled provider not persisted: %+v, %v", raw, err)
+	}
+	path := "/api/providers/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("PUT", path, `{"name":"before","base_url":"https://example.test/v1","api_keys":["test-key"],"enabled":true}`, http.StatusOK)
+	request("POST", "/api/combos", `{"name":"mixed","tiers":[{"provider":"custom:before","model":"pinned"},{"provider":"opencode"}]}`, http.StatusCreated)
+	request("POST", "/api/combos", `{"name":"solo","tiers":[{"provider":"custom:before"}]}`, http.StatusCreated)
+	request("PUT", path, `{"name":"after","base_url":"https://example.test/v1","enabled":true}`, http.StatusOK)
+	combos, err := s.ListCombos()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(combos) != 2 || combos[0].Tiers[0].Provider != "custom:after" || combos[0].Tiers[0].Model != "pinned" || combos[1].Tiers[0].Provider != "custom:after" {
+		t.Fatalf("rename lost combo references: %+v", combos)
+	}
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil || len(raw.APIKeys) != 1 || raw.APIKeys[0] != "test-key" {
+		t.Fatalf("rename lost keys: %+v, %v", raw, err)
+	}
+	request("DELETE", path, "", http.StatusNoContent)
+	combos, err = s.ListCombos()
+	if err != nil || len(combos) != 1 || combos[0].Name != "mixed" || len(combos[0].Tiers) != 1 || combos[0].Tiers[0].Provider != "opencode" {
+		t.Fatalf("delete did not clean up combos: %+v, %v", combos, err)
+	}
+	request("GET", path, "", http.StatusNotFound)
+	if rebuilt != 7 {
+		t.Fatalf("rebuilds=%d, want 7", rebuilt)
+	}
+}
+
 func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	s, _ := providers.Open("file:admin-create?mode=memory&cache=shared")
 	rebuilt := 0
