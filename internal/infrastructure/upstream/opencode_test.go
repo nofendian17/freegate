@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -131,4 +132,93 @@ func newTestOpenCodeWithAllowlist(t *testing.T, body string, allowlist []string)
 	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, allowlist)
 	u.client = NewHTTPClient(srv.URL, []string{"public"}, nil, map[string]string{"x-opencode-client": "desktop"})
 	return u
+}
+
+func TestOpenCode_BuildURL_Routing(t *testing.T) {
+	o := NewOpenCodeUpstream("http://example.com", []string{"public"}, nil, nil)
+	cases := []struct {
+		name  string
+		model string
+		body  string
+		want  string
+	}{
+		{"muse-spark to responses", "muse-spark", `{"model":"muse-spark"}`, "/responses"},
+		{"muse_spark variant", "muse_spark-pro", `{"model":"muse_spark-pro"}`, "/responses"},
+		{"muse case-insensitive", "Muse-Spark-X", `{"model":"Muse-Spark-X"}`, "/responses"},
+		{"union-alpha to messages", "union-alpha", `{"model":"union-alpha"}`, "/messages"},
+		{"union-alpha variant substring", "my-union-alpha", `{"model":"my-union-alpha"}`, "/messages"},
+		{"plain model to chat", "gpt-5", `{"model":"gpt-5"}`, "/chat/completions"},
+		{"model-less responses body", "", `{"input":"hi"}`, "/responses"},
+		{"thinking suffix stripped", "muse-spark(high)", `{"model":"muse-spark(high)"}`, "/responses"},
+	}
+	for _, tc := range cases {
+		if got := o.buildURL(tc.model, []byte(tc.body)); got != tc.want {
+			t.Errorf("%s: buildURL(%q) = %q, want %q", tc.name, tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestOpenCode_BuildURL_HonorsCustomConfig(t *testing.T) {
+	o := NewOpenCodeUpstream("http://example.com", []string{"public"}, nil, nil)
+	o.SetResponseModels([]string{"my-resp"})
+	o.SetMessageModels([]string{"my-claude-model"})
+	if got := o.buildURL("my-resp-1", []byte(`{"model":"my-resp-1"}`)); got != "/responses" {
+		t.Errorf("custom RESPONSE_MODELS: got %q, want /responses", got)
+	}
+	if got := o.buildURL("my-claude-model", []byte(`{"model":"my-claude-model"}`)); got != "/messages" {
+		t.Errorf("custom MESSAGE_MODELS: got %q, want /messages", got)
+	}
+	// Old defaults no longer route once overridden.
+	if got := o.buildURL("muse-spark", []byte(`{"model":"muse-spark"}`)); got != "/chat/completions" {
+		t.Errorf("overridden defaults: muse-spark got %q, want /chat/completions", got)
+	}
+}
+
+func TestOpenCode_EnsureMessagesMaxTokens(t *testing.T) {
+	out := ensureMessagesMaxTokens([]byte(`{"model":"union-alpha","messages":[]}`))
+	var raw map[string]any
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["max_tokens"] != float64(4096) {
+		t.Errorf("expected max_tokens=4096 default, got %v", raw["max_tokens"])
+	}
+	keep := ensureMessagesMaxTokens([]byte(`{"model":"m","max_tokens":100}`))
+	var raw2 map[string]any
+	if err := json.Unmarshal(keep, &raw2); err != nil {
+		t.Fatal(err)
+	}
+	if raw2["max_tokens"] != float64(100) {
+		t.Errorf("expected existing max_tokens preserved, got %v", raw2["max_tokens"])
+	}
+}
+
+func TestOpenCode_BuildHeaders_Messages(t *testing.T) {
+	h := buildOpencodeHeaders("/messages", []byte(`{"model":"union-alpha"}`))
+	if h["anthropic-version"] != "2023-06-01" {
+		t.Errorf("expected anthropic-version for /messages, got %q", h["anthropic-version"])
+	}
+	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
+	if _, ok := h2["anthropic-version"]; ok {
+		t.Errorf("did not expect anthropic-version for chat endpoint")
+	}
+	hs := buildOpencodeHeaders("/chat/completions", []byte(`{"stream":true}`))
+	if hs["Accept"] != "text/event-stream" {
+		t.Errorf("expected streaming Accept, got %q", hs["Accept"])
+	}
+}
+
+func TestOpenCode_GenID_Format(t *testing.T) {
+	for _, p := range []string{"ses", "msg"} {
+		id := genOpencodeID(p)
+		if len(id) != len(p)+1+12+14 {
+			t.Errorf("%s: unexpected length %d for %q", p, len(id), id)
+		}
+		if id[:len(p)+1] != p+"_" {
+			t.Errorf("%s: bad prefix %q", p, id)
+		}
+	}
+	if got := len(genProjectID()); got != 40 {
+		t.Errorf("expected 40-hex project ID, got len %d", got)
+	}
 }
