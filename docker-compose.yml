@@ -58,6 +58,8 @@ services:
       - UPSTREAM_REFRESH_LLM7=${UPSTREAM_REFRESH_LLM7:-300}
       # Direct config for Responses API models (comma-separated substrings, e.g. muse-spark)
       - RESPONSE_MODELS=${RESPONSE_MODELS:-muse-spark,muse_spark}
+      # Direct config for Messages API models (comma-separated substrings, e.g. union-alpha via /zen/v1/messages)
+      - MESSAGE_MODELS=${MESSAGE_MODELS:-union-alpha}
       # Debug: raw upstream response logging via slog (stdout). Default
       # false; lines contain full conversation content, enable only while
       # debugging.

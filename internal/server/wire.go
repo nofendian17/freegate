@@ -17,6 +17,10 @@ func buildUpstreams(cfg *config.Config, tr *http.Transport) (*upstream.OpenCodeU
 	opencode := upstream.NewOpenCodeUpstreamWithTransport(
 		cfg.UpstreamURLOpenCode, cfg.UpstreamKeyOpenCode, tr, cfg.UpstreamOpenCodeFreeAllowlist,
 	)
+	// Share RESPONSE_MODELS / MESSAGE_MODELS routing config with the handler
+	// so targetFormatForModel and buildURL agree on the endpoint.
+	opencode.SetResponseModels(cfg.ResponseModels)
+	opencode.SetMessageModels(cfg.MessageModels)
 	kilo := upstream.NewKiloUpstreamWithTransport(cfg.UpstreamURLKilo, cfg.UpstreamKeyKilo, tr)
 	llm7 := upstream.NewLLM7UpstreamWithTransport(cfg.UpstreamURLLLM7, tr)
 	return opencode, kilo, llm7

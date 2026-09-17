@@ -67,6 +67,11 @@ type Config struct {
 	// against the model ID. If empty, defaults to muse-spark.
 	ResponseModels []string
 
+	// MessageModels is a direct config for models served by the Anthropic
+	// Messages API on the OpenCode Zen gateway (e.g. union-alpha per 9router
+	// PR #4111). Substrings matched case-insensitively. Defaults to union-alpha.
+	MessageModels []string
+
 	SOCKSAddr string
 
 	ProvidersDBPath string
@@ -121,6 +126,7 @@ func Load() *Config {
 		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
 
 		ResponseModels: envSlice("RESPONSE_MODELS", "muse-spark,muse_spark"),
+		MessageModels:  envSlice("MESSAGE_MODELS", "union-alpha"),
 
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
