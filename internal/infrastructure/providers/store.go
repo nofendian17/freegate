@@ -183,7 +183,18 @@ func (s *Store) CreateProvider(p Provider) (Provider, error) {
 		return Provider{}, err
 	}
 	p.ID = 0
-	if err := s.db.Create(&p).Error; err != nil {
+	enabled := p.Enabled
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&p).Error; err != nil {
+			return err
+		}
+		// GORM replaces false with the schema default on insert.
+		if !enabled {
+			p.Enabled = false
+			return tx.Model(&p).Update("enabled", false).Error
+		}
+		return nil
+	}); err != nil {
 		return Provider{}, err
 	}
 	p.APIKeys = MaskKeys(p.APIKeys)
@@ -250,18 +261,45 @@ func (s *Store) GetProviderRaw(id uint) (Provider, error) {
 }
 
 func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
-	cur, err := s.GetProviderRaw(id)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var cur Provider
+		if err := tx.First(&cur, id).Error; err != nil {
+			return err
+		}
+		p.ID = cur.ID
+		if p.RefreshSec == 0 {
+			p.RefreshSec = 60
+		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		if err := tx.Save(&p).Error; err != nil {
+			return err
+		}
+		if p.Name == cur.Name {
+			return nil
+		}
+		var combos []RouteCombo
+		if err := tx.Find(&combos).Error; err != nil {
+			return err
+		}
+		for _, c := range combos {
+			changed := false
+			for i := range c.Tiers {
+				if c.Tiers[i].Provider == "custom:"+cur.Name {
+					c.Tiers[i].Provider = "custom:" + p.Name
+					changed = true
+				}
+			}
+			if changed {
+				if err := tx.Save(&c).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return Provider{}, err
-	}
-	p.ID = cur.ID
-	if p.RefreshSec == 0 {
-		p.RefreshSec = 60
-	}
-	if err := p.Validate(); err != nil {
-		return Provider{}, err
-	}
-	if err := s.db.Save(&p).Error; err != nil {
 		return Provider{}, err
 	}
 	p.APIKeys = MaskKeys(p.APIKeys)
@@ -269,43 +307,45 @@ func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
 }
 
 func (s *Store) DeleteProvider(id uint) error {
-	var cur Provider
-	if err := s.db.First(&cur, id).Error; err != nil {
-		return err
-	}
-	if err := s.db.Delete(&Provider{}, id).Error; err != nil {
-		return err
-	}
-	member := "custom:" + cur.Name
-	var combos []RouteCombo
-	if err := s.db.Find(&combos).Error; err != nil {
-		return err
-	}
-	for _, c := range combos {
-		var keptTiers []ComboTier
-		changed := false
-		for _, tr := range c.Tiers {
-			if tr.Provider == member {
-				changed = true
-				continue
-			}
-			keptTiers = append(keptTiers, tr)
-		}
-		if !changed {
-			continue
-		}
-		if len(keptTiers) == 0 {
-			if err := s.db.Delete(&RouteCombo{}, c.ID).Error; err != nil {
-				return err
-			}
-			continue
-		}
-		c.Tiers = keptTiers
-		if err := s.db.Save(&c).Error; err != nil {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var cur Provider
+		if err := tx.First(&cur, id).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		if err := tx.Delete(&Provider{}, id).Error; err != nil {
+			return err
+		}
+		member := "custom:" + cur.Name
+		var combos []RouteCombo
+		if err := tx.Find(&combos).Error; err != nil {
+			return err
+		}
+		for _, c := range combos {
+			var keptTiers []ComboTier
+			changed := false
+			for _, tr := range c.Tiers {
+				if tr.Provider == member {
+					changed = true
+					continue
+				}
+				keptTiers = append(keptTiers, tr)
+			}
+			if !changed {
+				continue
+			}
+			if len(keptTiers) == 0 {
+				if err := tx.Delete(&RouteCombo{}, c.ID).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			c.Tiers = keptTiers
+			if err := tx.Save(&c).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) ListCombos() ([]RouteCombo, error) {

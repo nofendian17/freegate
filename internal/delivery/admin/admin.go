@@ -77,7 +77,7 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
-	var in providerIn
+	in := providerIn{Enabled: true}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return

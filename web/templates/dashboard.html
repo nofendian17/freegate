@@ -70,7 +70,7 @@
             <span class="upstream-count tone-{{.Tone}}">{{.Count}}</span>
           </div>
           <div class="upstream-track">
-            <div class="upstream-fill" style="background:var(--info);width:{{.Pct}}%"></div>
+            <div class="upstream-fill tone-bg-{{.Tone}}" style="width:{{.Pct}}%"></div>
           </div>
           {{end}}
         </div>
@@ -144,12 +144,13 @@
                   hx-get="/partials/models"
                   hx-trigger="change, every 10s"
                   hx-target="#models-body"
+                  hx-sync="this:replace"
                   hx-swap="innerHTML"
                   name="provider">
             <option value="all">$ all</option>
-            <option value="opencode">$ opencode</option>
-            <option value="kilo">$ kilo</option>
-            <option value="llm7">$ llm7</option>
+            {{range .Providers}}
+            <option value="{{.}}">$ {{.}}</option>
+            {{end}}
           </select>
         </div>
       </div>
@@ -163,10 +164,7 @@
               <th style="width:80px">test</th>
             </tr>
           </thead>
-          <tbody id="models-body"
-                 hx-get="/partials/models"
-                 hx-trigger="every 10s"
-                 hx-swap="innerHTML">
+          <tbody id="models-body">
             {{.Models}}
           </tbody>
         </table>
@@ -265,15 +263,15 @@
               datasets: [{
                 label: 'req/min',
                 data: values,
-                borderColor: '#00FF41',
-                backgroundColor: 'rgba(0,255,65,0.06)',
+                borderColor: '#FFB454',
+                backgroundColor: 'rgba(255,180,84,0.06)',
                 borderWidth: 1,
                 fill: true,
                 tension: 0,
                 pointRadius: 0,
                 pointHoverRadius: 3,
-                pointHoverBackgroundColor: '#00FF41',
-                pointHoverBorderColor: '#00FF41',
+                pointHoverBackgroundColor: '#FFB454',
+                pointHoverBorderColor: '#FFB454',
               }]
             },
             options: {
@@ -283,13 +281,13 @@
               plugins: { legend: { display: false } },
               scales: {
                 x: {
-                  ticks: { color: '#555555', maxTicksLimit: 8, font: { size: 11, family: "'JetBrains Mono', monospace" } },
-                  grid: { color: '#222222' },
+                  ticks: { color: '#667082', maxTicksLimit: 8, font: { size: 11, family: "'JetBrains Mono', monospace" } },
+                  grid: { color: '#262C36' },
                 },
                 y: {
                   beginAtZero: true,
-                  ticks: { color: '#555555', font: { size: 11, family: "'JetBrains Mono', monospace" } },
-                  grid: { color: '#222222' },
+                  ticks: { color: '#667082', font: { size: 11, family: "'JetBrains Mono', monospace" } },
+                  grid: { color: '#262C36' },
                 }
               }
             }
@@ -429,11 +427,12 @@
       text.textContent = 'refreshing server list…';
       document.getElementById('vpn-dot').className = 'status-dot warn';
       try {
-        await fetch('/api/vpn/servers/refresh', { method: 'POST' });
+        const response = await fetch('/api/vpn/servers/refresh', { method: 'POST' });
+        if (!response.ok) throw new Error('refresh failed: http ' + response.status);
         await refreshVPNServers();
         text.textContent = 'server list refreshed';
       } catch (e) {
-        text.textContent = 'refresh failed: network error';
+        text.textContent = e.message || 'refresh failed: network error';
       }
       btn.textContent = '> refresh list';
       btn.classList.remove('is-loading');
@@ -540,6 +539,8 @@
         if (!resp.ok) {
           box.textContent = '! ping failed: ' + (data.error || resp.status);
           box.className = 'vpn-ping-result';
+          btn.textContent = origLabel;
+          btn.classList.remove('is-loading');
           btn.disabled = false;
           return;
         }
@@ -691,9 +692,11 @@
             }
             if (msg.reasoning && msg.content) lines.push('reasoning: ' + msg.reasoning);
           } else if (!content) {
+            ok = false;
             lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
           }
         } catch (err) {
+          ok = false;
           lines.push('parse error: ' + err.message);
           if (raw) lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
         }
@@ -721,6 +724,16 @@
       if (e.key === 'Escape' && document.getElementById('test-modal').style.display === 'flex') {
         closeTestModal();
       }
+    });
+
+    ['error-modal', 'test-modal'].forEach(function(id) {
+      const modal = document.getElementById(id);
+      modal.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab' && modal.style.display === 'flex') {
+          e.preventDefault();
+          modal.querySelector('.modal-close').focus();
+        }
+      });
     });
 
     // ----- Error Modal (HTMX-safe delegation) -----
@@ -760,7 +773,8 @@
         const closeBtn = e.target.closest('.modal-close');
         if (closeBtn) {
           e.preventDefault();
-          closeErrorModal();
+          if (closeBtn.closest('#error-modal')) closeErrorModal();
+          else if (closeBtn.closest('#test-modal')) closeTestModal();
         }
       }
     });
