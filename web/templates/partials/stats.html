@@ -1,4 +1,10 @@
 {{define "partials/stats.html"}}
+{{if not .Cards}}
+<div class="metric-block metric-skeleton" aria-busy="true" aria-label="Loading metrics">
+  <div class="metric-value">—</div>
+  <div class="metric-label">loading</div>
+</div>
+{{end}}
 {{range .Cards}}
 <div class="metric-block">
   <div class="metric-value tone-{{.Tone}}">{{.Value}}</div>

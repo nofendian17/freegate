@@ -35,23 +35,24 @@
 
 /* ----- Design Tokens ----- */
 :root {
-  /* Brand */
-  --primary: #00FF41;
-  --secondary: #FF6600;
-  --tertiary: #00BFFF;
-  --bg: #0D0D0D;
-  --surface: #141414;
-  --border: #222222;
-  --border-hover: #444444;
-  --text: #CDCDCD;
-  --text-dim: #8B8B8B;
-  --text-faint: #555555;
+  /* Brand — neutral dark, amber accent */
+  --primary: #FFB454;
+  --secondary: #FFB454;
+  --tertiary: #56B6C2;
+  --bg: #0F1115;
+  --surface: #161A20;
+  --surface-hover: #1C212A;
+  --border: #262C36;
+  --border-hover: #3A4453;
+  --text: #E6E8EB;
+  --text-dim: #9AA3AD;
+  --text-faint: #667082;
 
   /* Semantic */
-  --success: #00FF41;
-  --warning: #FF6600;
-  --error: #FF0040;
-  --info: #00BFFF;
+  --success: #7EE787;
+  --warning: #FFB454;
+  --error: #FF7B72;
+  --info: #56B6C2;
 
   /* Shadows (unused — borders only) */
   --shadow-card: none;
@@ -259,6 +260,18 @@ a:hover {
 .metric-value.tone-gray   { color: var(--text-faint); }
 .metric-value.tone-orange { color: var(--warning); }
 
+/* Skeleton placeholder while stats are loading (htmx swap) */
+.metric-skeleton .metric-value {
+  color: var(--text-faint);
+  animation: skeleton-pulse 1.2s steps(2, jump-none) infinite;
+}
+.metric-skeleton .metric-label {
+  color: var(--text-faint);
+}
+@keyframes skeleton-pulse {
+  50% { opacity: 0.4; }
+}
+
 /* ----- Charts Grid ----- */
 .grid-charts {
   display: grid;
@@ -332,6 +345,13 @@ a:hover {
   height: 100%;
 }
 
+.upstream-fill.tone-bg-blue   { background: var(--info); }
+.upstream-fill.tone-bg-amber  { background: var(--warning); }
+.upstream-fill.tone-bg-purple { background: var(--info); }
+.upstream-fill.tone-bg-green  { background: var(--success); }
+.upstream-fill.tone-bg-red    { background: var(--error); }
+.upstream-fill.tone-bg-gray   { background: var(--text-faint); }
+
 /* ----- Chart Wrapper ----- */
 .chart-wrap {
   position: relative;
@@ -388,7 +408,7 @@ tbody tr:last-child td {
 }
 
 tbody tr:hover {
-  background: #1A1A1A;
+  background: var(--surface-hover);
 }
 
 td.dim,
@@ -683,6 +703,78 @@ a.btn-tertiary:hover {
   display: inline;
 }
 
+/* ----- Form primitives (providers page & modals) ----- */
+.prov-shell {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 var(--space-5) var(--space-7);
+}
+
+.prov-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.prov-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  outline: none;
+  box-sizing: border-box;
+}
+.prov-input:focus {
+  border-color: var(--primary);
+}
+textarea.prov-input {
+  resize: vertical;
+  min-height: 52px;
+}
+
+.prov-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.prov-check input { cursor: pointer; }
+
+.prov-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.prov-err {
+  background: rgba(255, 123, 114, 0.08);
+  border: 1px solid var(--error);
+  color: var(--error);
+  font-size: 12px;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.prov-ok {
+  background: rgba(126, 231, 135, 0.06);
+  border: 1px solid var(--success);
+  color: var(--success);
+  font-size: 12px;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 /* ----- Status Dot ----- */
 .status-dot {
   display: inline-block;
@@ -887,7 +979,7 @@ a.btn-tertiary:hover {
 }
 
 .modal-panel {
-  background: #1A1A1A;
+  background: var(--surface-hover);
   border: 1px solid var(--primary);
   border-radius: 0;
   width: 480px;

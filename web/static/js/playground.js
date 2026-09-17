@@ -635,9 +635,11 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && $('pg-overlay').style.display === 'flex') close();
       if (e.key === 'Tab' && $('pg-overlay').style.display === 'flex') {
-        var focusable = $('pg-panel').querySelectorAll(
+        var focusable = Array.prototype.filter.call($('pg-panel').querySelectorAll(
           'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-        );
+        ), function(el) {
+          return !el.disabled && el.type !== 'hidden' && el.getClientRects().length > 0;
+        });
         if (focusable.length === 0) return;
         var first = focusable[0];
         var last = focusable[focusable.length - 1];

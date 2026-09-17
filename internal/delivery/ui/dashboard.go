@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -17,6 +18,7 @@ type pageData struct {
 	Stats        template.HTML
 	Requests     template.HTML
 	Models       template.HTML
+	Providers    []string
 	Upstream     []upstreamStat
 	VPNIP        string
 }
@@ -30,8 +32,18 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	uptime := time.Duration(h.data.UptimeSeconds()) * time.Second
 	models := h.data.Models()
+	seen := make(map[string]bool)
+	var providers []string
+	for _, model := range models {
+		if model.Provider != "" && !seen[model.Provider] {
+			seen[model.Provider] = true
+			providers = append(providers, model.Provider)
+		}
+	}
+	sort.Strings(providers)
 
 	data := pageData{
+		Providers:    providers,
 		Title:        "freegate dashboard",
 		Uptime:       formatDuration(uptime),
 		StartedAt:    time.Unix(h.data.StartedAtUnix(), 0).UTC().Format("2006-01-02 15:04:05 UTC"),
