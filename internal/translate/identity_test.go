@@ -57,7 +57,7 @@ func TestValidOpencodeVersion(t *testing.T) {
 	for _, ua := range []string{
 		"opencode/1.17.0",
 		"opencode/1.18.31",
-		"opencode/1.18.31 ai-sdk/provider-utils/4.0.46 runtime/bun/1.3.14",
+		"opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
 		"opencode/2.0.0",
 	} {
 		if !ValidOpencodeVersion(ua) {

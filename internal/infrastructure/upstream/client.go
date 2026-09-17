@@ -153,13 +153,23 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 		for k, v := range extra {
 			req.Header.Set(k, v)
 		}
-		// Keep x-api-key in sync with the bearer actually used. Callers
-		// (e.g. OpenCode) default x-api-key to "public"; when rotation
-		// selects a different key — including 429 failover to the next key
-		// — mirror it so the pair never mismatches. An explicitly
-		// non-public x-api-key is left untouched.
+		// Keep x-api-key in sync with the bearer actually used. When rotation
+		// selects a non-public key — including 429 failover to the next key
+		// — mirror it over a default "public" marker so the pair never
+		// mismatches. An explicitly non-public x-api-key is left untouched.
+		// Conversely, anonymous attempts (public/empty bearer) must NOT
+		// carry `x-api-key: public`: the genuine OpenCode client
+		// authenticates with `Authorization: Bearer` only (anomalyco/opencode
+		// commit 5a83358, session/llm/request.ts: no x-api-key is ever set)
+		// and the free-tier gate treats the public marker as a non-genuine
+		// fingerprint (403 FreeTierError).
 		if key != "" && key != "public" && strings.EqualFold(req.Header.Get("x-api-key"), "public") {
 			req.Header.Set("x-api-key", key)
+		}
+		if key == "" || key == "public" {
+			if cur := req.Header.Get("x-api-key"); cur == "" || strings.EqualFold(cur, "public") {
+				req.Header.Del("x-api-key")
+			}
 		}
 
 		resp, err := c.client.Do(req)

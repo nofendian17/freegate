@@ -239,6 +239,18 @@ func TestOpenCode_BuildHeaders_InvalidDownstreamIdentityFallsBack(t *testing.T) 
 	}
 }
 
+func TestOpenCode_BuildHeaders_OmitsXApiKey(t *testing.T) {
+	// The genuine client never sends x-api-key (verified against
+	// anomalyco/opencode source); the public marker is a non-genuine
+	// fingerprint the free-tier gate rejects.
+	for _, endpoint := range []string{"/chat/completions", "/messages", "/responses"} {
+		h := buildOpencodeHeaders(context.Background(), endpoint, []byte(`{"model":"x"}`))
+		if v, ok := h["x-api-key"]; ok {
+			t.Errorf("endpoint %s: x-api-key = %q, want absent", endpoint, v)
+		}
+	}
+}
+
 func TestOpenCode_BuildHeaders_Messages(t *testing.T) {
 	h := buildOpencodeHeaders(context.Background(), "/messages", []byte(`{"model":"union-alpha"}`))
 	if h["anthropic-version"] != "2023-06-01" {
@@ -404,5 +416,48 @@ func TestOpenCode_GenID_Format(t *testing.T) {
 	}
 	if id := genSessionID(); !openCodeSessionRE.MatchString(id) {
 		t.Errorf("genSessionID %q does not match canonical form", id)
+	}
+}
+
+func TestOpenCode_AnonymousInjectsNoopTools_KeyedDoesNot(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = raw
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	// Streaming body so the request passes straight through (no SSE assembly).
+	in := []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}],"stream":true}`)
+
+	anon := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	resp, err := anon.ChatCompletion(context.Background(), in)
+	if err != nil {
+		t.Fatalf("anon chat: %v", err)
+	}
+	resp.Close()
+	var raw map[string]any
+	if err := json.Unmarshal(gotBody, &raw); err != nil {
+		t.Fatalf("anon body not json: %v", err)
+	}
+	tools, ok := raw["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("anon body missing injected noop tools: %s", gotBody)
+	}
+
+	keyed := NewOpenCodeUpstream(srv.URL, []string{"sk-real"}, nil, nil)
+	resp, err = keyed.ChatCompletion(context.Background(), in)
+	if err != nil {
+		t.Fatalf("keyed chat: %v", err)
+	}
+	resp.Close()
+	raw = nil
+	if err := json.Unmarshal(gotBody, &raw); err != nil {
+		t.Fatalf("keyed body not json: %v", err)
+	}
+	if _, ok := raw["tools"]; ok {
+		t.Fatalf("keyed body must keep exact passthrough, got tools: %s", gotBody)
 	}
 }

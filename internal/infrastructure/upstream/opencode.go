@@ -54,11 +54,13 @@ func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http
 	// compliant per-request Zen headers in ChatCompletion (see buildOpencodeHeaders),
 	// mirroring 9router's OpenCodeExecutor.buildHeaders: fresh session/request
 	// IDs per call, desktop client tag, global project, and anthropic-version
-	// for /messages models.
+	// for /messages models. No x-api-key: the genuine client authenticates
+	// with `Authorization: Bearer` only (anomalyco/opencode commit 5a83358,
+	// session/llm/request.ts) — sending `x-api-key: public` is a
+	// non-genuine fingerprint the free-tier gate rejects.
 	headers := map[string]string{
 		"x-opencode-client": "desktop",
 		"User-Agent":        openCodeUserAgent(),
-		"x-api-key":         "public",
 	}
 	al := make(map[string]bool, len(freeAllowlist))
 	for _, id := range freeAllowlist {
@@ -178,6 +180,13 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	if o.isMessagesModel(model) {
 		out = ensureMessagesMaxTokens(body)
 	}
+	// Anonymous free-tier requests without tools are rejected with 403
+	// FreeTierError on every endpoint (verified live); a non-empty tools
+	// array passes. Inject a no-op tool for anonymous callers only —
+	// keyed requests bypass the requirement and keep exact passthrough.
+	if o.anonymousOnly() {
+		out = ensureUpstreamTools(out, endpoint)
+	}
 	// Anonymous free-tier requests are only served as streams (verified
 	// live: non-streaming bodies get 403 FreeTierError on every endpoint).
 	// Upgrade non-streaming anonymous requests to stream:true and fold the
@@ -189,10 +198,10 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	}
 	headers := buildOpencodeHeaders(ctx, endpoint, out)
 	logZenRequest(endpoint, headers, out)
-	// x-api-key/Authorization sync is handled per attempt inside
-	// HTTPClient.doWithHeaders: when Authorization carries a non-public key
-	// but x-api-key is still the default "public", the client mirrors the
-	// bearer key into x-api-key so 429 failover never sends a mismatched pair.
+	// No x-api-key is sent on this path by design: the genuine client
+	// authenticates with `Authorization: Bearer` only, for anonymous and
+	// keyed callers alike. HTTPClient.doWithHeaders additionally strips a
+	// stray `x-api-key: public` marker on anonymous attempts.
 	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
 	if err != nil {
 		return nil, err
@@ -437,9 +446,12 @@ func ensureMessagesMaxTokens(body []byte) []byte {
 }
 
 // buildOpencodeHeaders returns compliant per-request Zen headers per 9router
-// PR #4111 and PR #10: Bearer public + x-api-key public, versioned
-// first-party UA, desktop client tag, canonical session/request IDs,
-// global project, streaming Accept, and anthropic-version for /messages.
+// PR #4111 and PR #10: Bearer public, versioned first-party UA, desktop
+// client tag, canonical session/request IDs, global project, streaming
+// Accept, and anthropic-version for /messages. No x-api-key header at all:
+// the genuine client authenticates with `Authorization: Bearer` only —
+// anonymous and keyed alike — and the free-tier gate treats the public
+// marker as a non-genuine fingerprint.
 func buildOpencodeHeaders(ctx context.Context, endpoint string, body []byte) map[string]string {
 	stream := isStreamBody(body)
 	isMessages := strings.HasSuffix(endpoint, "/messages")
@@ -480,7 +492,6 @@ func buildOpencodeHeaders(ctx context.Context, endpoint string, body []byte) map
 	}
 	headers := map[string]string{
 		"Content-Type":       "application/json",
-		"x-api-key":          "public",
 		"User-Agent":         ua,
 		"x-opencode-client":  client,
 		"x-opencode-session": session,
