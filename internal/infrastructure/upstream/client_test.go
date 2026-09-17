@@ -229,3 +229,51 @@ func TestPostDoesNotRetry429WithSingleKey(t *testing.T) {
 		t.Fatalf("expected a single attempt with one key, got %d (%v)", len(got), got)
 	}
 }
+
+func TestPostWithHeaders_SyncsXApiKeyWithBearer(t *testing.T) {
+	type pair struct{ auth, apiKey string }
+	var got []pair
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, pair{r.Header.Get("Authorization"), r.Header.Get("x-api-key")})
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, []string{"custom-key"}, nil, nil)
+	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
+		map[string]string{"x-api-key": "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(got))
+	}
+	if got[0].auth != "Bearer custom-key" {
+		t.Errorf("expected Bearer custom-key, got %q", got[0].auth)
+	}
+	if got[0].apiKey != "custom-key" {
+		t.Errorf("expected x-api-key synced to custom-key, got %q", got[0].apiKey)
+	}
+}
+
+func TestPostWithHeaders_PreservesExplicitXApiKey(t *testing.T) {
+	var apiKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiKey = r.Header.Get("x-api-key")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, []string{"custom-key"}, nil, nil)
+	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
+		map[string]string{"x-api-key": "explicit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if apiKey != "explicit" {
+		t.Errorf("expected explicit x-api-key preserved, got %q", apiKey)
+	}
+}

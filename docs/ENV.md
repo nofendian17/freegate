@@ -42,7 +42,7 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPSTREAM_URL_OPENCODE` | No | `https://opencode.ai/zen/v1` | OpenCode base URL |
-| `UPSTREAM_KEY_OPENCODE` | No | `public` | Bearer token attached to every OpenCode request. OpenCode also gets an `x-opencode-client: desktop` header. |
+| `UPSTREAM_KEY_OPENCODE` | No | `public` | Bearer token attached to every OpenCode request. OpenCode also gets `x-api-key: public`, `x-opencode-client: cli`, per-request `x-opencode-session`/`x-opencode-request` IDs, 40-hex `x-opencode-project`, first-party `User-Agent`, and `anthropic-version: 2023-06-01` for Messages models (per 9router PR #4111). |
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | No | `big-pickle` | Comma-separated model IDs that are free on OpenCode but don't follow the `-free` naming convention. Default includes `big-pickle` (served as deepseek-v4-flash with cost 0). |
 | `UPSTREAM_REFRESH_OPENCODE` | No | `60` | How often to refresh the OpenCode `/models` catalog (seconds) |
 

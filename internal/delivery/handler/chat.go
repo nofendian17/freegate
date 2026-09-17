@@ -16,6 +16,7 @@ import (
 )
 
 var responseModels atomic.Value // stores []string, set once at startup
+var messageModels atomic.Value  // stores []string, set once at startup
 
 func init() {
 	// Direct config via env RESPONSE_MODELS (comma-separated substrings)
@@ -32,9 +33,29 @@ func init() {
 		models = []string{"muse-spark", "muse_spark"}
 	}
 	responseModels.Store(models)
+	messageModels.Store(loadMessageModels())
+}
+
+func loadMessageModels() []string {
+	// Direct config via env MESSAGE_MODELS (comma-separated substrings).
+	// Default covers Union Alpha, served by /zen/v1/messages per 9router PR #4111.
+	if v := os.Getenv("MESSAGE_MODELS"); v != "" {
+		var out []string
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(strings.ToLower(s))
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return []string{"union-alpha"}
 }
 
 var responseModelsOnce sync.Once
+var messageModelsOnce sync.Once
 
 // SetResponseModels overrides the direct config (called from server wiring).
 func SetResponseModels(models []string) {
@@ -56,8 +77,36 @@ func SetResponseModels(models []string) {
 	})
 }
 
+// SetMessageModels overrides the messages direct config (called from server wiring).
+func SetMessageModels(models []string) {
+	if len(models) == 0 {
+		return
+	}
+	var lower []string
+	for _, m := range models {
+		m = strings.TrimSpace(strings.ToLower(m))
+		if m != "" {
+			lower = append(lower, m)
+		}
+	}
+	if len(lower) == 0 {
+		return
+	}
+	messageModelsOnce.Do(func() {
+		messageModels.Store(lower)
+	})
+}
+
 func getResponseModels() []string {
 	return responseModels.Load().([]string)
+}
+
+func getMessageModels() []string {
+	v := messageModels.Load()
+	if v == nil {
+		return []string{"union-alpha"}
+	}
+	return v.([]string)
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
@@ -169,8 +218,9 @@ func extractModelID(body []byte) (string, error) {
 }
 
 // targetFormatForModel returns the upstream format for a given model.
-// Direct config via RESPONSE_MODELS env (comma-separated substrings, case-insensitive).
-// Defaults to muse-spark family for backward compat.
+// Direct config via RESPONSE_MODELS / MESSAGE_MODELS env (comma-separated
+// substrings, case-insensitive). Muse Spark family → Responses API,
+// Union Alpha → Claude Messages API (/zen/v1/messages per 9router PR #4111).
 func targetFormatForModel(modelID string) translate.Format {
 	// Strip thinking suffix "model(level)" if present
 	base := modelID
@@ -181,6 +231,11 @@ func targetFormatForModel(modelID string) translate.Format {
 	for _, pat := range getResponseModels() {
 		if pat != "" && strings.Contains(base, pat) {
 			return translate.FormatOpenAIResponses
+		}
+	}
+	for _, pat := range getMessageModels() {
+		if pat != "" && strings.Contains(base, pat) {
+			return translate.FormatClaude
 		}
 	}
 	return translate.FormatOpenAI

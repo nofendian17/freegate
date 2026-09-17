@@ -253,8 +253,10 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static(), cfg.AdminToken)
-	// Direct config for Responses models (e.g. muse-spark)
+	// Direct config for Responses models (e.g. muse-spark) and Messages
+	// models (e.g. union-alpha via /zen/v1/messages per 9router PR #4111).
 	handler.SetResponseModels(cfg.ResponseModels)
+	handler.SetMessageModels(cfg.MessageModels)
 	apiHandler := handler.New(cs, ms, m)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
