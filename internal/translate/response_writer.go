@@ -198,6 +198,11 @@ func (rw *ResponseWriter) streamOpenAIToClaude(p []byte) (int, error) {
 		data = strings.TrimRight(data, "\r\n ")
 
 		if data == "[DONE]" {
+			// Upstream ended without finish_reason: drain the hold buffer
+			// (handleFinish never runs here) before closing.
+			for _, evt := range state.FlushHoldAtEnd() {
+				rw.writeLine(evt)
+			}
 			state.MarkClosed()
 			break
 		}

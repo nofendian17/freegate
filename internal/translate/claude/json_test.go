@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -213,5 +214,59 @@ func TestJSONToClaude_InlineObjectArguments(t *testing.T) {
 	}
 	if input["days"] != float64(3) {
 		t.Errorf("expected input.days=3, got %v", input["days"])
+	}
+}
+
+func TestJSONToClaude_RecoversOrphanInvoke(t *testing.T) {
+	in := `{"model":"deepseek-v4-flash","choices":[{"message":{"role":"assistant","content":"Let me run it.\n<｜DSML｜invoke name=\"terminal\">\n<｜DSML｜parameter name=\"command\" string=\"true\">echo hi</｜DSML｜parameter>\n</｜DSML｜invoke>"},"finish_reason":"stop"}]}`
+	out, err := JSONToClaude([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	blocks, _ := got["content"].([]any)
+	var sawText, sawTool bool
+	for _, bAny := range blocks {
+		b, _ := bAny.(map[string]any)
+		switch b["type"] {
+		case "text":
+			sawText = true
+			if strings.Contains(b["text"].(string), "DSML") {
+				t.Errorf("DSML leaked into text: %v", b["text"])
+			}
+		case "tool_use":
+			sawTool = true
+			if b["name"] != "terminal" {
+				t.Errorf("expected tool terminal, got %v", b["name"])
+			}
+		}
+	}
+	if !sawText || !sawTool {
+		t.Errorf("expected text + tool_use blocks, got %s", out)
+	}
+}
+
+func TestJSONToClaude_NativeToolCallsWinOverOrphan(t *testing.T) {
+	in := `{"model":"m","choices":[{"message":{"role":"assistant","content":"<｜DSML｜invoke name=\"x\">\n<｜DSML｜parameter name=\"a\" string=\"true\">1</｜DSML｜parameter>\n</｜DSML｜invoke>","tool_calls":[{"id":"1","type":"function","function":{"name":"real","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+	out, err := JSONToClaude([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	blocks, _ := got["content"].([]any)
+	names := []string{}
+	for _, bAny := range blocks {
+		if b, _ := bAny.(map[string]any); b["type"] == "tool_use" {
+			names = append(names, b["name"].(string))
+		}
+	}
+	if len(names) != 1 || names[0] != "real" {
+		t.Errorf("expected only native tool_use, got %v (%s)", names, out)
 	}
 }

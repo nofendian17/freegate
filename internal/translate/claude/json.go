@@ -55,6 +55,14 @@ func JSONToClaude(body []byte) ([]byte, error) {
 	return json.Marshal(claude)
 }
 
+// orphanCallsFor extracts recovered tool calls from text, dropping the
+// surrounding prose remainder: a tool call ends the turn (vllm#55954),
+// so trailing content is never forwarded alongside recovered calls.
+func orphanCallsFor(text string) []OrphanToolCall {
+	_, calls, _ := ExtractOrphanInvokes(text)
+	return calls
+}
+
 func convertOpenAIMessage(msg map[string]any) []any {
 	var content []any
 
@@ -85,6 +93,26 @@ func convertOpenAIMessage(msg map[string]any) []any {
 	// Add text content. Free-tier models (notably DeepSeek) echo agentic
 	// scaffolding (<system-reminder>, <feature-flag>, DSML tags) into the
 	// result; strip it so Claude Code never displays the leak.
+	//
+	// Orphan-invoke recovery (vllm#48931/#55954): when the model omits the
+	// DSML tool_calls wrapper but emits complete invoke blocks — and no
+	// native tool_calls are present — recover them into tool_use blocks
+	// instead of leaking (or stripping) the raw DSML. Native tool_calls
+	// always win.
+	hasNativeTCs := false
+	if tcList, ok := msg["tool_calls"].([]any); ok && len(tcList) > 0 {
+		hasNativeTCs = true
+	}
+	appendOrphanToolUse := func(input string) {
+		for _, call := range orphanCallsFor(input) {
+			content = append(content, map[string]any{
+				"type":  "tool_use",
+				"id":    "toolu_" + randID(8),
+				"name":  call.Name,
+				"input": json.RawMessage(call.Input),
+			})
+		}
+	}
 	switch c := msg["content"].(type) {
 	case string:
 		if c != "" {
@@ -93,6 +121,9 @@ func convertOpenAIMessage(msg map[string]any) []any {
 					"type": "text",
 					"text": cleaned,
 				})
+			}
+			if !hasNativeTCs {
+				appendOrphanToolUse(c)
 			}
 		}
 	case []any:
@@ -110,6 +141,15 @@ func convertOpenAIMessage(msg map[string]any) []any {
 				}
 			}
 			content = append(content, pAny)
+		}
+		if !hasNativeTCs {
+			for _, pAny := range c {
+				if p, ok := pAny.(map[string]any); ok {
+					if t, _ := p["text"].(string); t != "" {
+						appendOrphanToolUse(t)
+					}
+				}
+			}
 		}
 	}
 

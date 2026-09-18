@@ -25,14 +25,37 @@ type StreamState struct {
 	toolArgBufs      map[int]*bytes.Buffer
 	openToolBlocks   []int
 	pendingContent   []pendingContent
-	usage            *usageInfo
-	finishReason     string
-	finishSent       bool
-	closed           bool
-	sseBuf           bytes.Buffer
-	outputContent    strings.Builder
-	seenIDs          map[string]int
+	// holdBuf retains recent text deltas for orphan-invoke recovery
+	// (vllm#48931/#55954): a complete DSML invoke block split across
+	// deltas is only recognizable once fully arrived. Only the trailing
+	// window is held, so time-to-first-token is unaffected for normal
+	// prose; see holdTextContent.
+	holdBuf strings.Builder
+	// orphanRecovered marks that this turn recovered at least one tool
+	// call from an orphan invoke block. Trailing prose after a recovered
+	// call is dropped at finish (a tool call ends the turn).
+	orphanRecovered bool
+	// nativeToolSeen marks upstream tool_calls deltas. Native activity
+	// bypasses the hold entirely (native tool_calls always win) and
+	// preserves the pend-behind-open-blocks behavior for interleaved
+	// text; orphan-only turns keep flowing through the hold so a later
+	// parallel invoke still recovers.
+	nativeToolSeen bool
+	usage          *usageInfo
+	finishReason   string
+	finishSent     bool
+	closed         bool
+	sseBuf         bytes.Buffer
+	outputContent  strings.Builder
+	seenIDs        map[string]int
 }
+
+// Hold-back bound for orphan-invoke recovery: a suspect '<' region past
+// this size flushes as plain text (same as today's behavior).
+const (
+	orphanHoldTail = 128
+	orphanHoldMax  = 32 * 1024
+)
 
 // pendingContent is a text/reasoning fragment that arrived while a
 // tool_use block was still open. Anthropic blocks must be strictly
@@ -160,24 +183,31 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 	// so Claude Code never displays the leak.
 	if !state.finishSent {
 		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+			// Drain held text first (recovery scans text only, never
+			// reasoning: an orphan invoke drafted in thinking is not a
+			// tool call, per the official fix).
+			events = append(events, flushHold(state, true, false)...)
 			if cleaned := SanitizeAssistantText(rc); cleaned != "" {
 				events = append(events, handleReasoningContent(cleaned, state)...)
 			}
 		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
+			events = append(events, flushHold(state, true, false)...)
 			if cleaned := SanitizeAssistantText(r); cleaned != "" {
 				events = append(events, handleReasoningContent(cleaned, state)...)
 			}
 		}
 
-		// Handle text content
+		// Handle text content via the orphan-invoke hold-back: complete
+		// blocks split across deltas become tool_use events, the rest
+		// streams through. Sanitizing happens at flush time.
 		if txt, ok := delta["content"].(string); ok && txt != "" {
-			if cleaned := SanitizeAssistantText(txt); cleaned != "" {
-				events = append(events, handleTextContent(cleaned, state)...)
-			}
+			events = append(events, holdTextContent(txt, state)...)
 		}
 
-		// Handle tool calls
+		// Handle tool calls. Native tool_calls win over recovered ones:
+		// held text flushes as plain prose, never double-called.
 		if tcList, ok := delta["tool_calls"].([]any); ok && len(tcList) > 0 {
+			events = append(events, flushHold(state, false, false)...)
 			events = append(events, handleToolCalls(tcList, state)...)
 		}
 	}
@@ -187,9 +217,13 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 		state.usage = extractUsage(usage)
 	}
 
-	// Handle finish_reason
+	// Handle finish_reason. A recovered orphan tool call already set
+	// tool_calls: an upstream "stop" must not downgrade it, or the
+	// client would see tool_use blocks with an end_turn stop reason.
 	if fr, ok := choice["finish_reason"].(string); ok && fr != "" && fr != "null" && !state.finishSent {
-		state.finishReason = fr
+		if state.finishReason != "tool_calls" {
+			state.finishReason = fr
+		}
 		events = append(events, handleFinish(state)...)
 		state.finishSent = true
 		state.closed = true
@@ -394,8 +428,229 @@ func handleTextContent(text string, state *StreamState) []string {
 	return events
 }
 
+// holdTextContent buffers text for orphan-invoke recovery (vllm#48931).
+// Complete invoke blocks are extracted into tool_use events; everything
+// else streams through, retaining only the trailing window (a split
+// marker always lands inside it). Native tool activity bypasses the hold
+// entirely: native tool_calls always win over recovered ones.
+func holdTextContent(text string, state *StreamState) []string {
+	if state.nativeToolSeen {
+		return handleTextContent(text, state)
+	}
+	state.holdBuf.WriteString(text)
+	var events []string
+	for {
+		prose, calls, rest := ExtractOrphanInvokes(state.holdBuf.String())
+		if len(calls) == 0 {
+			break
+		}
+		// Prose before the first recovered call streams; prose between a
+		// recovered call and the next block is trailing and dropped.
+		if prose != "" && !state.orphanRecovered {
+			events = append(events, forwardHeldProse(prose, state)...)
+		}
+		for _, call := range calls {
+			events = append(events, emitOrphanToolUse(call, state)...)
+		}
+		state.holdBuf.Reset()
+		state.holdBuf.WriteString(rest)
+	}
+	buf := state.holdBuf.String()
+	// Trailing prose after a recovered call is dropped — unless it could
+	// still grow into an invoke opener (partial marker). firstPlausible
+	// matching (not whole-word) is essential here: a partial opener like
+	// "<｜DSML" must survive until it resolves.
+	if i := firstPlausibleOpener(buf); i < 0 {
+		state.holdBuf.Reset()
+		if buf != "" && !state.orphanRecovered {
+			events = append(events, forwardHeldProse(buf, state)...)
+		}
+		return events
+	} else {
+		// A possible opener is forming: flush the settled head, retain
+		// from its '<' so a split marker resolves once complete. Give up
+		// past orphanHoldMax (flush as text, today's behavior). After a
+		// recovered call the head is trailing and dropped instead.
+		if i > 0 || len(buf) > orphanHoldMax {
+			head := buf[:max(i, len(buf)-orphanHoldTail)]
+			state.holdBuf.Reset()
+			state.holdBuf.WriteString(buf[len(head):])
+			if !state.orphanRecovered {
+				events = append(events, forwardHeldProse(head, state)...)
+			}
+		}
+	}
+	return events
+}
+
+// firstPlausibleOpener returns the index of the earliest '<' whose suffix
+// could still grow into a DSML invoke-family opener, or -1 when no such
+// suffix exists. Retaining from the earliest (not latest) plausible '<'
+// keeps a partially arrived opener intact while settled prose flushes.
+func firstPlausibleOpener(buf string) int {
+	for i := 0; i < len(buf); i++ {
+		if buf[i] != '<' {
+			continue
+		}
+		if couldBeInvokeOpener(buf[i:]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// couldBeInvokeOpener reports whether frag (text from a '<' to end of
+// buffer) could still grow into a DSML invoke-family opener as more
+// deltas arrive. Close tags never open. A tag region terminated by '>'
+// or '/' is complete and holds only on exact keyword match; an
+// unterminated region holds on prefix match so a split marker resolves
+// once its bytes arrive. Anything else flushes immediately.
+func couldBeInvokeOpener(frag string) bool {
+	s := frag[1:] // drop '<'
+	s = strings.TrimLeft(s, " \t\n\r")
+	if strings.HasPrefix(s, "/") {
+		return false // close tags never open
+	}
+	// Tag-name region ends at the first whitespace, '>', or '/'.
+	end := len(s)
+	if i := strings.IndexAny(s, " \t\n\r>/"); i >= 0 {
+		end = i
+	}
+	completed := end < len(s) && (s[end] == '>' || s[end] == '/')
+	tok := strings.ToLower(s[:end])
+	stripSigil := func(t string) string {
+		t = strings.TrimPrefix(t, "｜dsml｜")
+		t = strings.TrimPrefix(t, "|dsml|")
+		return t
+	}
+	if completed {
+		switch stripSigil(tok) {
+		case "invoke", "parameter", "tool_calls", "tool-calls", "dsml":
+			return true
+		}
+		return tok == "｜dsml｜" || tok == "|dsml|" || tok == "｜" || tok == "|"
+	}
+	norm := stripSigil(tok)
+	for _, kw := range []string{
+		"｜dsml｜invoke", "|dsml|invoke", "invoke",
+		"｜dsml｜parameter", "parameter",
+		"｜dsml｜tool_calls", "|dsml|tool_calls", "tool_calls", "tool-calls",
+		"｜dsml｜", "|dsml|", "｜", "|", "dsml",
+	} {
+		if strings.HasPrefix(kw, norm) || strings.HasPrefix(norm, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// forwardHeldProse sanitizes and forwards buffered prose as text.
+func forwardHeldProse(prose string, state *StreamState) []string {
+	if cleaned := SanitizeAssistantText(prose); cleaned != "" {
+		return handleTextContent(cleaned, state)
+	}
+	return nil
+}
+
+// emitOrphanToolUse opens a tool_use block for a recovered call and
+// registers it like a native one, so handleFinish flushes its arguments
+// and closes the block. The turn ended in a tool call, so the finish
+// reason becomes tool_calls.
+func emitOrphanToolUse(call OrphanToolCall, state *StreamState) []string {
+	var events []string
+	if state.textOpen {
+		events = append(events, contentBlockStop(state.textBlockIdx)...)
+		state.textOpen = false
+	}
+	if state.thinkingOpen {
+		events = append(events, state.closeThinkingBlock()...)
+	}
+	id := "toolu_" + randID(8)
+	blockIdx := state.nextBlockIdx
+	state.nextBlockIdx++
+	state.orphanRecovered = true
+	// Negative keys cannot collide with upstream tool indexes (>= 0).
+	key := -(blockIdx + 1)
+	state.toolCalls[key] = &toolCallInfo{ID: id, Name: call.Name, Index: blockIdx}
+	argBuf := &bytes.Buffer{}
+	argBuf.WriteString(call.Input)
+	state.toolArgBufs[key] = argBuf
+	state.openToolBlocks = append(state.openToolBlocks, blockIdx)
+	state.outputContent.WriteString(call.Input)
+	events = append(events, formatSSE("content_block_start", map[string]any{
+		"type":  "content_block_start",
+		"index": blockIdx,
+		"content_block": map[string]any{
+			"type": "tool_use",
+			"id":   id,
+			"name": call.Name,
+		},
+	})...)
+	if state.finishReason == "" || state.finishReason == "stop" {
+		state.finishReason = "tool_calls"
+	}
+	return events
+}
+
+// flushHold drains the hold buffer. With extract, complete orphan invokes
+// become tool_use events and only the unconsumed tail is retained;
+// otherwise (native tool_calls exist) everything flushes as plain text.
+// Callers with terminal semantics (stream finish) pass dropTrailing to
+// drop prose after the last recovered call, mirroring the official fix.
+func flushHold(state *StreamState, extract bool, dropTrailing bool) []string {
+	if state.holdBuf.Len() == 0 {
+		return nil
+	}
+	buf := state.holdBuf.String()
+	state.holdBuf.Reset()
+	if !extract {
+		return forwardHeldProse(buf, state)
+	}
+	prose, calls, rest := ExtractOrphanInvokes(buf)
+	if len(calls) == 0 {
+		// firstPlausible (not whole-word) matching: a partial opener must
+		// survive; only provably-dead trailing prose is dropped.
+		if dropTrailing && state.orphanRecovered && firstPlausibleOpener(buf) < 0 {
+			// Trailing prose after a recovered call is dropped: a tool
+			// call ends the turn (official semantics). An in-progress
+			// block still forwards as text (today's behavior).
+			return nil
+		}
+		return forwardHeldProse(buf, state)
+	}
+	var events []string
+	// Prose before the first recovered call streams; prose after one is
+	// trailing and dropped once orphanRecovered is set (see below).
+	if prose != "" && !state.orphanRecovered {
+		events = append(events, forwardHeldProse(prose, state)...)
+	}
+	for _, call := range calls {
+		events = append(events, emitOrphanToolUse(call, state)...)
+	}
+	if rest != "" {
+		if dropTrailing {
+			// Trailing prose after a tool call is dropped (official). An
+			// in-progress block still forwards as text (today's behavior).
+			if HasInvokeOpener(rest) {
+				events = append(events, forwardHeldProse(rest, state)...)
+			}
+		} else {
+			// Mid-stream: retain for completion by later deltas.
+			state.holdBuf.WriteString(rest)
+		}
+	}
+	return events
+}
+
+// FlushHoldAtEnd drains the hold buffer when the upstream stream ends
+// without a finish_reason chunk (handleFinish never runs there).
+func (s *StreamState) FlushHoldAtEnd() []string {
+	return flushHold(s, !s.nativeToolSeen, true)
+}
+
 func handleToolCalls(tcList []any, state *StreamState) []string {
 	var events []string
+	state.nativeToolSeen = true
 
 	for _, tcAny := range tcList {
 		tc, ok := tcAny.(map[string]any)
@@ -786,6 +1041,11 @@ func repairUnterminated(s string) string {
 
 func handleFinish(state *StreamState) []string {
 	var events []string
+
+	// Drain the hold buffer first: recovered calls must open their blocks
+	// before anything closes. Trailing prose after a recovered call is
+	// dropped (a tool call ends the turn, per the official fix).
+	events = append(events, flushHold(state, !state.nativeToolSeen, true)...)
 
 	// Close open blocks
 	if state.textOpen {
