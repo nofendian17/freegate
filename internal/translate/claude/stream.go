@@ -155,16 +155,25 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 
 	// Handle reasoning_content (Claude thinking) — prefer reasoning_content;
 	// fall back to reasoning only when reasoning_content is absent.
+	// Free-tier models (notably DeepSeek) echo agentic scaffolding
+	// (<system-reminder>, <feature-flag>, DSML tags) into text; strip it
+	// so Claude Code never displays the leak.
 	if !state.finishSent {
 		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
-			events = append(events, handleReasoningContent(rc, state)...)
+			if cleaned := SanitizeAssistantText(rc); cleaned != "" {
+				events = append(events, handleReasoningContent(cleaned, state)...)
+			}
 		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
-			events = append(events, handleReasoningContent(r, state)...)
+			if cleaned := SanitizeAssistantText(r); cleaned != "" {
+				events = append(events, handleReasoningContent(cleaned, state)...)
+			}
 		}
 
 		// Handle text content
 		if txt, ok := delta["content"].(string); ok && txt != "" {
-			events = append(events, handleTextContent(txt, state)...)
+			if cleaned := SanitizeAssistantText(txt); cleaned != "" {
+				events = append(events, handleTextContent(cleaned, state)...)
+			}
 		}
 
 		// Handle tool calls
@@ -224,7 +233,11 @@ func (s *StreamState) flushToolBlockArgs(blockIdx int) []string {
 		if buf == nil || buf.Len() == 0 {
 			return nil
 		}
-		repaired := repairToolArgs(buf.String())
+		// Sanitize after repair: a serving stack without the
+		// vllm#56302 fix flattens swallowed DSML parameters into the
+		// arguments string; truncate values at the first sigil so no
+		// markup reaches the tool.
+		repaired := SanitizeToolArgs(repairToolArgs(buf.String()))
 		buf.Reset()
 		return formatSSE("content_block_delta", map[string]any{
 			"type":  "content_block_delta",
