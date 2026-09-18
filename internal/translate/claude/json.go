@@ -65,30 +65,52 @@ func convertOpenAIMessage(msg map[string]any) []any {
 	// clients that expect the field to be present (see the streaming
 	// counterpart in stream.go's closeThinkingBlock).
 	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
-		content = append(content, map[string]any{
-			"type":      "thinking",
-			"thinking":  rc,
-			"signature": "unsigned",
-		})
+		if cleaned := SanitizeAssistantText(rc); cleaned != "" {
+			content = append(content, map[string]any{
+				"type":      "thinking",
+				"thinking":  cleaned,
+				"signature": "unsigned",
+			})
+		}
 	} else if r, ok := msg["reasoning"].(string); ok && r != "" {
-		content = append(content, map[string]any{
-			"type":      "thinking",
-			"thinking":  r,
-			"signature": "unsigned",
-		})
+		if cleaned := SanitizeAssistantText(r); cleaned != "" {
+			content = append(content, map[string]any{
+				"type":      "thinking",
+				"thinking":  cleaned,
+				"signature": "unsigned",
+			})
+		}
 	}
 
-	// Add text content
+	// Add text content. Free-tier models (notably DeepSeek) echo agentic
+	// scaffolding (<system-reminder>, <feature-flag>, DSML tags) into the
+	// result; strip it so Claude Code never displays the leak.
 	switch c := msg["content"].(type) {
 	case string:
 		if c != "" {
-			content = append(content, map[string]any{
-				"type": "text",
-				"text": c,
-			})
+			if cleaned := SanitizeAssistantText(c); cleaned != "" {
+				content = append(content, map[string]any{
+					"type": "text",
+					"text": cleaned,
+				})
+			}
 		}
 	case []any:
-		content = append(content, c...)
+		for _, pAny := range c {
+			if p, ok := pAny.(map[string]any); ok {
+				// Match the string branch: drop scaffold-only parts
+				// instead of emitting empty {"text":""} blocks.
+				if t, _ := p["text"].(string); t != "" {
+					if cleaned := SanitizeAssistantText(t); cleaned != t {
+						if cleaned == "" {
+							continue
+						}
+						p["text"] = cleaned
+					}
+				}
+			}
+			content = append(content, pAny)
+		}
 	}
 
 	// Add tool calls as tool_use blocks.
@@ -112,6 +134,12 @@ func convertOpenAIMessage(msg map[string]any) []any {
 			var parts []string
 			if argsStr, ok := fn["arguments"].(string); ok && argsStr != "" {
 				parts = splitToolArgs(argsStr)
+				// Response-side only (fromopenai.go shares splitToolArgs
+				// for requests, so sanitize here, not inside it): drop
+				// DSML leaked into argument values (vllm#56302).
+				for i := range parts {
+					parts[i] = SanitizeToolArgs(parts[i])
+				}
 			} else if argsObj, ok := fn["arguments"].(map[string]any); ok {
 				b, err := json.Marshal(argsObj)
 				if err != nil {

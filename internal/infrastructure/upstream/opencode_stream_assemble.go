@@ -393,7 +393,7 @@ func assembleClaudeMessage(events []string, model string) ([]byte, error) {
 		acc := blocks[idx]
 		if acc.isTool {
 			input := map[string]any{}
-			if s := claude.RepairToolArgs(acc.args.String()); s != "" {
+			if s := claude.SanitizeToolArgs(claude.RepairToolArgs(acc.args.String())); s != "" {
 				_ = json.Unmarshal([]byte(s), &input)
 			}
 			content = append(content, map[string]any{

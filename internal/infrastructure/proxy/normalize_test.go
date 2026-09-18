@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -412,6 +413,62 @@ func TestPassThroughError_CapturesAndForwards(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("content-type = %q, want application/json", got)
+	}
+}
+
+// TestNormalizeJSON_StripsDeepSeekScaffolding verifies that agentic
+// scaffolding echoed by DeepSeek (system-reminder, feature-flag, DSML,
+// git markers) is stripped from non-streaming content so Claude Code
+// never displays the leak.
+func TestNormalizeJSON_StripsDeepSeekScaffolding(t *testing.T) {
+	input := `{"choices":[{"message":{"role":"assistant","content":"fix done\n<system-reminder>prior session</reminder>\n\\ No newline at end of file\n<feature-flag><feature-flag-name>x</feature-flag-name></feature-flag>"},"finish_reason":"stop"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	for _, leak := range []string{"system-reminder", "feature-flag", "No newline", "</reminder>"} {
+		if strings.Contains(output, leak) {
+			t.Errorf("expected leak %q stripped, got: %s", leak, output)
+		}
+	}
+	if !strings.Contains(output, "fix done") {
+		t.Errorf("expected legitimate content preserved, got: %s", output)
+	}
+}
+
+// TestNormalizeStream_StripsDeepSeekScaffolding is the streaming
+// counterpart: scaffold tags in a delta are stripped before the client
+// sees them.
+func TestNormalizeStream_StripsDeepSeekScaffolding(t *testing.T) {
+	input := "data: {\"choices\":[{\"delta\":{\"content\":\"hi <system-reminder>leak</system-reminder> bye\"}}]}\ndata: [DONE]\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	output := buf.String()
+
+	if strings.Contains(output, "system-reminder") || strings.Contains(output, "leak") {
+		t.Errorf("expected scaffold stripped, got: %s", output)
+	}
+	if !strings.Contains(output, "hi") || !strings.Contains(output, "bye") {
+		t.Errorf("expected surrounding content preserved, got: %s", output)
+	}
+}
+
+// TestNormalizeJSON_TruncatesDsmlInToolArgs mirrors vllm#56302 at the
+// proxy layer: a parameter value flattened with DSML markup ends at the
+// first sigil so no markup reaches the tool.
+func TestNormalizeJSON_TruncatesDsmlInToolArgs(t *testing.T) {
+	d := "｜DSML｜"
+	args := `{"alpha":"first</` + d + `>\n<` + d + "parameter name=\\\"beta\\\" string=\\\"true\\\">second\"}"
+	input := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":` + strconv.Quote(args) + `}}]},"finish_reason":"tool_calls"}]}`
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	if strings.Contains(output, "DSML") {
+		t.Errorf("expected no DSML markup in output, got: %s", output)
+	}
+	if !strings.Contains(output, `first`) {
+		t.Errorf("expected alpha value preserved, got: %s", output)
 	}
 }
 

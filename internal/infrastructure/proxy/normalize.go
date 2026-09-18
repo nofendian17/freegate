@@ -124,7 +124,9 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 			if b == nil || b.Len() == 0 {
 				continue
 			}
-			repaired := claude.RepairToolArgs(b.String())
+			// Sanitize after repair (vllm#56302): values end at the
+			// first DSML sigil so no markup reaches the tool.
+			repaired := claude.SanitizeToolArgs(claude.RepairToolArgs(b.String()))
 			chunk := buildOpenAIChunk(metaID, metaModel, metaCreated, map[string]any{
 				"tool_calls": []any{map[string]any{
 					"index":    i,
@@ -280,8 +282,9 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 					if tcs, _ := delta["tool_calls"].([]any); len(tcs) > 0 {
 						sawAnyPayload = true
 					}
-					bufferToolArgs(delta, toolArgs, toolSeen)
-					syncDeltaReasoning(chunk)
+				bufferToolArgs(delta, toolArgs, toolSeen)
+				sanitizeDeltaText(delta)
+				syncDeltaReasoning(chunk)
 				}
 			}
 		}
@@ -623,6 +626,13 @@ func normalizeSSELine(line string) string {
 		return line
 	}
 
+	if choices, _ := chunk["choices"].([]interface{}); len(choices) > 0 {
+		if c, ok := choices[0].(map[string]interface{}); ok {
+			if delta, ok := c["delta"].(map[string]interface{}); ok {
+				sanitizeDeltaText(delta)
+			}
+		}
+	}
 	syncDeltaReasoning(chunk)
 
 	transformed, err := json.Marshal(chunk)
@@ -649,6 +659,48 @@ func syncDeltaReasoning(chunk map[string]interface{}) {
 			continue
 		}
 		syncReasoning(delta)
+	}
+}
+
+// sanitizeDeltaText strips agentic scaffolding leaked by free-tier models
+// (notably DeepSeek: <system-reminder>, <feature-flag>, DSML tags, git
+// markers) from assistant text fields. Tool-call arguments are never
+// touched — stripping there would corrupt JSON.
+func sanitizeDeltaText(delta map[string]interface{}) {
+	for _, k := range []string{"content", "reasoning_content", "reasoning"} {
+		if s, ok := delta[k].(string); ok && s != "" {
+			if cleaned := claude.SanitizeAssistantText(s); cleaned != s {
+				delta[k] = cleaned
+			}
+		}
+	}
+}
+
+// sanitizeMessageText is the non-streaming counterpart of
+// sanitizeDeltaText: it cleans the assistant message object, handling
+// both string content and OpenAI content-part arrays.
+func sanitizeMessageText(msg map[string]interface{}) {
+	for _, k := range []string{"content", "reasoning_content", "reasoning"} {
+		switch v := msg[k].(type) {
+		case string:
+			if v != "" {
+				if cleaned := claude.SanitizeAssistantText(v); cleaned != v {
+					msg[k] = cleaned
+				}
+			}
+		case []interface{}:
+			for _, pAny := range v {
+				p, ok := pAny.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if t, _ := p["text"].(string); t != "" {
+					if cleaned := claude.SanitizeAssistantText(t); cleaned != t {
+						p["text"] = cleaned
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -812,7 +864,9 @@ func repairToolCallsJSON(resp map[string]interface{}) {
 			if !ok || args == "" {
 				continue
 			}
-			fn["arguments"] = claude.RepairToolArgs(args)
+			// Sanitize after repair (vllm#56302): values end at the
+			// first DSML sigil so no markup reaches the tool.
+			fn["arguments"] = claude.SanitizeToolArgs(claude.RepairToolArgs(args))
 		}
 	}
 }
@@ -828,6 +882,7 @@ func syncMessageReasoning(resp map[string]interface{}) {
 		if !ok {
 			continue
 		}
+		sanitizeMessageText(msg)
 		syncReasoning(msg)
 		// OpenAI chat.completion: every assistant message carries `content`
 		// (string or null). Some free-tier upstreams omit the field entirely
