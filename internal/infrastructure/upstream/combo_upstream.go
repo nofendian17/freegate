@@ -69,7 +69,18 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			out, err = translate.Request(out, source, target)
 		}
 		if err == nil && target == translate.FormatOpenAI {
-			out, err = translate.PrepareForUpstream(out)
+			var tokens []string
+			out, tokens, err = translate.PrepareForUpstreamWithModel(out, tier.Model)
+			if len(tokens) > 0 {
+				slog.Debug("combo tier normalized", "combo", u.name, "tier", tier.Upstream.Name(), "normalized", strings.Join(tokens, ","))
+			}
+		}
+		if err == nil && target == translate.FormatClaude {
+			var tokens []string
+			out, tokens, err = translate.NormalizeClaudeContent(out)
+			if len(tokens) > 0 {
+				slog.Debug("combo tier normalized", "combo", u.name, "tier", tier.Upstream.Name(), "normalized", strings.Join(tokens, ","))
+			}
 		}
 		if err != nil {
 			lastErr = err

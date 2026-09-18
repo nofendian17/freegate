@@ -213,3 +213,30 @@ func TestPrepareClaudeRequest_StringSystem(t *testing.T) {
 		t.Errorf("string system should be untouched, got %v", got["system"])
 	}
 }
+
+func TestPrepareClaudeRequest_StripsEmptyTextParts(t *testing.T) {
+	in := `{"messages":[
+		{"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"hi"}]},
+		{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"},{"type":"text","text":"ok"}]}
+	]}`
+	out, err := PrepareClaudeRequest([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	msgs, _ := got["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d (%s)", len(msgs), out)
+	}
+	userParts := msgs[0].(map[string]any)["content"].([]any)
+	if len(userParts) != 1 || userParts[0].(map[string]any)["text"] != "hi" {
+		t.Errorf("expected single text='hi' block, got %v", userParts)
+	}
+	asstParts := msgs[1].(map[string]any)["content"].([]any)
+	if len(asstParts) != 2 {
+		t.Errorf("expected signed thinking + text kept, got %v", asstParts)
+	}
+}

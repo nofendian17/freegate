@@ -11,8 +11,9 @@ import (
 //
 //  1. System array: strip all cache_control, then add
 //     cache_control:{type:"ephemeral", ttl:"1h"} only to the last block.
-//  2. Messages: drop empty messages; keep the final assistant even if
-//     empty.
+//  2. Messages: strip Anthropic-rejected content blocks (empty text,
+//     unsigned empty thinking); drop empty messages; keep the final
+//     assistant even if empty.
 //  3. Tool_use ordering: in each assistant message, drop text blocks
 //     that come AFTER a tool_use block. The Claude API rejects text
 //     after tool_use within the same content array.
@@ -34,8 +35,9 @@ func PrepareClaudeRequest(body []byte) ([]byte, error) {
 	// 1. System normalization
 	normalizeSystemCacheControl(raw)
 
-	// 2. Drop empty messages (keep final assistant)
+	// 2. Strip rejected blocks, then drop empty messages (keep final assistant)
 	if msgs, ok := raw["messages"].([]any); ok && len(msgs) > 0 {
+		stripRejectableBlocks(msgs)
 		filtered := dropEmptyMessages(msgs)
 		// 3. Fix tool_use ordering
 		fixToolUseOrderingInPlace(filtered)

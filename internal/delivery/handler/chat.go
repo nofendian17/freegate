@@ -169,15 +169,33 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		body = translated
 	}
 
-	// One-pass upstream preparation: only for OpenAI chat target.
+	// Upstream preparation by target format. OpenAI chat targets get the
+	// one-pass normalization (roles, reasoning, stream options, plus
+	// DeepSeek flash defaults). Claude targets get Anthropic-rejected
+	// block stripping — the translated path already ran PrepareClaudeRequest
+	// inside translate.Request, but the direct (format == target) path
+	// bypasses it, so this also covers Claude-native clients.
 	// Responses target has its own normalization (max_output_tokens) handled
-	// in the responses translator.
+	// in the responses translator. Applied tokens surface via the
+	// X-Fg-Normalized header, set on the effective writer before ProxyChat
+	// writes the response.
+	var applied []string
 	if targetFormat == translate.FormatOpenAI {
-		body, err = translate.PrepareForUpstream(body)
+		var tokens []string
+		body, tokens, err = translate.PrepareForUpstreamWithModel(body, modelID)
 		if err != nil {
 			respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		applied = tokens
+	} else if targetFormat == translate.FormatClaude {
+		var tokens []string
+		body, tokens, err = translate.NormalizeClaudeContent(body)
+		if err != nil {
+			respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		applied = tokens
 	}
 
 	r = r.WithContext(translate.WithRequestFormat(r.Context(), targetFormat))
@@ -194,15 +212,27 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if format != targetFormat {
 		wr := translate.NewResponseWriterWithDst(w, targetFormat, format)
 		defer wr.Close()
+		setNormalizedHeader(wr, applied)
 		if err := h.chat.ProxyChat(r.Context(), wr, r, modelID, body); err != nil {
 			h.writeChatError(w, err)
 		}
 		return
 	}
 
+	setNormalizedHeader(w, applied)
 	if err := h.chat.ProxyChat(r.Context(), w, r, modelID, body); err != nil {
 		h.writeChatError(w, err)
 	}
+}
+
+// setNormalizedHeader marks the response with the request normalizations
+// that fired. It must run before ProxyChat writes the body; no header is
+// set when nothing applied.
+func setNormalizedHeader(w http.ResponseWriter, applied []string) {
+	if len(applied) == 0 {
+		return
+	}
+	w.Header().Set(translate.NormalizedHeader, strings.Join(applied, ","))
 }
 
 // writeChatError maps a ProxyChat error to an HTTP status and writes an

@@ -136,8 +136,36 @@ func EnsureStreamOptions(body []byte) ([]byte, error) {
 // PrepareForUpstream is the one-pass equivalent of NormalizeRoles +
 // NormalizeRequestReasoning + EnsureStreamOptions. It performs a single
 // JSON unmarshal/marshal instead of three, reducing allocs on the hot path.
-func PrepareForUpstream(body []byte) ([]byte, error) {
+//
+// The returned tokens name each normalization that fired (see the
+// prepost.Applied* constants) for the X-Fg-Normalized response header.
+func PrepareForUpstream(body []byte) ([]byte, []string, error) {
 	return prepost.PrepareUpstream(body)
+}
+
+// PrepareForUpstreamWithModel is PrepareForUpstream plus DeepSeek
+// model-aware normalization: every assistant message gets reasoning_content
+// ("" when absent) and flash models without top_p get 0.95. It mirrors
+// opencode's deepseek/deepseek-v4-flash handling in
+// packages/opencode/src/provider/transform.ts (normalizeMessages,
+// topP) translated to OpenAI-compatible bodies.
+func PrepareForUpstreamWithModel(body []byte, modelID string) ([]byte, []string, error) {
+	return prepost.PrepareUpstreamWithModel(body, modelID)
+}
+
+// NormalizedHeader is the response header listing the request
+// normalizations that fired for the upstream-bound body, as a
+// comma-separated token list (see the prepost.Applied* constants).
+// It is set only when at least one normalization applied.
+const NormalizedHeader = "X-Fg-Normalized"
+
+// NormalizeClaudeContent strips content blocks the Anthropic API rejects
+// (empty text, unsigned empty thinking, empty redacted_thinking) and drops
+// messages left empty, keeping a final assistant. It mirrors opencode's
+// empty-part filter for @ai-sdk/anthropic in
+// packages/opencode/src/provider/transform.ts (normalizeMessages).
+func NormalizeClaudeContent(body []byte) ([]byte, []string, error) {
+	return prepost.NormalizeClaudeContent(body)
 }
 
 func sourceToOpenAI(body []byte, source Format) ([]byte, error) {

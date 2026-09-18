@@ -12,28 +12,56 @@ import (
 //
 // It performs one Unmarshal, applies all mutations on the same map, and
 // marshals once. This reduces allocs from 3x to 1x on the hot path.
-func PrepareUpstream(body []byte) ([]byte, error) {
+//
+// For model-aware DeepSeek normalization (reasoning_content guarantee,
+// flash top_p default), use PrepareUpstreamWithModel.
+func PrepareUpstream(body []byte) ([]byte, []string, error) {
+	return PrepareUpstreamWithModel(body, "")
+}
+
+// PrepareUpstreamWithModel is PrepareUpstream plus DeepSeek model-aware
+// normalization for OpenAI-targeted bodies: every assistant message gets a
+// reasoning_content field (copied from "reasoning" when present, "" when
+// absent), and flash models without top_p get DeepSeekFlashTopP. Non-DeepSeek
+// models behave exactly like PrepareUpstream.
+//
+// The returned tokens name each normalization that fired (see the Applied*
+// constants) for the X-Fg-Normalized response header.
+func PrepareUpstreamWithModel(body []byte, modelID string) ([]byte, []string, error) {
 	if len(body) == 0 {
-		return body, nil
+		return body, nil, nil
 	}
+	isDeepSeek := IsDeepSeekModel(modelID)
+	isFlash := IsDeepSeekFlashModel(modelID)
 	// Fast path: if none of the relevant keys are present, avoid parsing.
+	// A DeepSeek model may still need reasoning_content injected into
+	// messages that carry no reasoning key at all, so require "messages"
+	// before skipping the parse.
 	hasDeveloper := bytes.Contains(body, []byte(`"developer"`))
 	hasReasoning := bytes.Contains(body, []byte(`"reasoning":`))
 	hasStream := bytes.Contains(body, []byte(`"stream"`))
-	if !hasDeveloper && !hasReasoning && !hasStream {
-		return body, nil
+	hasTopP := bytes.Contains(body, []byte(`"top_p"`))
+	hasMessages := bytes.Contains(body, []byte(`"messages"`))
+	needsParse := hasDeveloper || hasReasoning || hasStream || (isFlash && !hasTopP && hasMessages) ||
+		(isDeepSeek && hasMessages)
+	if !needsParse {
+		return body, nil, nil
 	}
 
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("prepost: prepare upstream: %w", err)
+		return nil, nil, fmt.Errorf("prepost: prepare upstream: %w", err)
 	}
 
-	changed := false
+	var applied []string
+	mark := func(token string) {
+		applied = append(applied, token)
+	}
 
 	// 1. Normalize roles: developer -> system
 	if hasDeveloper {
 		if msgs, ok := raw["messages"].([]any); ok && len(msgs) > 0 {
+			roleChanged := false
 			for i, mAny := range msgs {
 				m, _ := mAny.(map[string]any)
 				if m == nil {
@@ -42,17 +70,20 @@ func PrepareUpstream(body []byte) ([]byte, error) {
 				if role, _ := m["role"].(string); role == "developer" {
 					m["role"] = "system"
 					msgs[i] = m
-					changed = true
+					roleChanged = true
 				}
 			}
-			if changed {
+			if roleChanged {
 				raw["messages"] = msgs
+				mark(AppliedDeveloperSystem)
 			}
 		}
 	}
 
-	// 2. Normalize request reasoning: reasoning -> reasoning_content for assistant
-	if hasReasoning {
+	// 2. Normalize request reasoning: reasoning -> reasoning_content for assistant.
+	// For DeepSeek models, also guarantee reasoning_content on every
+	// assistant message ("" when neither field is present).
+	if hasReasoning || (isDeepSeek && hasMessages) {
 		if msgs, ok := raw["messages"].([]any); ok && len(msgs) > 0 {
 			reasonChanged := false
 			for _, mAny := range msgs {
@@ -68,10 +99,13 @@ func PrepareUpstream(body []byte) ([]byte, error) {
 				if hasR && !hasRC {
 					m["reasoning_content"] = r
 					reasonChanged = true
+				} else if isDeepSeek && !hasRC && !hasR {
+					m["reasoning_content"] = ""
+					reasonChanged = true
 				}
 			}
 			if reasonChanged {
-				changed = true
+				mark(AppliedReasoningContent)
 			}
 		}
 	}
@@ -81,18 +115,26 @@ func PrepareUpstream(body []byte) ([]byte, error) {
 		if stream, _ := raw["stream"].(bool); stream {
 			if _, ok := raw["stream_options"]; !ok {
 				raw["stream_options"] = map[string]any{"include_usage": true}
-				changed = true
+				mark(AppliedStreamOptions)
 			}
 		}
 	}
 
-	if !changed {
-		return body, nil
+	// 4. Flash top_p default for DeepSeek flash models.
+	if isFlash {
+		if _, ok := raw["top_p"]; !ok {
+			raw["top_p"] = DeepSeekFlashTopP
+			mark(AppliedDeepSeekFlashTopP)
+		}
+	}
+
+	if len(applied) == 0 {
+		return body, nil, nil
 	}
 
 	out, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("prepost: prepare upstream: marshal: %w", err)
+		return nil, nil, fmt.Errorf("prepost: prepare upstream: marshal: %w", err)
 	}
-	return out, nil
+	return out, applied, nil
 }

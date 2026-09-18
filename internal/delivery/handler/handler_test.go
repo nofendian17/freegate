@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"freegate/internal/domain"
@@ -38,7 +39,7 @@ type mockModels struct {
 }
 
 func (m *mockModels) AllModels() []domain.Model { return m.models }
-func (m *mockModels) IsReady() bool            { return m.ready }
+func (m *mockModels) IsReady() bool             { return m.ready }
 
 type mockMetrics struct {
 	data map[string]any
@@ -336,5 +337,60 @@ func TestHandler_Chat_InvalidJSON(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandler_Chat_NormalizedHeaderDeepSeekFlash(t *testing.T) {
+	h, _, _, _ := newMockHandler()
+	body := `{"model":"deepseek-v4-flash","messages":[{"role":"assistant","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	got := w.Header().Get("X-Fg-Normalized")
+	for _, want := range []string{"reasoning-content", "deepseek-flash-top-p"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected header to contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestHandler_Chat_NoNormalizedHeaderWhenClean(t *testing.T) {
+	h, _, _, _ := newMockHandler()
+	body := `{"model":"qwen-plus","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("X-Fg-Normalized"); got != "" {
+		t.Errorf("expected no normalized header, got %q", got)
+	}
+}
+
+func TestHandler_Chat_NormalizedHeaderClaudeStrip(t *testing.T) {
+	h, _, _, _ := newMockHandler()
+	body := `{"model":"union-alpha","max_tokens":32,"messages":[{"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"hi"}]}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	got := w.Header().Get("X-Fg-Normalized")
+	if !strings.Contains(got, "claude-strip-empty") {
+		t.Errorf("expected header to contain %q, got %q", "claude-strip-empty", got)
 	}
 }
