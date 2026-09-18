@@ -32,7 +32,7 @@ func TestSanitizeAssistantText_DSMLLeakClasses(t *testing.T) {
 		// Class 2: mis-spelled closer </｜DSML｜> (missing tag name).
 		"misclosed": "<" + d + "parameter name=\"alpha\" string=\"true\">first</" + d + ">\n<" + d + "parameter name=\"beta\" string=\"true\">second</" + d + "parameter>",
 		// Class 3: misspelled opener, block consumed.
-		"misspelled": "<" + d + "tool-calls\nrecord_item\n</plan>",
+		"misspelled":  "<" + d + "tool-calls\nrecord_item\n</plan>",
 		"stray_plan":  "hi </plan> bye",
 		"paired_plan": "a <plan>do x</plan> b",
 	}
@@ -99,5 +99,39 @@ func TestSanitizeAssistantText_ExtremelyImportant(t *testing.T) {
 	}
 	if !strings.Contains(got, "ok") {
 		t.Errorf("expected trailing content preserved, got %q", got)
+	}
+}
+
+func TestSanitizeAssistantText_OrphanDSMLFamilyTags(t *testing.T) {
+	cases := map[string]string{
+		"tool_calls closer":     "done\n</tool_calls>",
+		"tool_input reminder":   "text</tool_input_cp_reminder>\n\n\nmore",
+		"invoke closer":         "x</invoke>y",
+		"parameter closer":      "x]]</parameter>y",
+		"tool-calls hyphen":     "a</tool-calls>b",
+		"case insensitive":      "a</TOOL_CALLS>b",
+		"with whitespace":       "a< / tool_calls >b",
+		"cdata residue glued":   "x]]</parameter>y",
+		"legit prose kept":      "tune the timeout parameter carefully",
+		"xml content preserved": "set <parameter>timeout</parameter> value",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := SanitizeAssistantText(in)
+			for _, leak := range []string{"</tool_calls>", "</TOOL_CALLS>", "tool_input_cp_reminder", "</invoke>", "</parameter>", "<parameter>", "</tool-calls>"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("expected leak %q removed, got: %q", leak, got)
+				}
+			}
+		})
+	}
+	if got := SanitizeAssistantText("done\n</tool_calls>"); !strings.Contains(got, "done") {
+		t.Errorf("expected prose preserved, got: %q", got)
+	}
+	if got := SanitizeAssistantText("set <parameter>timeout</parameter> value"); !strings.Contains(got, "timeout") {
+		t.Errorf("expected inner content preserved, got: %q", got)
+	}
+	if got := SanitizeAssistantText("tune the timeout parameter carefully"); got != "tune the timeout parameter carefully" {
+		t.Errorf("expected legit prose untouched, got: %q", got)
 	}
 }

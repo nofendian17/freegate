@@ -20,6 +20,9 @@ import (
 //     like <｜DSML｜tool-calls)
 //   - stray <plan>/</plan> tags from malformed DSML blocks (same PR,
 //     class 3); tags only, inner content is preserved
+//   - orphan DSML-family closers without the DSML sigil, observed from
+//     degenerate free-tier output: </tool_calls>, </tool_input_cp_reminder>,
+//     and bare <invoke>/<parameter> forms; tags only, inner content kept
 //   - git diff marker lines: "\ No newline at end of file"
 //
 // Only assistant *text* fields (content, reasoning_content, reasoning)
@@ -61,6 +64,10 @@ func SanitizeAssistantText(s string) string {
 	}
 	s = dsmlSingleRe.ReplaceAllString(s, "")
 	s = planSingleRe.ReplaceAllString(s, "")
+	// Orphan DSML-family tags without the sigil (degenerate model output
+	// drops the <｜DSML｜> wrapper but keeps tag names). Standalone-only,
+	// like <plan>: unlike scaffold pairs, inner content is preserved.
+	s = orphanTagRe.ReplaceAllString(s, "")
 	// Unterminated DSML opener (runaway invoke name with no closer and no
 	// closing `>`, vllm#54686 class 1): strip from the opener to the end.
 	// DSML markup is never legitimate in assistant prose — real tool calls
@@ -122,6 +129,11 @@ var scaffoldMarkersLower = []string{
 	"extremely",
 	"<plan",
 	"plan>",
+	"tool_calls",
+	"tool-calls",
+	"tool_input",
+	"invoke>",
+	"parameter>",
 }
 
 // scaffoldTagNames are stripped as <name>...</name> pairs and as
@@ -156,6 +168,12 @@ var (
 	// <plan>...</plan> block may be legitimate model structuring, so only
 	// the tags are removed and inner content is preserved.
 	planSingleRe = regexp.MustCompile(`(?i)<\s*/?\s*plan\s*/?\s*>`)
+	// Orphan DSML-family tags without the sigil (degenerate free-tier
+	// output emits bare </tool_calls>, </tool_input_cp_reminder>, etc.).
+	// Standalone open/close only; inner content is preserved. An optional
+	// leading `]]` (CDATA-residue glued to the tag, e.g. `]]</parameter>`)
+	// is consumed with it; lone `]]` in prose is left alone.
+	orphanTagRe = regexp.MustCompile(`(?i)(?:\]\])?<\s*/?\s*(tool_calls|tool-calls|toolcall|invoke|parameter|tool_input_cp_reminder)\s*/?\s*>`)
 	// Git diff marker line.
 	gitNoNewlineRe = regexp.MustCompile(`(?m)^\\ No newline at end of file\s*\r?$`)
 	multiBlankRe   = regexp.MustCompile(`\n{3,}`)
