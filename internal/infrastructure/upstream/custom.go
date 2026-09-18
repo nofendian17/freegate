@@ -12,59 +12,67 @@ import (
 )
 
 type CustomUpstream struct {
-	name   string
-	client *HTTPClient
-	cache  *ModelCache
-	allow  []string
-	block  []string
+	name     string
+	client   *HTTPClient
+	cache    *ModelCache
+	selected map[string]struct{}
 }
 
 var _ domain.Upstream = (*CustomUpstream)(nil)
 
-func NewCustomUpstream(name, baseURL string, keys []string, headers map[string]string, allow, block []string, tr *http.Transport) *CustomUpstream {
+func NewCustomUpstream(name, baseURL string, keys []string, headers map[string]string, models []string, tr *http.Transport) *CustomUpstream {
 	if headers == nil {
 		headers = map[string]string{}
 	}
-	lower := func(in []string) []string {
-		out := make([]string, 0, len(in))
-		for _, s := range in {
-			if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
-				out = append(out, s)
-			}
+	u := &CustomUpstream{
+		name:     name,
+		client:   NewHTTPClientWithTransport(baseURL, keys, headers, tr),
+		cache:    NewModelCache(),
+		selected: make(map[string]struct{}, len(models)),
+	}
+	u.SetSelected(models)
+	return u
+}
+
+// SetSelected replaces the explicit model selection and seeds the cache
+// with bare entries, so Match works before the first catalog fetch. Fresh
+// metadata overlays these entries on the next ListModels.
+// A nil slice selects the legacy mode: the whole catalog routes,
+// preserving the pre-selection semantic for rows saved before the
+// selection feature existed. Nothing is seeded; the first fetch fills
+// the cache, and until then Match accepts everything.
+func (u *CustomUpstream) SetSelected(models []string) {
+	if models == nil {
+		u.selected = nil
+		return
+	}
+	sel := make(map[string]struct{}, len(models))
+	bare := make([]domain.Model, 0, len(models))
+	for _, m := range models {
+		if m = strings.TrimSpace(m); m == "" {
+			continue
 		}
-		return out
+		if _, dup := sel[m]; dup {
+			continue
+		}
+		sel[m] = struct{}{}
+		bare = append(bare, domain.Model{ID: m, Object: "model", Provider: "custom:" + u.name})
 	}
-	return &CustomUpstream{
-		name:   name,
-		client: NewHTTPClientWithTransport(baseURL, keys, headers, tr),
-		cache:  NewModelCache(),
-		allow:  lower(allow),
-		block:  lower(block),
-	}
+	u.selected = sel
+	u.cache.Set(bare)
 }
 
 func (u *CustomUpstream) Name() string { return "custom:" + u.name }
 
+// Match reports whether modelID routes to this provider: any model in
+// legacy mode (nil selection), otherwise only explicitly selected ones.
+// Nothing is auto-added to a curated selection.
 func (u *CustomUpstream) Match(modelID string) bool {
-	m := strings.ToLower(modelID)
-	for _, b := range u.block {
-		if strings.Contains(m, b) {
-			return false
-		}
+	if u.selected == nil {
+		return true
 	}
-	if len(u.allow) > 0 {
-		hit := false
-		for _, a := range u.allow {
-			if strings.Contains(m, a) {
-				hit = true
-				break
-			}
-		}
-		if !hit {
-			return false
-		}
-	}
-	return u.cache.Has(modelID)
+	_, ok := u.selected[modelID]
+	return ok
 }
 
 func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
@@ -83,13 +91,15 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error)
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("custom %s: parse models: %w", u.name, err)
 	}
-	seen := map[string]bool{}
-	out := make([]domain.Model, 0, len(list.Data))
+	byID := make(map[string]domain.Model, len(list.Data))
+	order := make([]string, 0, len(list.Data))
 	for _, m := range list.Data {
-		if m.ID == "" || seen[m.ID] {
+		if m.ID == "" {
 			continue
 		}
-		seen[m.ID] = true
+		if _, dup := byID[m.ID]; dup {
+			continue
+		}
 		obj := m.Object
 		if obj == "" {
 			obj = "model"
@@ -98,7 +108,33 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error)
 		if owner == "" {
 			owner = "custom:" + u.name
 		}
-		out = append(out, domain.Model{ID: m.ID, Object: obj, Created: m.Created, OwnedBy: owner, IsFree: true, Provider: "custom:" + u.name})
+		byID[m.ID] = domain.Model{ID: m.ID, Object: obj, Created: m.Created, OwnedBy: owner, IsFree: true, Provider: "custom:" + u.name}
+		order = append(order, m.ID)
+	}
+	// Legacy mode (nil selection): the whole fetched catalog is served,
+	// the pre-selection semantic. Curated mode only overlays fresh
+	// metadata onto the explicit selection: unselected models never
+	// enter the cache, and selected models missing from this fetch keep
+	// their previous entry so one bad refresh can't silently drop an
+	// explicit choice.
+	if u.selected == nil {
+		out := make([]domain.Model, 0, len(order))
+		for _, id := range order {
+			out = append(out, byID[id])
+		}
+		u.cache.Set(out)
+		return out, nil
+	}
+	cur := u.cache.Get()
+	out := make([]domain.Model, 0, len(u.selected))
+	for _, m := range cur {
+		if _, ok := u.selected[m.ID]; !ok {
+			continue
+		}
+		if fresh, ok := byID[m.ID]; ok {
+			m = fresh
+		}
+		out = append(out, m)
 	}
 	u.cache.Set(out)
 	return out, nil

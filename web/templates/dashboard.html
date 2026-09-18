@@ -664,7 +664,11 @@
         body: JSON.stringify({
           model: model,
           messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-          max_tokens: 20
+          max_tokens: 20,
+          // Explicit non-stream probe (like opencode): single JSON
+          // response, so the modal can parse it. Omitting `stream`
+          // leaves the framing to gateway defaults.
+          stream: false
         })
       })
       .then(function(resp) {

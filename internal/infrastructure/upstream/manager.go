@@ -2,11 +2,14 @@ package upstream
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
 )
 
@@ -47,12 +50,27 @@ func (m *ProviderManager) Rebuild() error {
 		if err != nil {
 			return err
 		}
-		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.ModelAllow, full.ModelBlock, m.tr)
+		if full.Models != nil && len(full.Models) == 0 {
+			slog.Warn("custom provider has no models selected, it will not route", "provider", full.Name)
+		}
+		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, m.tr)
 		m.mu.RLock()
 		old := m.customs[r.Name]
 		m.mu.RUnlock()
 		if old != nil {
-			fresh.SeedModels(old.Models())
+			// Carry over fresh metadata for still-selected models only;
+			// deselected models must not leak back in via the old cache.
+			// The constructor already seeded bare entries for the new
+			// selection, so Match works even before the next fetch.
+			keep := make([]domain.Model, 0)
+			for _, om := range old.Models() {
+				if fresh.Match(om.ID) {
+					keep = append(keep, om)
+				}
+			}
+			if len(keep) > 0 {
+				fresh.SeedModels(keep)
+			}
 		}
 		next[r.Name] = fresh
 		nextIntervals[r.Name] = refreshInterval(full.RefreshSec)
@@ -66,6 +84,24 @@ func (m *ProviderManager) Rebuild() error {
 		m.reconcile()
 	}
 	return nil
+}
+
+// Warm synchronously fetches the model catalog for one live custom
+// upstream, so a newly added or updated provider routes correctly
+// immediately instead of waiting for the background refresher's first
+// tick. ListModels stores the catalog in the upstream's cache as a side
+// effect; the ComboRouter holds the same object pointers, so no further
+// rebuild is needed. Best-effort: callers log the error and continue.
+func (m *ProviderManager) Warm(name string) ([]domain.Model, error) {
+	m.mu.RLock()
+	u := m.customs[name]
+	m.mu.RUnlock()
+	if u == nil {
+		return nil, fmt.Errorf("unknown custom provider %q", name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return u.ListModels(ctx)
 }
 
 func (m *ProviderManager) All() []*CustomUpstream {

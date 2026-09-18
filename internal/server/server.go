@@ -290,7 +290,7 @@ func New(cfg *config.Config) (*Server, error) {
 		combo.RebuildCombos(rows, lookup)
 		return nil
 	}
-	adminHandler := admin.New(pstore, rebuild, sharedTr)
+	adminHandler := admin.New(pstore, rebuild, sharedTr).WithWarmer(mgr.Warm)
 
 	// Dashboard + provider/combo management (admin-only).
 	r.Group(func(r chi.Router) {

@@ -24,8 +24,12 @@ func waitModels(t *testing.T, u *CustomUpstream, what string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(u.Models()) > 0 {
-			return
+		// Bare selection-seeded entries carry no OwnedBy; only a
+		// completed catalog fetch attributes them.
+		for _, m := range u.Models() {
+			if m.OwnedBy != "" {
+				return
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -40,7 +44,7 @@ func TestManager_RebuildSecondGenerationRefreshes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if _, err := store.CreateProvider(providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, RefreshSec: 10, Enabled: true}); err != nil {
+	if _, err := store.CreateProvider(providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1"}, RefreshSec: 10, Enabled: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	mgr := NewProviderManager(store, srv.Client().Transport.(*http.Transport))

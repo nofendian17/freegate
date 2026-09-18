@@ -89,7 +89,7 @@ curl -X POST http://localhost:1234/v1/messages \
 
 A model ID is served by:
 - **Combo** — exact-name match on a tiered combo first (`model=hemat` → Tier1→Tier2→Tier3, failover on transport errors/429s/5xx)
-- **Custom provider** — if a custom provider's catalog contains it
+- **Custom provider** — if the model was explicitly selected for a custom provider (dashboard checkboxes from the probe; only stored models route)
 - **Kilo** — if Kilo's free catalog contains it (`isFree == true`)
 - **LLM7** — if LLM7's free catalog contains it (keyless gateway; free = not usage-based or `turbo` tier)
 - **OpenCode** — everything else (default upstream)

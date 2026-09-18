@@ -18,11 +18,20 @@ type Provider struct {
 	ID         uint              `gorm:"primaryKey" json:"id"`
 	Name       string            `gorm:"uniqueIndex;not null" json:"name"`
 	BaseURL    string            `gorm:"not null" json:"base_url"`
-	APIKeys    []string          `gorm:"serializer:json;not null" json:"-"`
-	Headers    map[string]string `gorm:"serializer:json" json:"headers,omitempty"`
-	ModelAllow []string          `gorm:"serializer:json" json:"model_allow,omitempty"`
-	ModelBlock []string          `gorm:"serializer:json" json:"model_block,omitempty"`
-	RefreshSec int               `gorm:"default:60" json:"refresh_sec"`
+	APIKeys []string `gorm:"serializer:json;not null" json:"-"`
+	Headers map[string]string `gorm:"serializer:json" json:"headers,omitempty"`
+	// Models is the explicit user-curated selection: only these model IDs
+	// are stored and routed. The background refresh never adds models on
+	// its own; it only refreshes metadata for the selected ones.
+	// A nil slice marks a legacy row (saved before the selection
+	// feature): the whole catalog routes, preserving the pre-upgrade
+	// semantic of empty allow+block. An explicit empty slice routes
+	// nothing. No omitempty so nil (null) stays distinguishable from
+	// empty ([]) on the wire.
+	// (Legacy model_allow/model_block columns may still exist in old DB
+	// files; they are no longer read. AutoMigrate never drops columns.)
+	Models     []string `gorm:"serializer:json" json:"models"`
+	RefreshSec int      `gorm:"default:60" json:"refresh_sec"`
 	// Priority controls list ordering only; runtime order comes
 	// solely from combo tiers.
 	Priority int  `json:"priority"`
@@ -97,6 +106,26 @@ func (p *Provider) Validate() error {
 		return fmt.Errorf("refresh_sec must be 10..3600")
 	}
 	return nil
+}
+
+// NormalizeModels trims, drops empties, and dedupes model IDs while
+// preserving order. Used for the explicit per-provider selection.
+// A nil input stays nil so legacy rows (whole catalog routes) survive
+// a normalize round-trip; use an explicit empty slice to route nothing.
+func NormalizeModels(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, m := range in {
+		if m = strings.TrimSpace(m); m == "" || seen[m] {
+			continue
+		}
+		seen[m] = true
+		out = append(out, m)
+	}
+	return out
 }
 
 func MaskKeys(keys []string) []string {
@@ -179,6 +208,7 @@ func (s *Store) CreateProvider(p Provider) (Provider, error) {
 	if p.RefreshSec == 0 {
 		p.RefreshSec = 60
 	}
+	p.Models = NormalizeModels(p.Models)
 	if err := p.Validate(); err != nil {
 		return Provider{}, err
 	}
@@ -270,6 +300,7 @@ func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
 		if p.RefreshSec == 0 {
 			p.RefreshSec = 60
 		}
+		p.Models = NormalizeModels(p.Models)
 		if err := p.Validate(); err != nil {
 			return err
 		}

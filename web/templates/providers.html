@@ -15,6 +15,7 @@
     .combo-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px dashed var(--border); font-size: 13px; flex-wrap: wrap; }
     .combo-row:last-child { border-bottom: 0; }
     .combo-tiers { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+    .prov-warn { color: var(--warning); font-size: 12px; margin-bottom: var(--space-2); }
     @media (max-width: 640px) {
       .prov-grid { grid-template-columns: 1fr; }
       .combo-row select, .combo-row .prov-input { max-width: 100%; flex: 1 1 140px; }
@@ -55,13 +56,14 @@
             <tr>
               <th>name</th>
               <th>base_url</th>
+              <th style="width:80px">models</th>
               <th style="width:80px">priority</th>
               <th style="width:80px">enabled</th>
               <th style="width:160px">actions</th>
             </tr>
           </thead>
           <tbody id="provider-table">
-            <tr><td colspan="5" class="dim" aria-busy="true">// loading…</td></tr>
+            <tr><td colspan="6" class="dim" aria-busy="true">// loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -125,13 +127,10 @@
               <label class="prov-label" for="f-headers">headers (KEY=Value, one per line)</label>
               <textarea id="f-headers" class="prov-input" rows="2" placeholder="X-Custom=1"></textarea>
             </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-allow">model allow (comma-separated)</label>
-              <input id="f-allow" class="prov-input" placeholder="gpt-*,claude-*">
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-block">model block (comma-separated)</label>
-              <input id="f-block" class="prov-input" placeholder="*-vision">
+            <div class="prov-field full">
+              <label class="prov-label">models — only checked models are stored & routed</label>
+              <div id="f-legacy" class="prov-warn" style="display:none">// legacy row: whole catalog currently routes — klik > test lalu save untuk mengunci seleksi</div>
+              <div id="f-models" class="prov-models"><span class="dim">// klik > test untuk memuat daftar model dari upstream</span></div>
             </div>
             <div class="prov-field">
               <label class="prov-label" for="f-refresh">refresh_sec</label>
@@ -163,6 +162,10 @@
   var modal = document.getElementById('provider-modal');
   var formErr = document.getElementById('provider-form-err');
   var testOut = document.getElementById('provider-test-out');
+  // Stored selection of the row being edited: null = legacy row (whole
+  // catalog routes until first save), [] = explicit empty, undefined =
+  // new provider. Drives the legacy banner + probe auto-check.
+  var editingLegacyModels;
 
   function show(el, msg, ok) {
     el.textContent = msg;
@@ -208,9 +211,6 @@
   function lines(id) {
     return document.getElementById(id).value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
   }
-  function csv(id) {
-    return document.getElementById(id).value.split(',').map(function(s){return s.trim();}).filter(Boolean);
-  }
   function parseHeaders() {
     var out = {};
     lines('f-headers').forEach(function(l) {
@@ -220,25 +220,57 @@
     return out;
   }
 
+  // Model checklist: `saved` are the stored selection (always shown
+  // checked); `probe` is the upstream catalog from > test (unchecked
+  // unless already saved). Only checked IDs are sent on save.
+  function renderModelChecks(saved, probe) {
+    var box = document.getElementById('f-models');
+    var keep = {};
+    Array.prototype.forEach.call(box.querySelectorAll('input[type=checkbox]:checked'), function(c) { keep[c.value] = true; });
+    (saved || []).forEach(function(id) { keep[id] = true; });
+    var ids = [];
+    (saved || []).concat(probe || []).forEach(function(id) {
+      if (id && ids.indexOf(id) < 0) ids.push(id);
+    });
+    if (!ids.length) {
+      box.innerHTML = '<span class="dim">// klik > test untuk memuat daftar model dari upstream</span>';
+      return;
+    }
+    box.innerHTML = ids.map(function(id) {
+      return '<label class="prov-check"><input type="checkbox" value="' + esc(id) + '"' +
+        (keep[id] ? ' checked' : '') + '> ' + esc(id) + '</label>';
+    }).join('');
+  }
+  function checkedModels() {
+    return Array.prototype.map.call(
+      document.getElementById('f-models').querySelectorAll('input[type=checkbox]:checked'),
+      function(c) { return c.value; });
+  }
+
   function loadProviders() {
     getJSON('/api/providers')
       .then(function(body) {
         var rows = body.data || body || [];
         if (!rows.length) {
-          table.innerHTML = '<tr><td colspan="5" class="dim">// no custom providers yet — use "> new provider"</td></tr>';
+          table.innerHTML = '<tr><td colspan="6" class="dim">// no custom providers yet — use "> new provider"</td></tr>';
           return;
         }
-        table.innerHTML = rows.map(function(p) {
+          table.innerHTML = rows.map(function(p) {
+          var legacy = p.models == null;
+          var n = (p.models || []).length;
+          var modelsCell = legacy ? '<span class="pill tone-amber">all — legacy</span>'
+            : (n ? n : '<span class="dim">0 — no route</span>');
           return '<tr data-id="' + p.id + '">' +
             '<td>' + esc(p.name) + '</td>' +
             '<td class="dim">' + esc(p.base_url) + '</td>' +
+            '<td>' + modelsCell + '</td>' +
             '<td>' + (p.priority || 0) + '</td>' +
             '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
             '<td><button class="btn-tertiary prov-edit" type="button" data-id="' + p.id + '">> edit</button></td>' +
             '</tr>';
         }).join('');
       })
-      .catch(function(e) { table.innerHTML = '<tr><td colspan="5" class="dim">! load failed — ' + esc(e.message) + '</td></tr>'; show(errBox, '! load providers: ' + e.message); });
+      .catch(function(e) { table.innerHTML = '<tr><td colspan="6" class="dim">! load failed — ' + esc(e.message) + '</td></tr>'; show(errBox, '! load providers: ' + e.message); });
   }
 
   function esc(s) {
@@ -254,13 +286,15 @@
     document.getElementById('f-base-url').value = p.base_url || '';
     document.getElementById('f-api-keys').value = '';
     document.getElementById('f-headers').value = Object.entries(p.headers || {}).map(function(kv){return kv[0]+'='+kv[1];}).join('\n');
-    document.getElementById('f-allow').value = (p.model_allow || []).join(',');
-    document.getElementById('f-block').value = (p.model_block || []).join(',');
+    editingLegacyModels = ('models' in p) ? p.models : undefined;
+    document.getElementById('f-legacy').style.display = editingLegacyModels === null ? '' : 'none';
+    renderModelChecks(p.models || [], null);
     document.getElementById('f-refresh').value = p.refresh_sec != null ? p.refresh_sec : 60;
     document.getElementById('f-priority').value = p.priority || 0;
     document.getElementById('f-enabled').checked = p.enabled !== false;
     document.getElementById('provider-delete').style.display = p.id ? '' : 'none';
-    document.getElementById('provider-test').style.display = p.id ? '' : 'none';
+    // Test stays visible for new providers too: without an id it probes
+    // the form values ad-hoc so the checklist can be filled pre-save.
     document.getElementById('provider-modal-title').textContent = p.id ? '// edit provider' : '// new provider';
     show(formErr, ''); show(testOut, '');
     modal.style.display = 'flex';
@@ -313,8 +347,7 @@
       base_url: document.getElementById('f-base-url').value.trim(),
       api_keys: lines('f-api-keys'),
       headers: parseHeaders(),
-      model_allow: csv('f-allow'),
-      model_block: csv('f-block'),
+      models: checkedModels(),
       refresh_sec: parseInt(document.getElementById('f-refresh').value, 10) || 0,
       priority: parseInt(document.getElementById('f-priority').value, 10) || 0,
       enabled: document.getElementById('f-enabled').checked
@@ -331,10 +364,32 @@
 
   document.getElementById('provider-test').addEventListener('click', function() {
     var id = document.getElementById('f-id').value;
-    if (!id) return;
+    var url, opts;
+    if (id) {
+      url = '/api/providers/' + id + '/test';
+      opts = {method: 'POST'};
+    } else {
+      // No id yet: probe the form values ad-hoc (stores nothing).
+      url = '/api/providers/probe';
+      opts = {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+        base_url: document.getElementById('f-base-url').value.trim(),
+        api_keys: lines('f-api-keys'),
+        headers: parseHeaders()
+      })};
+    }
     withBusy(this, '> testing…', function() {
-      return getJSON('/api/providers/' + id + '/test', {method: 'POST'})
-        .then(function(b) { show(testOut, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok); });
+      return getJSON(url, opts)
+        .then(function(b) {
+          // getJSON resolves with the body itself (never {body}).
+          var probed = (b && b.models) || [];
+          // Legacy row (models === null, saved pre-selection): everything
+          // currently routes, so pre-check the whole catalog — saving then
+          // preserves routing instead of silently narrowing it.
+          var legacy = editingLegacyModels === null;
+          var keep = legacy ? probed : checkedModels();
+          renderModelChecks(keep, probed);
+          show(testOut, (b.ok && b.ok ? '// ok — centang model yang mau disimpan' : '// fail') + ' ' + JSON.stringify(b), !!(b.ok && b.ok));
+        });
     }).catch(function(e) { show(testOut, '! test: ' + e.message); });
   });
 

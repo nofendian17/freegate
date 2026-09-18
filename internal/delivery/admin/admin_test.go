@@ -11,6 +11,7 @@ import (
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/upstream"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -258,6 +259,166 @@ func TestAdmin_DeleteCombo_RebuildError(t *testing.T) {
 	}
 }
 
+// TestAdmin_CreateProvider_WarmsCatalog is a regression test for the
+// reported bug: right after adding a custom provider, chat requests for
+// its models were routed to the default upstream because the new live
+// upstream started with an empty catalog (Match requires cache.Has) and
+// the background refresher hadn't ticked yet. Create must warm the
+// catalog synchronously so Match succeeds immediately.
+func TestAdmin_CreateProvider_WarmsCatalog(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"acme-model","object":"model"}]}`))
+	}))
+	defer fake.Close()
+
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	mgr := upstream.NewProviderManager(s, tr)
+	h := New(s, mgr.Rebuild, nil).WithWarmer(mgr.Warm)
+	r := h.Routes()
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers",
+		bytes.NewBufferString(`{"name":"acme","base_url":"`+fake.URL+`","api_keys":["sk-1"],"models":["acme-model"]}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	// No refresher is running: routing must still hit the new provider.
+	var live *upstream.CustomUpstream
+	for _, u := range mgr.All() {
+		if u.Name() == "custom:acme" {
+			live = u
+		}
+	}
+	if live == nil {
+		t.Fatal("expected live custom:acme upstream after rebuild")
+	}
+	if !live.Match("acme-model") {
+		t.Fatal("new provider must Match its catalog model immediately after create (else chat falls through to default upstream)")
+	}
+}
+
+// TestAdmin_TestProvider_WarmsCatalog verifies the probe button also
+// seeds the live catalog: a provider added while the upstream was down
+// (empty cache) routes correctly right after a successful manual test.
+func TestAdmin_TestProvider_WarmsCatalog(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	mgr := upstream.NewProviderManager(s, http.DefaultTransport.(*http.Transport).Clone())
+	h := New(s, mgr.Rebuild, nil).WithWarmer(mgr.Warm)
+	r := h.Routes()
+
+	// Register first while the upstream is unreachable: create warms
+	// best-effort and must still return 201.
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers",
+		bytes.NewBufferString(`{"name":"late","base_url":"http://127.0.0.1:1","api_keys":["sk-1"]}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	row, err := s.GetProviderByName("late")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Bring a fake upstream up at a new URL and point the provider at it
+	// via update (stale seed from the old config must be replaced).
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"late-model","object":"model"}]}`))
+	}))
+	defer fake.Close()
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("PUT", "/api/providers/"+strconv.FormatUint(uint64(row.ID), 10),
+		bytes.NewBufferString(`{"name":"late","base_url":"`+fake.URL+`","api_keys":["sk-1"],"models":["late-model"],"enabled":true}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var live *upstream.CustomUpstream
+	for _, u := range mgr.All() {
+		if u.Name() == "custom:late" {
+			live = u
+		}
+	}
+	if live == nil {
+		t.Fatal("expected live custom:late upstream after update")
+	}
+	if !live.Match("late-model") {
+		t.Fatal("updated provider must Match its new catalog model immediately after update")
+	}
+}
+
+// TestAdmin_ProbeProvider_AdHoc verifies the pre-save probe: it lists the
+// upstream catalog from form values without storing anything.
+func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"m1","object":"model"},{"id":"m2"}]}`))
+	}))
+	defer fake.Close()
+
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := h.Routes()
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",
+		bytes.NewBufferString(`{"base_url":"`+fake.URL+`","api_keys":["sk-1"]}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ok"] != true {
+		t.Fatalf("expected ok=true, got %v", got)
+	}
+	models, _ := got["models"].([]any)
+	if len(models) != 2 || models[0] != "m1" || models[1] != "m2" {
+		t.Fatalf("expected [m1 m2], got %v", got["models"])
+	}
+	rows, err := s.ListProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("probe must not store anything, got %d providers", len(rows))
+	}
+
+	// Invalid URL is a 200 ok=false, not a 400: same contract as /test.
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",
+		bytes.NewBufferString(`{"base_url":"not-a-url"}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	got = nil
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ok"] != false {
+		t.Fatalf("expected ok=false, got %v", got)
+	}
+}
+
 func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 	s, err := providers.Open("file:admin-probe?mode=memory&cache=shared")
 	if err != nil {
@@ -292,5 +453,83 @@ func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 	}
 	if got["ok"] != false {
 		t.Fatalf("expected ok=false, got %v", got)
+	}
+}
+
+// TestAdmin_UpdateProvider_OmitModels_KeepsSelection verifies omit-vs-clear:
+// a PUT without the models key preserves the stored selection, while an
+// explicit array (even []) overwrites it.
+func TestAdmin_UpdateProvider_OmitModels_KeepsSelection(t *testing.T) {
+	s, err := providers.Open("file:admin-omitmodels?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.CreateProvider(providers.Provider{Name: "sel", BaseURL: "https://api.sel.test/v1", APIKeys: []string{"sk-1"}, Models: []string{"m1", "m2"}, RefreshSec: 60, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return nil }, nil)
+	r := chi.NewRouter()
+	r.Mount("/", h.Routes())
+	put := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest("PUT", "/api/providers/1", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+	}
+	put(`{"name":"sel","base_url":"https://api.sel.test/v1","api_keys":["sk-1"],"refresh_sec":60,"enabled":true}`)
+	raw, err := s.GetProviderRaw(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Models) != 2 || raw.Models[0] != "m1" || raw.Models[1] != "m2" {
+		t.Fatalf("omitted models must be preserved, got %v", raw.Models)
+	}
+	put(`{"name":"sel","base_url":"https://api.sel.test/v1","api_keys":["sk-1"],"models":[],"refresh_sec":60,"enabled":true}`)
+	raw, err = s.GetProviderRaw(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.Models == nil || len(raw.Models) != 0 {
+		t.Fatalf("explicit [] must clear the selection, got %v (nil=%v)", raw.Models, raw.Models == nil)
+	}
+}
+
+// TestAdmin_Probe_ForwardsHeaders verifies the probe sends configured
+// custom headers, so header-authenticated upstreams probe successfully.
+func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
+	var gotHeader string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Custom-Auth")
+		_, _ = w.Write([]byte(`{"data":[{"id":"h1"}]}`))
+	}))
+	defer fake.Close()
+
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := h.Routes()
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",
+		bytes.NewBufferString(`{"base_url":"`+fake.URL+`","api_keys":[],"headers":{"X-Custom-Auth":"secret-1"}}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ok"] != true {
+		t.Fatalf("expected ok=true, got %v", got)
+	}
+	if gotHeader != "secret-1" {
+		t.Fatalf("expected custom header forwarded, got %q", gotHeader)
 	}
 }

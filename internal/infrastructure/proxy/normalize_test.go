@@ -472,6 +472,50 @@ func TestNormalizeJSON_TruncatesDsmlInToolArgs(t *testing.T) {
 	}
 }
 
+// TestNormalizeJSON_UnwrapsDataEnvelope verifies OneHub-style gateways:
+// {"data": {"choices": [...], "usage": {...}}} normalizes to a plain
+// OpenAI completion so strict clients (and the dashboard probe) parse it.
+func TestNormalizeJSON_UnwrapsDataEnvelope(t *testing.T) {
+	input := `{"data":{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`
+	var buf bytes.Buffer
+	usage := normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(output), &out); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%s)", err, output)
+	}
+	if _, hasData := out["data"]; hasData {
+		t.Errorf("expected data envelope unwrapped, got: %s", output)
+	}
+	choices, _ := out["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected 1 choice, got: %s", output)
+	}
+	if usage.Total != 2 {
+		t.Errorf("expected usage total=2, got %+v", usage)
+	}
+}
+
+// TestNormalizeJSON_TrailingDataRecovery verifies JSON + trailing data
+// framing (second object, SSE remnants) recovers the first value instead
+// of passing corrupt framing to strict clients.
+func TestNormalizeJSON_TrailingDataRecovery(t *testing.T) {
+	input := "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n{\"usage\":{\"total_tokens\":9}}"
+	var buf bytes.Buffer
+	normalizeJSON(&buf, strings.NewReader(input))
+	output := buf.String()
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(output), &out); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%s)", err, output)
+	}
+	choices, _ := out["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected recovered first value with 1 choice, got: %s", output)
+	}
+}
+
 // TestNormalizeJSON_EmptyFinishReasonSynthesized verifies that a
 // non-streaming response with finish_reason:null or finish_reason:"" gets
 // a synthesized "stop" (or "tool_calls") so opencode's

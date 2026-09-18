@@ -719,9 +719,33 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 	}
 
 	var resp map[string]interface{}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(&resp); err != nil {
 		dst.Write(body)
 		return TokenUsage{}
+	}
+	// Some gateways frame the body as JSON + trailing data (a second
+	// object, SSE remnants). A strict client (and the dashboard probe)
+	// rejects the whole body for that; recover the first value — the
+	// completion — instead of passing the corrupt framing through.
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		slog.Warn("upstream trailing data after JSON body, using first value",
+			"model", model,
+			"request_id", requestID,
+			"path", "json",
+		)
+	}
+
+	// OneHub-style gateways wrap the completion in a data envelope:
+	// {"data": {"choices": [...], "usage": {...}}}. Unwrap it so the
+	// response below normalizes (and clients parse) as OpenAI.
+	if _, hasChoices := resp["choices"]; !hasChoices {
+		if data, ok := resp["data"].(map[string]interface{}); ok {
+			if _, ok := data["choices"]; ok {
+				resp = data
+			}
+		}
 	}
 
 	// Extract usage before normalizing

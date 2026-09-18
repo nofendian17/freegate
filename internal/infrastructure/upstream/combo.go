@@ -96,16 +96,12 @@ func (c *ComboRouter) Select(modelID string) domain.Upstream {
 }
 
 func (c *ComboRouter) AllModels() []domain.Model {
+	// Display order mirrors routing precedence (SelectChain): combos,
+	// then customs, then legacy. A model ID served by several upstreams
+	// shows the entry of the one that would actually serve it, so the
+	// dashboard provider pill matches Recent Requests.
 	seen := map[string]bool{}
 	var out []domain.Model
-	if c.legacy != nil {
-		for _, m := range c.legacy.AllModels() {
-			if !seen[m.ID] {
-				seen[m.ID] = true
-				out = append(out, m)
-			}
-		}
-	}
 	c.mu.RLock()
 	names := make([]string, 0, len(c.combos))
 	for name := range c.combos {
@@ -128,6 +124,14 @@ func (c *ComboRouter) AllModels() []domain.Model {
 	}
 	for _, u := range customs {
 		for _, m := range u.Models() {
+			if !seen[m.ID] {
+				seen[m.ID] = true
+				out = append(out, m)
+			}
+		}
+	}
+	if c.legacy != nil {
+		for _, m := range c.legacy.AllModels() {
 			if !seen[m.ID] {
 				seen[m.ID] = true
 				out = append(out, m)
