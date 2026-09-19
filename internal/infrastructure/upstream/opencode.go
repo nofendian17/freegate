@@ -23,14 +23,9 @@ import (
 // session IDs) lives in opencode_identity.go, mirroring 9router PR #10
 // (cherry-pick of decolua#4105) for the gateway's free-tier validation.
 
-// Models served by /zen/v1/messages (Anthropic Messages API).
-// Union Alpha is a Claude-format model on the Zen gateway.
-// These are defaults; use SetResponseModels/SetMessageModels to override
-// from RESPONSE_MODELS / MESSAGE_MODELS config so handler and upstream agree.
-var openCodeMessagesModels = map[string]bool{
-	"union-alpha": true,
-}
-
+// Defaults for endpoint routing; use SetResponseModels/SetMessageModels to
+// override from RESPONSE_MODELS / MESSAGE_MODELS config so handler and
+// upstream agree.
 var defaultOpenCodeResponseModels = []string{"muse-spark", "muse_spark"}
 
 var defaultOpenCodeMessageModels = []string{"union-alpha"}
@@ -395,21 +390,6 @@ func matchModelSubstring(model string, patterns []string) bool {
 	return false
 }
 
-func isMessagesModel(model string) bool {
-	// Backward-compat wrapper using defaults (exact legacy set was
-	// {"union-alpha"}; substring match on the same default preserves it
-	// while also covering variants like "union-alpha-2").
-	if matchModelSubstring(model, defaultOpenCodeMessageModels) {
-		return true
-	}
-	base := strings.ToLower(baseModelID(model))
-	return openCodeMessagesModels[base]
-}
-
-func isResponsesModelID(model string) bool {
-	return matchModelSubstring(model, defaultOpenCodeResponseModels)
-}
-
 func extractOpencodeModel(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -575,16 +555,4 @@ func genOpencodeIDWithClock(prefix string, complement bool) string {
 		sb.WriteByte(opencodeIDChars[int(b)%62])
 	}
 	return sb.String()
-}
-
-// genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.
-// Kept for backward compat (tests / external callers).
-func genUUID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "00000000-0000-0000-0000-000000000000"
-	}
-	b[6] = (b[6] & 3) | 8<<4 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
