@@ -19,6 +19,7 @@ type Dialer struct {
 	socks     proxy.Dialer
 	direct    bool
 	socksAddr string
+	onFlush   func() // called after VPN reconnect to flush stale conns
 }
 
 // NewDialer builds a Dialer that uses the given SOCKS5 tunnel address
@@ -37,14 +38,39 @@ func NewDialer(socksAddr string) *Dialer {
 	return d
 }
 
+// SetOnFlush registers a callback invoked after VPN reconnects so the
+// shared http.Transport can drop stale pooled HTTP/2 connections that
+// the dead tunnel left behind.
+func (d *Dialer) SetOnFlush(fn func()) {
+	d.mu.Lock()
+	d.onFlush = fn
+	d.mu.Unlock()
+}
+
+// Flush calls the registered callback. VPN supervisor calls this after
+// a successful reconnect.
+func (d *Dialer) Flush() {
+	d.mu.RLock()
+	fn := d.onFlush
+	d.mu.RUnlock()
+	if fn != nil {
+		fn()
+		slog.Info("upstream dialer flushed stale connections")
+	}
+}
+
 // SetDirect flips the routing mode. direct=true sends all upstream traffic
 // straight from the proxy container (no tunnel); direct=false routes it
-// through the VPN SOCKS5 tunnel.
+// through the VPN SOCKS5 tunnel. Flushes stale pooled connections on toggle.
 func (d *Dialer) SetDirect(direct bool) {
 	d.mu.Lock()
 	d.direct = direct
+	onFlush := d.onFlush
 	d.mu.Unlock()
 	slog.Info("upstream dialer mode changed", "direct", direct)
+	if onFlush != nil {
+		onFlush()
+	}
 }
 
 // IsDirect reports whether the dialer currently routes directly.
@@ -62,6 +88,11 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	direct := d.direct
 	d.mu.RUnlock()
 
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+	}
 	if direct || socks == nil {
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
 	}

@@ -124,6 +124,13 @@ func New(cfg *config.Config) (*Server, error) {
 	// explicitly deployed behind a trusted reverse proxy.
 	httputil.SetTrustProxyHeaders(cfg.TrustProxyHeaders)
 
+	// One shared dialer + transport routes all upstreams; direct vs tunnel
+	// is switched live from the dashboard. Sharing the Transport pools idle
+	// connections once instead of per-upstream.
+	dialer := upstream.NewDialer(cfg.SOCKSAddr)
+	sharedTr := buildSharedTransport(dialer)
+	dialer.SetOnFlush(sharedTr.CloseIdleConnections)
+
 	var vpnProvider vpn.Provider
 	// Single binary: the tunnel always runs in-process via the embedded
 	// supervisor (the container carries openvpn + NET_ADMIN).
@@ -135,15 +142,11 @@ func New(cfg *config.Config) (*Server, error) {
 		MinScore:   cfg.VPNGateMinScore,
 		MaxPing:    cfg.VPNGateMaxPing,
 		RefreshInt: time.Duration(cfg.VPNGateRefreshSeconds) * time.Second,
+		OnConnect:  dialer.Flush,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create vpn provider: %w", err)
 	}
-
-	// One shared dialer + transport routes all upstreams; direct vs tunnel
-	// is switched live from the dashboard. Sharing the Transport pools idle
-	// connections once instead of per-upstream.
-	dialer := upstream.NewDialer(cfg.SOCKSAddr)
 	// Single source for direct mode: Config.IsDirect().
 	if cfg.IsDirect() {
 		dialer.SetDirect(true)
@@ -153,7 +156,6 @@ func New(cfg *config.Config) (*Server, error) {
 	if vpnProvider.CurrentIP() == "direct" && !dialer.IsDirect() {
 		dialer.SetDirect(true)
 	}
-	sharedTr := buildSharedTransport(dialer)
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
 	pstore, err := providers.Open(cfg.ProvidersDBPath)

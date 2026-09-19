@@ -183,6 +183,9 @@ func (s *Supervisor) reconnectLoop() {
 			continue
 		}
 		slog.Info("vpngate: connected", "server", s.serverName(), "ip", s.CurrentIP())
+		if s.cfg.OnConnect != nil {
+			s.cfg.OnConnect()
+		}
 		if !sleepCtx(s.ctx, 5*time.Second) {
 			slog.Info("vpngate: reconnect loop stopped")
 			return
