@@ -113,7 +113,6 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `VPN_ENABLED` | `true` | Enable embedded VPN. `false` = direct connections. Also `--vpn=false` flag. |
 | `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
 | `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
-| `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
 | `VPNGATE_COUNTRY` | (empty) | Relay country filter: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
 | `VPNGATE_MIN_SCORE` | `0` | Minimum relay server score (`0` = disabled) |
 | `VPNGATE_MAX_PING` | `0` | Maximum relay ping in ms (`0` = disabled) |
