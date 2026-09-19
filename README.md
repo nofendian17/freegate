@@ -2,7 +2,7 @@
 
 Multi-upstream OpenAI-compatible API proxy for free AI models, routed through a rotating VPNGate tunnel.
 
-freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **api.llm7.io** (keyless gateway), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), `/v1/responses` (OpenAI Responses API), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **api.llm7.io** (keyless gateway), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
@@ -10,14 +10,15 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
 - **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); pick any relay server from the dashboard (or rotate to a random one), or switch to **direct** (no tunnel) with one click — no automatic IP rotation on 429
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
-- **Format translation** — accepts Claude (`/v1/messages`) and native OpenAI formats; detects and translates requests to the upstream OpenAI format, then translates responses back
+- **DeepSeek DSML handling** — recovers orphaned DSML tool-call blocks into real tool calls, strips leaked DSML scaffolding from text, and stops DeepSeek tool requests at the tool_calls closer instead of letting the model re-emit blocks to `max_tokens`
+- **Format translation** — accepts OpenAI, Claude (`/v1/messages`), and Gemini request formats, plus the Responses API (`/v1/responses`); detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **VPN IP monitoring** — current tunnel exit IP shown in dashboard header, refreshed every 3s
 - **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button and a **direct** (no-VPN) option
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
 - **Custom providers** — any OpenAI-compatible base URL + keys in SQLite (`PROVIDERS_DB_PATH`), managed at `/providers` or `/api/providers` (keys masked, test probe, live rebuild, no restart)
-- **Tiered combos** — combos are virtual models: `model=hemat` tries Tier1→Tier2→Tier3 in order, failing over on transport errors, 429s, and 5xx; managed at `/providers` or `/api/combos`, listed in `/v1/models` as `combo:<name>`
+- **Tiered combos** — combos are virtual models: `model=hemat` tries Tier1→Tier2→Tier3 in order, failing over on transport errors, 429s, 5xx, and free-tier rejections (one same-tier retry first); managed at `/providers` or `/api/combos`, listed in `/v1/models` as `combo:<name>`
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy, with SSE streaming (default), a stop button, and one-shot non-streaming mode
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
@@ -49,11 +50,11 @@ Direct binary embeds VPNGate per OS (`runtime.GOOS` → `openvpn` probe) and fal
 
 | OS | Dependency | Install | Notes |
 |----|------------|---------|-------|
-| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` (`Needs `sudo ./freegate`) |
+| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` — run `sudo ./freegate` |
 | **darwin** | `openvpn` via Homebrew | `brew install openvpn` | Probes `openvpn`, `/opt/homebrew/bin/openvpn`, `/usr/local/bin/openvpn`; needs `sudo` for `utun` |
 | **windows** | `OpenVPN` + TAP-Windows6 | `winget install OpenVPNTechnologies.OpenVPN` <br> `choco install openvpn` | Run `.\freegate.exe` as **Administrator** for TAP |
 
-If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves `34` models via direct.
+If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves free models via direct.
 
 To force direct without VPN: `./freegate --vpn=false` or `VPN_ENABLED=false`.
 
@@ -75,6 +76,11 @@ curl -X POST http://localhost:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hello"}],"stream":false}'
 
+# Responses API (native)
+curl -X POST http://localhost:1234/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{"model":"muse-spark-1.3-contributor-free","input":"hello"}'
+
 # Health check
 curl http://localhost:1234/ready
 
@@ -88,7 +94,7 @@ curl -X POST http://localhost:1234/v1/messages \
 ## Routing Rules
 
 A model ID is served by:
-- **Combo** — exact-name match on a tiered combo first (`model=hemat` → Tier1→Tier2→Tier3, failover on transport errors/429s/5xx)
+- **Combo** — exact-name match on a tiered combo first (`model=hemat` → Tier1→Tier2→Tier3, failover on transport errors/429s/5xx/free-tier rejections, with one same-tier retry on transport errors)
 - **Custom provider** — if the model was explicitly selected for a custom provider (dashboard checkboxes from the probe; only stored models route)
 - **Kilo** — if Kilo's free catalog contains it (`isFree == true`)
 - **LLM7** — if LLM7's free catalog contains it (keyless gateway; free = not usage-based or `turbo` tier)
@@ -104,11 +110,14 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `1234` | Server port |
-| `VPN_ENABLED` | `true` | Enable embedded VPN per OS. `false` = direct connections. Also `--vpn=false` flag. |
+| `VPN_ENABLED` | `true` | Enable embedded VPN. `false` = direct connections. Also `--vpn=false` flag. |
 | `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
 | `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
-| `VPNGATE_COUNTRY` | (empty) | Relay country filter for single-binary mode: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
+| `VPNGATE_COUNTRY` | (empty) | Relay country filter: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
+| `VPNGATE_MIN_SCORE` | `0` | Minimum relay server score (`0` = disabled) |
+| `VPNGATE_MAX_PING` | `0` | Maximum relay ping in ms (`0` = disabled) |
+| `VPNGATE_REFRESH_SECONDS` | `300` | How often the VPNGate server list is re-fetched |
 | — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `ADMIN_TOKEN` | — | **Required** (>=6 chars). Admin password: gates the dashboard (login form at `/login`, cookie `fg_admin` or `X-Admin-Token`/`Bearer` header) and also works as a superset key for `/v1/*`. Generate: `openssl rand -hex 32` |
@@ -120,9 +129,14 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated model IDs that are free on the OpenCode upstream but don't carry the `-free` suffix |
 | `UPSTREAM_URL_KILO` | `https://api.kilo.ai/api/openrouter` | Kilo upstream URL |
 | `UPSTREAM_KEY_KILO` | `anonymous` | Kilo API key |
+| `UPSTREAM_URL_LLM7` | `https://api.llm7.io/v1` | LLM7 keyless gateway URL |
 | `UPSTREAM_DEFAULT` | `opencode` | Default upstream for unmatched models (`opencode`, `kilo`, or `llm7`) |
 | `UPSTREAM_REFRESH_OPENCODE` | `60` | Model refresh interval for OpenCode (seconds) |
 | `UPSTREAM_REFRESH_KILO` | `60` | Model refresh interval for Kilo (seconds) |
+| `UPSTREAM_REFRESH_LLM7` | `300` | Model refresh interval for LLM7 (seconds) |
+| `RESPONSE_MODELS` | `muse-spark,muse_spark` | Comma-separated substrings routing models to the Responses API |
+| `MESSAGE_MODELS` | `union-alpha` | Comma-separated substrings routing models to the Messages API |
+| `UPSTREAM_CAPTURE` | `false` | Log raw upstream request/response lines via slog (debug only — contains full conversation content) |
 | `PROVIDERS_DB_PATH` | `./data/providers.db` | SQLite file for custom providers, tiered combos, and seeded auth + upstream settings. Auto-created; mount a volume over `./data` in docker. |
 
 Custom providers, combos, and seeded auth/upstream settings live in SQLite and are managed at `/providers` or via `/api/providers`, `/api/combos` (no restart needed).
@@ -132,8 +146,9 @@ Custom providers, combos, and seeded auth/upstream settings live in SQLite and a
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/models` | List all free models from all upstreams (merged, deduped) |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (also accepts Claude and Gemini formats) |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completions (also accepts Claude, Gemini, and Responses formats) |
 | `POST` | `/v1/messages` | Claude-native endpoint (auto-translated to OpenAI upstream) |
+| `POST` | `/v1/responses` | Responses API endpoint (muse-spark and friends) |
 | `GET` | `/v1/metrics` | Request metrics (counts per upstream, errors, tokens) |
 | `GET` | `/ready` | Health check |
 | `GET` | `/` | Terminal-style monitoring dashboard (see below) |
@@ -143,19 +158,21 @@ Custom providers, combos, and seeded auth/upstream settings live in SQLite and a
 
 ### Format Translation
 
-freegate accepts **OpenAI**, **Claude** (`/v1/messages`), and **Gemini** request formats on `/v1/chat/completions` and `/v1/messages`. Incoming requests are detected and translated to the upstream OpenAI format; responses are translated back. Both streaming and non-streaming responses are supported.
+freegate accepts **OpenAI**, **Claude** (`/v1/messages`), **Gemini**, and **Responses** request formats on `/v1/chat/completions`, plus native `/v1/messages` and `/v1/responses` endpoints. Incoming requests are detected and translated to the upstream OpenAI format; responses are translated back. Both streaming and non-streaming responses are supported.
 
 Detection is structural (no URL path needed) and ordered:
 
 1. **Gemini** — top-level `contents` array with no `messages` key
 2. **Claude** — `messages` plus a Claude-specific hint (`anthropic_version`, top-level `max_tokens`, a `system` prompt, or `tool_use` / `tool_result` / `image` content blocks)
-3. **OpenAI** — default
+3. **Responses** — top-level `input` with no `messages` key
+4. **OpenAI** — default
 
 ### Request Limits & Middleware
 
 - **Request body limit:** 10 MB (`MaxRequestBodySize` in `internal/delivery/handler/chat.go`); oversized bodies are rejected with HTTP 413.
 - **CORS:** wildcard `Access-Control-Allow-Origin: *` plus `OPTIONS` short-circuit on every route, so browser clients can call the proxy from any origin.
 - **Request ID:** every request gets an `X-Request-ID` (echoed if the client sent one, otherwise an 8-byte hex value); included in logs and the recent-requests table.
+- **Response header:** `X-Fg-Normalized` lists which request normalizations fired (e.g. `deepseek-flash-top-p`, `deepseek-tool-stop`).
 - **Error format:** OpenAI-compatible `{"error":{"type","message"}}` envelope used for all `4xx` / `5xx` responses.
 
 ### Reasoning Normalization
@@ -195,8 +212,8 @@ The dashboard follows the **TerminalUI** design system:
 
 - **Stat blocks** — total requests, upstream errors, total tokens (auto-refresh 5s)
 - **Requests/min chart** — line chart of the last 1 hour (10s samples, ×6 to convert to per-minute)
-- **Upstream split** — opencode and kilo counts with proportional bars
-- **Free Models table** — filter by `all / opencode / kilo`, auto-refresh 10s
+- **Upstream split** — per-upstream counts with proportional bars
+- **Free Models table** — filter by provider, auto-refresh 10s
 - **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
 - **VPN exit IP** — current tunnel IP displayed in header, refreshed every 3s
 - **API Endpoints card** — quick reference for available REST endpoints
@@ -210,7 +227,7 @@ The dashboard follows the **TerminalUI** design system:
 | `GET /` | HTML dashboard (server-rendered initial state) |
 | `GET /partials/stats` | HTMX partial: 4 metric cards (requests, errors, input/output tokens) |
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
-| `GET /partials/models` | HTMX partial: free-models table; filter via `?provider=all\|opencode\|kilo` |
+| `GET /partials/models` | HTMX partial: free-models table with provider filter |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, per_upstream}]` |
 | `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
@@ -282,7 +299,7 @@ flowchart TB
 freegate
 ├── cmd/server/main.go        # Entry point
 ├── internal/
-│   ├── application/          # Use cases: ChatService (retry, IP rotation), ModelService
+│   ├── application/          # Use cases: ChatService (routing, failover, metrics), ModelService
 │   ├── config/               # Env-based config with validation
 │   ├── delivery/             # HTTP-facing layer
 │   │   ├── handler/          # HTTP handlers: Chat, ListModels, Ready, Metrics
@@ -291,16 +308,15 @@ freegate
 │   │   └── ui/               # Dashboard: HTMX handlers, templates, static assets
 │   ├── domain/               # Core domain types (ChatRequest, Upstream, UpstreamRouter, etc.)
 │   ├── httputil/             # HTTP helpers: header parsing, IP extraction, conversion
-│   ├── infrastructure/       # Out-of-process integrations
+│   ├── infrastructure/       # Integrations
 │   │   ├── metrics/          # Request counters + token tracking
 │   │   ├── proxy/            # Upstream-agnostic normalization helpers
 │   │   ├── recorder/         # Request log + timeseries sampler
 │   │   ├── ringbuffer/       # Generic typed ring buffer
-│   │   ├── vpngate/          # VPNGate controller (IP rotation via supervisor API)
-│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo)
-│   ├── model/                # Shared data types (request log entries, timeseries entries)
+│   │   ├── vpn/              # Embedded VPN (provider + supervisor + in-process SOCKS)
+│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo, llm7)
 │   ├── server/               # HTTP server bootstrap (wiring + lifecycle)
-│   └── translate/            # Format translation: Claude, Gemini detect + request/response
+│   └── translate/            # Format translation: detect + Claude/Gemini/Responses convert, DeepSeek normalize, DSML sanitize
 ├── web/                      # Embedded assets (templates, CSS, JS, fonts)
 │   ├── templates/
 │   │   ├── dashboard.html    # Main page (includes playground modal via {{template}})
@@ -311,7 +327,6 @@ freegate
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
-├── internal/infrastructure/vpn/ # Embedded VPN per OS (provider + supervisor + in-process SOCKS)
 ├── docker-compose.yml        # Single proxy container (openvpn baked in, NET_ADMIN + /dev/net/tun)
 ├── Dockerfile                # Multi-stage Go build (proxy + openvpn runtime)
 ├── Makefile                  # test, build, docker compose targets

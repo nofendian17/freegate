@@ -15,6 +15,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
 | `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). **Empty = `/v1/*` is admin-gated**: only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants access (no open API). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
+| `TRUST_PROXY_HEADERS` | No | `false` | Honor `X-Forwarded-For` / `X-Real-IP` when deriving the client IP (rate limit buckets, logs, request history). Leave `false` when exposed directly — forwarded headers are client-controlled and spoofable. Set `true` only behind a reverse proxy that overwrites these headers. |
 
 ## VPN (single-binary per-OS)
 
@@ -68,6 +69,8 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models claimed by nothing else. Accepts `opencode`, `kilo`, or `llm7`. |
+| `RESPONSE_MODELS` | No | `muse-spark,muse_spark` | Comma-separated substrings (case-insensitive) routing models to the OpenAI Responses API (`/zen/v1/responses`). |
+| `MESSAGE_MODELS` | No | `union-alpha` | Comma-separated substrings (case-insensitive) routing models to the Anthropic Messages API (`/zen/v1/messages`). |
 | `PROVIDERS_DB_PATH` | No | `./data/providers.db` | SQLite file (GORM, pure-Go, CGO-free) holding custom providers, tiered combos, and — once seeded — auth + upstream settings. Auto-created on boot. Persist it: mount a volume over `./data` in docker; back up the file before upgrades. |
 
 ## Custom providers + tiered combos (SQLite)

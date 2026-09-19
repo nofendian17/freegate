@@ -105,7 +105,7 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/translate/internal/prepost` | thinking normalization, max-tokens adjustment, history sanitization, id/role fixing |
 | `internal/infrastructure/proxy` | response normalization, `reasoning_content` collapse, SSE line handling |
 | `internal/infrastructure/upstream` | client, model cache, Kilo/OpenCode parsing |
-| `internal/infrastructure/vpngate` | controller (interval, force-rotation, supervisor control API) |
+| `internal/infrastructure/vpn/supervisor` | tunnel lifecycle, SOCKS5, server list, rotation, IP probing |
 | `internal/infrastructure/recorder` | ring buffer + timeseries sampler |
 | `internal/infrastructure/metrics` | counter / snapshot |
 | `internal/infrastructure/ringbuffer` | generic typed ring buffer |
@@ -114,7 +114,6 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/delivery/respond` | JSON + error response helpers |
 | `internal/delivery/ui` | dashboard rendering, partials, playground |
 | `internal/application` | `ChatService` routing, pass-through proxy, request logging |
-| `internal/model` | shared types |
 | `internal/httputil` | header copy, client IP extraction, conversion helpers |
 
 Conventions:

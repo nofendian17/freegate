@@ -51,8 +51,8 @@ The `proxy` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN in-p
 
 **Architecture post-optimization (2026-08-23):**
 - **Upstream routing O(1):** `cache.go` maintains `index map` + `Has()`, `kilo`/`llm7` `Match` no longer `O(n)` `Get()` copy; `opencode` remains `true` fallback.
-- **Shared transport:** `upstream.NewTransport` single tuned `http.Transport` (50/20 idle, 60 s) shared by all upstreams via `server/wire.go` — avoids per-upstream dial handshake blow-up.
-- **One-pass request prep:** `translate/prepare_upstream.go:PrepareUpstream` merges `NormalizeRoles`+`Reasoning`+`stream_options` in one `Unmarshal/Marshal` (was 3).
+- **Shared transport:** `upstream/client.go:NewTransport` single tuned `http.Transport` (50/20 idle, 60 s, HTTP/2) shared by all upstreams via `server/server.go:buildSharedTransport` — avoids per-upstream dial handshake blow-up.
+- **One-pass request prep:** `translate/internal/prepost/prepare_upstream.go:PrepareUpstream` merges `NormalizeRoles`+`Reasoning`+`stream_options` in one `Unmarshal/Marshal` (was 3).
 - **Domain decoupling:** `domain.UpstreamResponse{StatusCode,Header,Body}` (`domain/response.go`), `Upstream.ChatCompletion` no longer leaks `*http.Response`; `proxy.NormalizeDomainResponseWithContext` respects `ctx` cancellation (stream loops check `ctx.Done()`).
 - **Sharded limiter & registry:** `RateLimiter` 32 shards, `vpn/registry.go` isolates server list cache (`getServers`/`pickWeighted`/`matchCountry`) from `provider.go` tunnel lifecycle (`tunnel.go`).
 
@@ -77,7 +77,6 @@ Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/re
 Docker healthchecks:
 
 - **proxy:** `wget --spider http://localhost:1234/ready` (30 s interval, 10 s start period, 3 retries)
-- **vpn:** `wget -q -O /dev/null http://127.0.0.1:8080/healthz` (10 s interval, 20 s start period, 5 retries) — 200 once the tunnel is up
 
 Quick manual probe:
 
@@ -130,10 +129,9 @@ curl -s http://localhost:1234/v1/models | head
 If the upstreams are unreachable through the VPN (rare — both have stable public endpoints), check the tunnel:
 
 ```bash
-docker exec fg-vpn wget -q -O /dev/null https://api.ipify.org && echo ipify-ok
-# or from the proxy side, through the SOCKS5 proxy:
-docker exec fg-proxy sh -c 'wget -q -O - https://api.ipify.org' 2>/dev/null || echo 'check vpn status'
-curl -s http://127.0.0.1:8080/status  # via docker exec fg-vpn if needed
+docker exec fg-proxy wget -q -O /dev/null https://api.ipify.org && echo ipify-ok
+# tunnel state + exit IP (needs ADMIN_TOKEN):
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:1234/api/health | jq '{vpn_ip, vpn_direct}'
 ```
 
 ### `429 Too Many Requests` on the proxy
