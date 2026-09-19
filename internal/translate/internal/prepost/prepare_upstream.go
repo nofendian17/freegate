@@ -42,8 +42,9 @@ func PrepareUpstreamWithModel(body []byte, modelID string) ([]byte, []string, er
 	hasStream := bytes.Contains(body, []byte(`"stream"`))
 	hasTopP := bytes.Contains(body, []byte(`"top_p"`))
 	hasMessages := bytes.Contains(body, []byte(`"messages"`))
+	hasTools := bytes.Contains(body, []byte(`"tools"`))
 	needsParse := hasDeveloper || hasReasoning || hasStream || (isFlash && !hasTopP && hasMessages) ||
-		(isDeepSeek && hasMessages)
+		(isDeepSeek && (hasMessages || hasTools))
 	if !needsParse {
 		return body, nil, nil
 	}
@@ -125,6 +126,18 @@ func PrepareUpstreamWithModel(body []byte, modelID string) ([]byte, []string, er
 		if _, ok := raw["top_p"]; !ok {
 			raw["top_p"] = DeepSeekFlashTopP
 			mark(AppliedDeepSeekFlashTopP)
+		}
+	}
+
+	// 5. DSML tool-call stop for DeepSeek tool requests (vllm#54686 port:
+	// the closer ends the turn, so generation stops there instead of
+	// re-emitting blocks to max_tokens). Tools absent/empty means no tool
+	// calls can occur, so stop is left alone.
+	if isDeepSeek {
+		if tools, ok := raw["tools"].([]any); ok && len(tools) > 0 {
+			if ensureDSMLToolStop(raw) {
+				mark(AppliedDeepSeekToolStop)
+			}
 		}
 	}
 
