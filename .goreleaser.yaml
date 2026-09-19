@@ -89,7 +89,7 @@ release:
     VPN_PROVIDER=direct ./freegate
     ```
 
-    ## Docker (legacy)
+    ## Docker
 
-    `docker-compose.yml` (proxy + vpn sidecar) still works for containerized
-    deployments. Set `VPNGATE_HOST=vpn` to keep the sidecar path.
+    `docker-compose.yml` runs the same single binary containerized (with
+    `openvpn` baked in, `NET_ADMIN` + `/dev/net/tun` for the tunnel).

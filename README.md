@@ -21,7 +21,7 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), and 
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy, with SSE streaming (default), a stop button, and one-shot non-streaming mode
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
-- **Docker Compose** — single command to start both proxy and the `vpn` sidecar (requires a Linux host with `/dev/net/tun`)
+- **Docker Compose** — single command to start the proxy with the tunnel in-process (requires a Linux host with `/dev/net/tun`)
 - **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
 
 ## Quick Start
@@ -107,8 +107,6 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `VPN_ENABLED` | `true` | Enable embedded VPN per OS. `false` = direct connections. Also `--vpn=false` flag. |
 | `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
 | `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
-| `VPNGATE_CTRL_PORT` | `8080` | Deprecated: legacy sidecar control port (kept for `docker-compose` compat) |
-| `VPNGATE_HOST` | `127.0.0.1` | Deprecated: sidecar host (`vpn` in compose → `vpn:9050`); if set, `SOCKSAddr` honors it, else `127.0.0.1:9050` |
 | `VPNGATE_ROTATE_INTERVAL` | `30` | Minimum seconds between scheduled IP rotations |
 | `VPNGATE_COUNTRY` | (empty) | Relay country filter for single-binary mode: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
 | — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
@@ -254,7 +252,7 @@ flowchart TB
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 
-    subgraph VPN["VPNGate (per-OS single binary: SOCKS5 127.0.0.1:9050) / legacy vpn sidecar"]
+    subgraph VPN["VPNGate (in-process: SOCKS5 127.0.0.1:9050)"]
         S1["OpenVPN relay A"]
         S2["OpenVPN relay B"]
     end
@@ -313,11 +311,9 @@ freegate
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
-├── internal/infrastructure/vpn/ # Embedded VPN per OS (provider.go + provider_{linux,darwin,windows}.go + SOCKS in-process)
-├── cmd/vpngate-supervisor/   # Legacy VPN sidecar: openvpn tunnel + SOCKS5 + control API (docker only)
-├── docker-compose.yml        # Proxy + VPN containers (legacy, still works)
-├── Dockerfile                # Multi-stage Go build (proxy)
-├── Dockerfile.vpn            # VPNGate/OpenVPN sidecar with health check (legacy)
+├── internal/infrastructure/vpn/ # Embedded VPN per OS (provider + supervisor + in-process SOCKS)
+├── docker-compose.yml        # Single proxy container (openvpn baked in, NET_ADMIN + /dev/net/tun)
+├── Dockerfile                # Multi-stage Go build (proxy + openvpn runtime)
 ├── Makefile                  # test, build, docker compose targets
 └── .env.example              # Environment variable reference
 ```

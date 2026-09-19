@@ -27,16 +27,11 @@ type Config struct {
 	VPNEnabled  bool
 	VPNProvider string // auto|vpngate|direct
 
-	// VPNGate replaces the old Tor proxy. The "vpn" sidecar container
-	// (cmd/vpngate-supervisor) keeps an OpenVPN tunnel to a VPNGate relay
-	// server, exposes a SOCKS5 proxy through it, and a small HTTP control
-	// API used for IP rotation.
-	// Deprecated: VPNGateHost/CtrlPort kept for compat with docker-compose;
-	// new single-binary uses VPNEnabled + in-process SOCKS 127.0.0.1:9050.
-	VPNGateHost           string // SOCKS5 + control host (the "vpn" compose service)
-	VPNGateSocksPort      int    // SOCKS5 port used for all upstream traffic
-	VPNGateCtrlPort       int    // control API port (POST /rotate, GET /ip)
-	VPNGateRotateInterval int    // minimum seconds between scheduled IP rotations
+	// VPNGate keeps an OpenVPN tunnel to a VPNGate relay server via the
+	// in-process supervisor, exposing SOCKS5 through it for all upstream
+	// traffic.
+	VPNGateSocksPort      int // SOCKS5 port used for all upstream traffic
+	VPNGateRotateInterval int // minimum seconds between scheduled IP rotations
 	// VPNGateCountry filters the relay list by country: a country name
 	// substring ("Japan") or ISO code ("JP"), prefix with "!" to exclude
 	// ("!US"). Empty = all countries.
@@ -87,12 +82,6 @@ type Config struct {
 // IsDirect reports whether upstreams should bypass the VPN tunnel.
 func (c *Config) IsDirect() bool { return c.SOCKSAddr == "" }
 
-// IsSidecarMode reports whether docker sidecar mode is active (VPNGATE_HOST
-// set to non-loopback), kept for compat with docker-compose.
-func (c *Config) IsSidecarMode() bool {
-	return os.Getenv("VPNGATE_HOST") != "" && c.VPNGateHost != "127.0.0.1"
-}
-
 // IsAdminAuthEnabled reports whether admin auth is configured.
 func (c *Config) IsAdminAuthEnabled() bool { return c.AdminToken != "" }
 
@@ -109,9 +98,7 @@ func Load() *Config {
 		VPNEnabled:  envBool("VPN_ENABLED", true),
 		VPNProvider: envStr("VPN_PROVIDER", "auto"),
 
-		VPNGateHost:           envStr("VPNGATE_HOST", "127.0.0.1"),
 		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
-		VPNGateCtrlPort:       envInt("VPNGATE_CTRL_PORT", 8080),
 		VPNGateRotateInterval: envInt("VPNGATE_ROTATE_INTERVAL", 30),
 		VPNGateCountry:        envStr("VPNGATE_COUNTRY", ""),
 		VPNGateMinScore:       envInt("VPNGATE_MIN_SCORE", 0),
@@ -141,13 +128,9 @@ func Load() *Config {
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
 
-	// Single-binary mode: in-process SOCKS on 127.0.0.1:9050 when VPN enabled,
-	// direct otherwise. Keep VPNGateHost compat: if user explicitly set
-	// VPNGATE_HOST != 127.0.0.1 (docker), honor it for backwards compat.
+	// In-process SOCKS on 127.0.0.1:9050 when VPN enabled, direct otherwise.
 	if !cfg.VPNEnabled || cfg.VPNProvider == "direct" {
 		cfg.SOCKSAddr = ""
-	} else if os.Getenv("VPNGATE_HOST") != "" {
-		cfg.SOCKSAddr = cfg.VPNGateHost + ":" + strconv.Itoa(cfg.VPNGateSocksPort)
 	} else {
 		cfg.SOCKSAddr = "127.0.0.1:" + strconv.Itoa(cfg.VPNGateSocksPort)
 	}
@@ -187,13 +170,10 @@ func (c *Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("PORT must be between 1 and 65535, got %d", c.Port))
 	}
-	// Deprecated VPN ports — only validate when VPN is enabled.
+	// VPN ports — only validate when VPN is enabled.
 	if c.VPNEnabled {
 		if c.VPNGateSocksPort <= 0 || c.VPNGateSocksPort > 65535 {
 			errs = append(errs, fmt.Sprintf("VPNGATE_SOCKS_PORT must be between 1 and 65535, got %d", c.VPNGateSocksPort))
-		}
-		if c.IsSidecarMode() && (c.VPNGateCtrlPort <= 0 || c.VPNGateCtrlPort > 65535) {
-			errs = append(errs, fmt.Sprintf("VPNGATE_CTRL_PORT must be between 1 and 65535, got %d", c.VPNGateCtrlPort))
 		}
 		if c.VPNGateRotateInterval <= 0 {
 			errs = append(errs, fmt.Sprintf("VPNGATE_ROTATE_INTERVAL must be positive, got %d", c.VPNGateRotateInterval))

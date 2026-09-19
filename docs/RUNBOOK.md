@@ -43,12 +43,11 @@ The compose file is the deployment contract. It pins:
 
 | Service | Image | Port binding | Resources | Depends on |
 |---------|-------|--------------|-----------|------------|
-| `vpn` | `Dockerfile.vpn` (Go 1.26 build → alpine:3.20 + openvpn) | none (internal only) | 128 MB / 0.5 CPU | — |
-| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | `vpn` (healthy) |
+| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 + openvpn runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | — |
 
-Both services are `restart: unless-stopped` and live on the `fg-net` compose network.
+The service is `restart: unless-stopped`.
 
-The `vpn` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN): the compose file passes the device through and grants `NET_ADMIN` / `NET_RAW`. Docker Desktop (macOS/Windows) does not support TUN/TAP.
+The `proxy` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN in-process): the compose file passes the device through and grants `NET_ADMIN` / `NET_RAW`. Docker Desktop (macOS/Windows) does not support TUN/TAP.
 
 **Architecture post-optimization (2026-08-23):**
 - **Upstream routing O(1):** `cache.go` maintains `index map` + `Has()`, `kilo`/`llm7` `Match` no longer `O(n)` `Get()` copy; `opencode` remains `true` fallback.
@@ -269,7 +268,7 @@ docker compose up -d proxy
 make restart svc=proxy
 ```
 
-The `vpn` sidecar reads its server-selection filters (`VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING`) and `VPNGATE_REFRESH_SECONDS` from env. Changing them requires restarting the `vpn` service (and rebuilding if the env var is baked into the image).
+The proxy reads its server-selection filters (`VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING`) and `VPNGATE_REFRESH_SECONDS` from env. Changing them requires restarting the `proxy` service (and rebuilding if the env var is baked into the image).
 
 ## Alerts / escalation
 

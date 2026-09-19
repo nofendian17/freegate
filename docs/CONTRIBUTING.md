@@ -5,7 +5,7 @@ Dev setup, scripts, testing, code style, and PR checklist for freegate.
 ## Prerequisites
 
 - **Go 1.26+** (matches `go.mod`)
-- **VPNGate/OpenVPN** (only if running outside docker compose — run the `vpn` sidecar image built from `Dockerfile.vpn`; requires a Linux host with `/dev/net/tun`)
+- **VPNGate/OpenVPN** (only if running outside docker compose with VPN enabled — requires `openvpn` installed plus tun access: Linux with `/dev/net/tun`, macOS via Homebrew + sudo, Windows admin)
 - **Docker + Docker Compose** (only if using `make up` / `make down`)
 - **`make`** (GNU make; standard on Linux/macOS)
 
@@ -65,16 +65,11 @@ Run `make help` for the full inline list. Targets in the `Makefile`:
 ### Without docker
 
 ```bash
-# 1. Start the VPNGate supervisor (or run the vpn sidecar image)
-docker run -d --rm --name fg-vpn \
-  --cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun:/dev/net/tun \
-  -e VPNGATE_COUNTRY=Japan \
-  freegate-vpn
+# 1. Run the proxy (embedded supervisor starts the tunnel in-process;
+#    needs tun access — see Prerequisites)
+LOG_LEVEL=debug make run
 
-# 2. Run the proxy against the local supervisor SOCKS5
-VPNGATE_HOST=127.0.0.1 LOG_LEVEL=debug make run
-
-# 3. In another shell
+# 2. In another shell
 curl http://localhost:1234/ready
 curl http://localhost:1234/v1/models
 ```
