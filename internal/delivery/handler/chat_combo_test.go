@@ -65,11 +65,11 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 			if raw.Model != "union-alpha" {
 				t.Errorf("messages: model=%q", raw.Model)
 			}
-			if len(raw.Tools) != 1 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
-				t.Errorf("messages: tools must carry name/input_schema, got %s", body)
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+		if len(raw.Tools) != 17 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+			t.Errorf("messages: tools must carry name/input_schema plus 16 merged gate stubs, got %s", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 			if _, ok := raw.Tools[0].InputSchema["properties"]; !ok {
 				t.Errorf("messages: input_schema lost properties, got %s", body)
 				w.WriteHeader(http.StatusBadRequest)
@@ -109,11 +109,11 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if len(raw.Tools) != 1 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
-				t.Errorf("chat: openai tools shape broken, got %s", body)
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+		if len(raw.Tools) != 17 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
+			t.Errorf("chat: openai tools shape broken (want caller + 16 merged gate stubs), got %s", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"`+raw.Model+`","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}`)
 		default:
