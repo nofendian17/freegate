@@ -36,15 +36,12 @@ var openCodeReleasesURL = "https://api.github.com/repos/anomalyco/opencode/relea
 
 var openCodeClientVersion atomic.Value // stores string
 
-// zenRequestBodyLogLimit caps the logged request body. Tools, model, and
-// headers always fit; image payloads get truncated with a marker.
-const zenRequestBodyLogLimit = 8192
-
 // logZenRequest emits the exact outgoing Zen request when
-// UPSTREAM_CAPTURE=true: endpoint, wire headers, and body. Same trust
-// policy as response capture (full conversation content — debug only on
-// trusted machines), except credentials are always redacted: only the
-// well-known anonymous "public" values are shown verbatim.
+// UPSTREAM_CAPTURE=true: endpoint, wire headers, and full body (no
+// truncation — debug only on trusted machines). Same trust policy as
+// response capture (full conversation content), except credentials are
+// always redacted: only the well-known anonymous "public" values are
+// shown verbatim.
 func logZenRequest(endpoint string, headers map[string]string, body []byte) {
 	if os.Getenv("UPSTREAM_CAPTURE") != "true" {
 		return
@@ -53,11 +50,7 @@ func logZenRequest(endpoint string, headers map[string]string, body []byte) {
 	for k, v := range headers {
 		safe[k] = redactZenCredential(k, v)
 	}
-	logBody := string(body)
-	if len(logBody) > zenRequestBodyLogLimit {
-		logBody = logBody[:zenRequestBodyLogLimit] + "...[truncated]"
-	}
-	slog.Info("upstream zen request", "endpoint", endpoint, "headers", safe, "body", logBody)
+	slog.Info("upstream zen request", "endpoint", endpoint, "headers", safe, "body", string(body))
 }
 
 // redactZenCredential keeps the anonymous "public" markers visible (needed

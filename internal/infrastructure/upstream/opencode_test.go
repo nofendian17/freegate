@@ -197,45 +197,28 @@ func TestOpenCode_EnsureMessagesMaxTokens(t *testing.T) {
 	}
 }
 
-func TestOpenCode_BuildHeaders_ForwardsDownstreamIdentity(t *testing.T) {
-	ctx := translate.WithDownstreamIdentity(context.Background(), translate.DownstreamIdentity{
-		UserAgent: "opencode/1.18.31",
-		Session:   "ses_0afae3e4c001AmMPIe8RFqNeTF",
-		RequestID: "usr_testuser000000000000000001",
-		Client:    "cli",
-		Project:   "prj_test0000000000000000000001",
-	})
-	h := buildOpencodeHeaders(ctx, "/chat/completions", []byte(`{"model":"x"}`))
-	for k, want := range map[string]string{
-		"User-Agent":         "opencode/1.18.31",
-		"x-opencode-session": "ses_0afae3e4c001AmMPIe8RFqNeTF",
-		"x-opencode-request": "usr_testuser000000000000000001",
-		"x-opencode-client":  "cli",
-		"x-opencode-project": "prj_test0000000000000000000001",
-	} {
-		if h[k] != want {
-			t.Errorf("%s = %q, want %q", k, h[k], want)
-		}
-	}
-}
-
-func TestOpenCode_BuildHeaders_InvalidDownstreamIdentityFallsBack(t *testing.T) {
-	ctx := translate.WithDownstreamIdentity(context.Background(), translate.DownstreamIdentity{
-		UserAgent: "claude-code/1.0",
-		Session:   "claude:abc-123",
-	})
-	h := buildOpencodeHeaders(ctx, "/chat/completions", []byte(`{"model":"x"}`))
+func TestOpenCode_BuildHeaders_MintsFreshIdentity(t *testing.T) {
+	// Downstream client headers are ignored: every request gets freshly
+	// minted canonical identity (gateway validates shape, not origin).
+	h := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
 	if !strings.HasPrefix(h["User-Agent"], "opencode/") {
-		t.Errorf("foreign UA forwarded: %q", h["User-Agent"])
+		t.Errorf("User-Agent not minted: %q", h["User-Agent"])
 	}
-	if got := h["x-opencode-session"]; got != "ses_de183bb4be51r6rQJojApiDzDR" {
-		t.Errorf("foreign session not translated, got %q", got)
+	if !translate.OpenCodeSessionRE.MatchString(h["x-opencode-session"]) {
+		t.Errorf("session not canonical: %q", h["x-opencode-session"])
+	}
+	if !strings.HasPrefix(h["x-opencode-request"], "msg_") {
+		t.Errorf("request id not minted: %q", h["x-opencode-request"])
 	}
 	if h["x-opencode-client"] != "desktop" || h["x-opencode-project"] != "global" {
 		t.Errorf("defaults broken: %+v", h)
 	}
-	if !strings.HasPrefix(h["x-opencode-request"], "msg_") {
-		t.Errorf("request id not generated: %q", h["x-opencode-request"])
+	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
+	if h["x-opencode-session"] == h2["x-opencode-session"] {
+		t.Error("session not fresh per request")
+	}
+	if h["x-opencode-request"] == h2["x-opencode-request"] {
+		t.Error("request id not fresh per request")
 	}
 }
 
@@ -244,7 +227,7 @@ func TestOpenCode_BuildHeaders_OmitsXApiKey(t *testing.T) {
 	// anomalyco/opencode source); the public marker is a non-genuine
 	// fingerprint the free-tier gate rejects.
 	for _, endpoint := range []string{"/chat/completions", "/messages", "/responses"} {
-		h := buildOpencodeHeaders(context.Background(), endpoint, []byte(`{"model":"x"}`))
+		h := buildOpencodeHeaders(endpoint, []byte(`{"model":"x"}`))
 		if v, ok := h["x-api-key"]; ok {
 			t.Errorf("endpoint %s: x-api-key = %q, want absent", endpoint, v)
 		}
@@ -252,15 +235,15 @@ func TestOpenCode_BuildHeaders_OmitsXApiKey(t *testing.T) {
 }
 
 func TestOpenCode_BuildHeaders_Messages(t *testing.T) {
-	h := buildOpencodeHeaders(context.Background(), "/messages", []byte(`{"model":"union-alpha"}`))
+	h := buildOpencodeHeaders("/messages", []byte(`{"model":"union-alpha"}`))
 	if h["anthropic-version"] != "2023-06-01" {
 		t.Errorf("expected anthropic-version for /messages, got %q", h["anthropic-version"])
 	}
-	h2 := buildOpencodeHeaders(context.Background(), "/chat/completions", []byte(`{"model":"x"}`))
+	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
 	if _, ok := h2["anthropic-version"]; ok {
 		t.Errorf("did not expect anthropic-version for chat endpoint")
 	}
-	hs := buildOpencodeHeaders(context.Background(), "/chat/completions", []byte(`{"stream":true}`))
+	hs := buildOpencodeHeaders("/chat/completions", []byte(`{"stream":true}`))
 	if hs["Accept"] != "text/event-stream" {
 		t.Errorf("expected streaming Accept, got %q", hs["Accept"])
 	}

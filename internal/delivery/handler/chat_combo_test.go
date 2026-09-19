@@ -254,7 +254,9 @@ func TestChat_ComboMessagesTier_FailoverToOpenAI(t *testing.T) {
 	}
 }
 
-func TestChat_DownstreamIdentityForwardedUpstream(t *testing.T) {
+func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
+	// Downstream Zen identity headers must NOT reach the upstream:
+	// freegate always mints fresh canonical identity instead.
 	z := &zenWire{}
 	h := comboTestHandler(t, z, []upstream.ComboTierInput{{Provider: "opencode", Model: "union-alpha"}})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(openAIToolsBody("assistant", "", false)))
@@ -275,16 +277,29 @@ func TestChat_DownstreamIdentityForwardedUpstream(t *testing.T) {
 		t.Fatal("no upstream calls captured")
 	}
 	got := z.headers[0]
-	for k, want := range map[string]string{
-		"User-Agent":         "opencode/1.18.31",
+	for k, foreign := range map[string]string{
 		"X-Opencode-Session": "ses_0afae3e4c001AmMPIe8RFqNeTF",
 		"X-Opencode-Request": "usr_testuser000000000000000001",
 		"X-Opencode-Client":  "cli",
 		"X-Opencode-Project": "prj_test0000000000000000000001",
 	} {
-		if got.Get(k) != want {
-			t.Errorf("upstream %s = %q, want %q", k, got.Get(k), want)
+		if v := got.Get(k); v == foreign {
+			t.Errorf("upstream %s forwarded downstream value %q, want minted", k, v)
 		}
+		if v := got.Get(k); v == "" {
+			t.Errorf("upstream %s empty, want minted", k)
+		}
+	}
+	if v := got.Get("X-Opencode-Client"); v != "desktop" {
+		t.Errorf("upstream X-Opencode-Client = %q, want desktop", v)
+	}
+	if v := got.Get("X-Opencode-Project"); v != "global" {
+		t.Errorf("upstream X-Opencode-Project = %q, want global", v)
+	}
+	// Minted UA carries provider-utils/runtime suffixes, so it must never
+	// equal the bare downstream value; equality means UA forwarding regressed.
+	if v := got.Get("User-Agent"); v == "opencode/1.18.31" {
+		t.Errorf("upstream User-Agent forwarded downstream value %q, want minted", v)
 	}
 }
 

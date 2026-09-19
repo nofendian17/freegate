@@ -199,13 +199,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r = r.WithContext(translate.WithRequestFormat(r.Context(), targetFormat))
-	r = r.WithContext(translate.WithDownstreamIdentity(r.Context(), translate.ClipIdentity(translate.DownstreamIdentity{
-		UserAgent: r.Header.Get("User-Agent"),
-		Session:   r.Header.Get("x-opencode-session"),
-		RequestID: r.Header.Get("x-opencode-request"),
-		Client:    r.Header.Get("x-opencode-client"),
-		Project:   r.Header.Get("x-opencode-project"),
-	})))
 
 	// For mismatched formats, wrap the response writer to translate
 	// the upstream's target response back to the client's source format

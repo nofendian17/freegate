@@ -196,7 +196,7 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 		out = ensureStreamRequest(out, endpoint)
 		return o.chatCompletionStreamAssembled(ctx, endpoint, out)
 	}
-	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	headers := buildOpencodeHeaders(endpoint, out)
 	logZenRequest(endpoint, headers, out)
 	// No x-api-key is sent on this path by design: the genuine client
 	// authenticates with `Authorization: Bearer` only, for anonymous and
@@ -257,7 +257,7 @@ func ensureStreamRequest(body []byte, endpoint string) []byte {
 // back into one native JSON response. Non-SSE replies (e.g. JSON errors)
 // pass through untouched for the usual failover handling.
 func (o *OpenCodeUpstream) chatCompletionStreamAssembled(ctx context.Context, endpoint string, out []byte) (*domain.UpstreamResponse, error) {
-	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	headers := buildOpencodeHeaders(endpoint, out)
 	logZenRequest(endpoint, headers, out)
 	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
 	if err != nil {
@@ -446,57 +446,30 @@ func ensureMessagesMaxTokens(body []byte) []byte {
 }
 
 // buildOpencodeHeaders returns compliant per-request Zen headers per 9router
-// PR #4111 and PR #10: Bearer public, versioned first-party UA, desktop
-// client tag, canonical session/request IDs, global project, streaming
-// Accept, and anthropic-version for /messages. No x-api-key header at all:
-// the genuine client authenticates with `Authorization: Bearer` only —
-// anonymous and keyed alike — and the free-tier gate treats the public
-// marker as a non-genuine fingerprint.
-func buildOpencodeHeaders(ctx context.Context, endpoint string, body []byte) map[string]string {
+// PR #4111 and PR #10: versioned first-party UA, desktop client tag, fresh
+// canonical session/request IDs, global project, streaming Accept, and
+// anthropic-version for /messages. Every value is minted fresh per request:
+// downstream client headers (User-Agent, x-opencode-*) are deliberately
+// ignored — the gateway validates shape, not origin, and forwarding foreign
+// sessions/requests buys nothing (verified live: minted-fresh requests pass
+// while forwarded-identity ones still draw intermittent 403 FreeTierError).
+// No x-api-key header at all: the genuine client authenticates with
+// `Authorization: Bearer` only — anonymous and keyed alike — and the
+// free-tier gate treats the public marker as a non-genuine fingerprint.
+func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
 	stream := isStreamBody(body)
 	isMessages := strings.HasSuffix(endpoint, "/messages")
 	accept := "*/*"
 	if stream {
 		accept = "text/event-stream"
 	}
-	id := translate.DownstreamIdentityFrom(ctx)
-	ua := openCodeUserAgent()
-	if translate.ValidOpencodeVersion(id.UserAgent) {
-		ua = id.UserAgent
-	}
-	session := genSessionID()
-	if id.Session != "" {
-		tool := id.Client
-		if tool == "" {
-			tool = "generic"
-		}
-		session = translate.TranslateSessionID(id.Session, tool)
-	}
-	// Downstream request/client/project values pass through verbatim when
-	// present. Unlike sessions they are NOT canonicalized: genuine clients
-	// send stable non-canonical values here (account-bound user IDs, real
-	// project hashes), and forcing them into msg_/canonical shape would
-	// destroy exactly the identity a chained genuine client provides.
-	// Lengths are already capped at extraction (ClipIdentity).
-	request := genRequestID()
-	if id.RequestID != "" {
-		request = id.RequestID
-	}
-	client := "desktop"
-	if id.Client != "" {
-		client = id.Client
-	}
-	project := "global"
-	if id.Project != "" {
-		project = id.Project
-	}
 	headers := map[string]string{
 		"Content-Type":       "application/json",
-		"User-Agent":         ua,
-		"x-opencode-client":  client,
-		"x-opencode-session": session,
-		"x-opencode-request": request,
-		"x-opencode-project": project,
+		"User-Agent":         openCodeUserAgent(),
+		"x-opencode-client":  "desktop",
+		"x-opencode-session": genSessionID(),
+		"x-opencode-request": genRequestID(),
+		"x-opencode-project": "global",
 		"Accept":             accept,
 	}
 	if isMessages {
