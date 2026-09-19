@@ -164,9 +164,9 @@ func New(cfg *config.Config) (*Server, error) {
 			Provider:   cfg.VPNProvider,
 			SocksAddr:  cfg.SOCKSAddr,
 			Country:    cfg.VPNGateCountry,
-			MinScore:   0,
-			MaxPing:    0,
-			RefreshInt: time.Duration(cfg.VPNGateRotateInterval) * time.Second,
+			MinScore:   cfg.VPNGateMinScore,
+			MaxPing:    cfg.VPNGateMaxPing,
+			RefreshInt: time.Duration(cfg.VPNGateRefreshSeconds) * time.Second,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create vpn provider: %w", err)

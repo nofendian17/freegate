@@ -41,6 +41,13 @@ type Config struct {
 	// substring ("Japan") or ISO code ("JP"), prefix with "!" to exclude
 	// ("!US"). Empty = all countries.
 	VPNGateCountry string
+	// VPNGateMinScore / VPNGateMaxPing filter the relay list by server
+	// score and ping (ms). Zero disables the filter.
+	VPNGateMinScore int
+	VPNGateMaxPing  int
+	// VPNGateRefreshSeconds bounds how often the VPNGate server list is
+	// re-fetched (default 300).
+	VPNGateRefreshSeconds int
 
 	UpstreamURLOpenCode           string
 	UpstreamKeyOpenCode           []string
@@ -107,6 +114,9 @@ func Load() *Config {
 		VPNGateCtrlPort:       envInt("VPNGATE_CTRL_PORT", 8080),
 		VPNGateRotateInterval: envInt("VPNGATE_ROTATE_INTERVAL", 30),
 		VPNGateCountry:        envStr("VPNGATE_COUNTRY", ""),
+		VPNGateMinScore:       envInt("VPNGATE_MIN_SCORE", 0),
+		VPNGateMaxPing:        envInt("VPNGATE_MAX_PING", 0),
+		VPNGateRefreshSeconds: envInt("VPNGATE_REFRESH_SECONDS", 300),
 
 		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
 		UpstreamKeyOpenCode:           envSlice("UPSTREAM_KEY_OPENCODE", "public"),
