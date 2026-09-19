@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
+	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/ringbuffer"
-	"freegate/internal/domain"
 )
 
 const (

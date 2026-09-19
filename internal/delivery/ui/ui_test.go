@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"freegate/internal/infrastructure/vpngate"
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/vpngate"
 )
 
 type fakeData struct {
@@ -20,13 +20,13 @@ type fakeData struct {
 	vpnIP   string
 }
 
-func (f *fakeData) Metrics() map[string]any             { return f.metrics }
+func (f *fakeData) Metrics() map[string]any              { return f.metrics }
 func (f *fakeData) Models() []domain.Model               { return f.models }
 func (f *fakeData) Requests() []domain.RequestLogEntry   { return f.reqs }
 func (f *fakeData) Timeseries() []domain.TimeseriesEntry { return f.ts }
-func (f *fakeData) UptimeSeconds() int64                { return f.uptime }
-func (f *fakeData) StartedAtUnix() int64                { return f.start }
-func (f *fakeData) VPNIP() string                       { return f.vpnIP }
+func (f *fakeData) UptimeSeconds() int64                 { return f.uptime }
+func (f *fakeData) StartedAtUnix() int64                 { return f.start }
+func (f *fakeData) VPNIP() string                        { return f.vpnIP }
 
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()

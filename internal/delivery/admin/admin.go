@@ -100,9 +100,9 @@ func (h *Handler) Register(r chi.Router) {
 }
 
 type providerIn struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	APIKeys []string `json:"api_keys"`
+	Name    string            `json:"name"`
+	BaseURL string            `json:"base_url"`
+	APIKeys []string          `json:"api_keys"`
 	Headers map[string]string `json:"headers"`
 	// Models is the explicit curated selection (checkboxes in the
 	// dashboard, populated from the probe). Only these route here.
@@ -110,9 +110,9 @@ type providerIn struct {
 	// selection (nil preserves a legacy whole-catalog row), present
 	// (even []) overwrites it.
 	Models     *[]string `json:"models"`
-	RefreshSec int      `json:"refresh_sec"`
-	Priority   int      `json:"priority"`
-	Enabled    bool     `json:"enabled"`
+	RefreshSec int       `json:"refresh_sec"`
+	Priority   int       `json:"priority"`
+	Enabled    bool      `json:"enabled"`
 }
 
 // nonEmpty drops blank keys; an update with no keys keeps existing ones.

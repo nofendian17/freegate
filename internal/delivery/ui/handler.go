@@ -10,8 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/middleware"
-	"freegate/internal/infrastructure/vpngate"
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/vpngate"
 )
 
 // DataSource provides the data the UI needs to render.

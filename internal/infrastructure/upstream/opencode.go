@@ -23,14 +23,9 @@ import (
 // session IDs) lives in opencode_identity.go, mirroring 9router PR #10
 // (cherry-pick of decolua#4105) for the gateway's free-tier validation.
 
-// Models served by /zen/v1/messages (Anthropic Messages API).
-// Union Alpha is a Claude-format model on the Zen gateway.
-// These are defaults; use SetResponseModels/SetMessageModels to override
-// from RESPONSE_MODELS / MESSAGE_MODELS config so handler and upstream agree.
-var openCodeMessagesModels = map[string]bool{
-	"union-alpha": true,
-}
-
+// Defaults for endpoint routing; use SetResponseModels/SetMessageModels to
+// override from RESPONSE_MODELS / MESSAGE_MODELS config so handler and
+// upstream agree.
 var defaultOpenCodeResponseModels = []string{"muse-spark", "muse_spark"}
 
 var defaultOpenCodeMessageModels = []string{"union-alpha"}
@@ -196,7 +191,7 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 		out = ensureStreamRequest(out, endpoint)
 		return o.chatCompletionStreamAssembled(ctx, endpoint, out)
 	}
-	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	headers := buildOpencodeHeaders(endpoint, out)
 	logZenRequest(endpoint, headers, out)
 	// No x-api-key is sent on this path by design: the genuine client
 	// authenticates with `Authorization: Bearer` only, for anonymous and
@@ -257,7 +252,7 @@ func ensureStreamRequest(body []byte, endpoint string) []byte {
 // back into one native JSON response. Non-SSE replies (e.g. JSON errors)
 // pass through untouched for the usual failover handling.
 func (o *OpenCodeUpstream) chatCompletionStreamAssembled(ctx context.Context, endpoint string, out []byte) (*domain.UpstreamResponse, error) {
-	headers := buildOpencodeHeaders(ctx, endpoint, out)
+	headers := buildOpencodeHeaders(endpoint, out)
 	logZenRequest(endpoint, headers, out)
 	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
 	if err != nil {
@@ -395,21 +390,6 @@ func matchModelSubstring(model string, patterns []string) bool {
 	return false
 }
 
-func isMessagesModel(model string) bool {
-	// Backward-compat wrapper using defaults (exact legacy set was
-	// {"union-alpha"}; substring match on the same default preserves it
-	// while also covering variants like "union-alpha-2").
-	if matchModelSubstring(model, defaultOpenCodeMessageModels) {
-		return true
-	}
-	base := strings.ToLower(baseModelID(model))
-	return openCodeMessagesModels[base]
-}
-
-func isResponsesModelID(model string) bool {
-	return matchModelSubstring(model, defaultOpenCodeResponseModels)
-}
-
 func extractOpencodeModel(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -446,57 +426,30 @@ func ensureMessagesMaxTokens(body []byte) []byte {
 }
 
 // buildOpencodeHeaders returns compliant per-request Zen headers per 9router
-// PR #4111 and PR #10: Bearer public, versioned first-party UA, desktop
-// client tag, canonical session/request IDs, global project, streaming
-// Accept, and anthropic-version for /messages. No x-api-key header at all:
-// the genuine client authenticates with `Authorization: Bearer` only —
-// anonymous and keyed alike — and the free-tier gate treats the public
-// marker as a non-genuine fingerprint.
-func buildOpencodeHeaders(ctx context.Context, endpoint string, body []byte) map[string]string {
+// PR #4111 and PR #10: versioned first-party UA, desktop client tag, fresh
+// canonical session/request IDs, global project, streaming Accept, and
+// anthropic-version for /messages. Every value is minted fresh per request:
+// downstream client headers (User-Agent, x-opencode-*) are deliberately
+// ignored — the gateway validates shape, not origin, and forwarding foreign
+// sessions/requests buys nothing (verified live: minted-fresh requests pass
+// while forwarded-identity ones still draw intermittent 403 FreeTierError).
+// No x-api-key header at all: the genuine client authenticates with
+// `Authorization: Bearer` only — anonymous and keyed alike — and the
+// free-tier gate treats the public marker as a non-genuine fingerprint.
+func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
 	stream := isStreamBody(body)
 	isMessages := strings.HasSuffix(endpoint, "/messages")
 	accept := "*/*"
 	if stream {
 		accept = "text/event-stream"
 	}
-	id := translate.DownstreamIdentityFrom(ctx)
-	ua := openCodeUserAgent()
-	if translate.ValidOpencodeVersion(id.UserAgent) {
-		ua = id.UserAgent
-	}
-	session := genSessionID()
-	if id.Session != "" {
-		tool := id.Client
-		if tool == "" {
-			tool = "generic"
-		}
-		session = translate.TranslateSessionID(id.Session, tool)
-	}
-	// Downstream request/client/project values pass through verbatim when
-	// present. Unlike sessions they are NOT canonicalized: genuine clients
-	// send stable non-canonical values here (account-bound user IDs, real
-	// project hashes), and forcing them into msg_/canonical shape would
-	// destroy exactly the identity a chained genuine client provides.
-	// Lengths are already capped at extraction (ClipIdentity).
-	request := genRequestID()
-	if id.RequestID != "" {
-		request = id.RequestID
-	}
-	client := "desktop"
-	if id.Client != "" {
-		client = id.Client
-	}
-	project := "global"
-	if id.Project != "" {
-		project = id.Project
-	}
 	headers := map[string]string{
 		"Content-Type":       "application/json",
-		"User-Agent":         ua,
-		"x-opencode-client":  client,
-		"x-opencode-session": session,
-		"x-opencode-request": request,
-		"x-opencode-project": project,
+		"User-Agent":         openCodeUserAgent(),
+		"x-opencode-client":  "desktop",
+		"x-opencode-session": genSessionID(),
+		"x-opencode-request": genRequestID(),
+		"x-opencode-project": "global",
 		"Accept":             accept,
 	}
 	if isMessages {
@@ -602,16 +555,4 @@ func genOpencodeIDWithClock(prefix string, complement bool) string {
 		sb.WriteByte(opencodeIDChars[int(b)%62])
 	}
 	return sb.String()
-}
-
-// genUUID returns a random RFC 4122 v4 UUID without pulling in a dependency.
-// Kept for backward compat (tests / external callers).
-func genUUID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "00000000-0000-0000-0000-000000000000"
-	}
-	b[6] = (b[6] & 3) | 8<<4 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

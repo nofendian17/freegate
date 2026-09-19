@@ -61,7 +61,12 @@ func (k *keyCooldown) isLimited(key string) bool {
 // rather than per-upstream. DialContext routes via VPN when enabled.
 func NewTransport(d *Dialer) *http.Transport {
 	tr := &http.Transport{
-		ForceAttemptHTTP2:     false,
+		// HTTP/2 multiplexes concurrent streams over a single TCP+TLS
+		// connection, so far fewer handshakes cross the lossy VPN tunnel
+		// (fresh tunnel handshakes intermittently die with EOF/TLS
+		// timeouts). All upstreams negotiate h2 (verified live); others
+		// fall back to HTTP/1.1 automatically.
+		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 300 * time.Second,
 		MaxIdleConns:          50,

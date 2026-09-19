@@ -3,8 +3,8 @@ module freegate
 go 1.26.1
 
 require (
-	github.com/go-chi/chi/v5 v5.2.1
-	golang.org/x/net v0.55.0
+	github.com/go-chi/chi/v5 v5.3.0
+	golang.org/x/net v0.56.0
 )
 
 require (
@@ -28,8 +28,8 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect

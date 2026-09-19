@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/upstream/types"
 )
 
 func newTestLLM7(t *testing.T, body string) *LLM7Upstream {

@@ -14,13 +14,13 @@ type mockUpstream struct {
 	models []domain.Model
 }
 
-func (m *mockUpstream) Name() string                                          { return m.name }
-func (m *mockUpstream) Match(modelID string) bool                             { return m.match(modelID) }
+func (m *mockUpstream) Name() string                                           { return m.name }
+func (m *mockUpstream) Match(modelID string) bool                              { return m.match(modelID) }
 func (m *mockUpstream) ListModels(ctx context.Context) ([]domain.Model, error) { return nil, nil }
 func (m *mockUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
-func (m *mockUpstream) Models() []domain.Model                                    { return m.models }
+func (m *mockUpstream) Models() []domain.Model                                   { return m.models }
 func (m *mockUpstream) Start(ctx context.Context, refreshInterval time.Duration) {}
 
 func TestRouter_Select_Match(t *testing.T) {
