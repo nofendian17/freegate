@@ -16,7 +16,7 @@ import (
 )
 
 func TestSyncReasoning_BothPresent(t *testing.T) {
-	m := map[string]interface{}{
+	m := map[string]any{
 		"reasoning":         "step by step",
 		"reasoning_content": "step by step",
 	}
@@ -30,7 +30,7 @@ func TestSyncReasoning_BothPresent(t *testing.T) {
 }
 
 func TestSyncReasoning_OnlyRC(t *testing.T) {
-	m := map[string]interface{}{
+	m := map[string]any{
 		"reasoning_content": "from opencode",
 	}
 	syncReasoning(m)
@@ -43,7 +43,7 @@ func TestSyncReasoning_OnlyRC(t *testing.T) {
 }
 
 func TestSyncReasoning_OnlyR(t *testing.T) {
-	m := map[string]interface{}{
+	m := map[string]any{
 		"reasoning": "from kilo",
 	}
 	syncReasoning(m)
@@ -56,7 +56,7 @@ func TestSyncReasoning_OnlyR(t *testing.T) {
 }
 
 func TestSyncReasoning_Neither(t *testing.T) {
-	m := map[string]interface{}{
+	m := map[string]any{
 		"content": "hello",
 	}
 	syncReasoning(m)

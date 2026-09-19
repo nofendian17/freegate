@@ -27,6 +27,9 @@ const (
 	AppliedStreamOptions = "stream-options"
 	// AppliedDeepSeekFlashTopP marks the flash top_p default.
 	AppliedDeepSeekFlashTopP = "deepseek-flash-top-p"
+	// AppliedDeepSeekToolStop marks the DSML tool_calls closer appended to
+	// stop for DeepSeek tool requests (vllm#54686 port).
+	AppliedDeepSeekToolStop = "deepseek-tool-stop"
 	// AppliedClaudeStripEmpty marks stripped Anthropic-rejected blocks
 	// and dropped emptied messages.
 	AppliedClaudeStripEmpty = "claude-strip-empty"

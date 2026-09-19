@@ -662,11 +662,9 @@ func handleToolCalls(tcList []any, state *StreamState) []string {
 		intIdx := int(idx)
 
 		if id, ok := tc["id"].(string); ok && id != "" {
-			// If we have already seen/initialized this tool call index,
-			// do NOT start a new block or generate a new ID. Just use the existing one.
-			if existing, exists := state.toolCalls[intIdx]; exists {
-				id = existing.ID
-			} else {
+			// Repeat mentions of an initialized index only accumulate
+			// arguments below; a new block starts on first sight only.
+			if _, exists := state.toolCalls[intIdx]; !exists {
 				// Ensure tool use ID is unique in this response stream
 				if count, seen := state.seenIDs[id]; seen {
 					state.seenIDs[id] = count + 1

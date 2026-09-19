@@ -149,13 +149,13 @@ func TestConfig_Load_VPNGateCountry(t *testing.T) {
 	}
 }
 func TestConfig_Validate_AdminRequired(t *testing.T) {
-	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateCtrlPort: 8080, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN") {
 		t.Fatalf("expected ADMIN_TOKEN required error, got %v", err)
 	}
 }
 func TestConfig_Validate_AdminTokenTooShort(t *testing.T) {
-	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateCtrlPort: 8080, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, VPNGateRotateInterval: 30, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at least 6") {
 		t.Fatalf("expected ADMIN_TOKEN length error, got %v", err)
 	}
@@ -184,9 +184,7 @@ func defaultConfig() *Config {
 		APIKey:                []string{"test-key"},
 		VPNEnabled:            true,
 		VPNProvider:           "auto",
-		VPNGateHost:           "127.0.0.1",
 		VPNGateSocksPort:      9050,
-		VPNGateCtrlPort:       8080,
 		VPNGateRotateInterval: 30,
 		LogLevel:              "info",
 		RateLimit:             60,

@@ -28,7 +28,6 @@ import (
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/internal/infrastructure/vpn"
-	"freegate/internal/infrastructure/vpngate"
 	"freegate/web"
 )
 
@@ -74,31 +73,6 @@ func (v *vpnUI) Status() (vpn.StatusInfo, error)           { return v.provider.S
 func (v *vpnUI) Ping() (vpn.PingResult, error)             { return v.provider.Ping() }
 func (v *vpnUI) CurrentIP() string                         { return v.provider.CurrentIP() }
 func (v *vpnUI) InstallHint() string                       { return v.provider.InstallHint() }
-
-// sidecarAdapter wraps the legacy vpngate sidecar Controller so Docker
-// deployments (VPNGATE_HOST=vpn) keep using the sidecar's HTTP API instead
-// of the embedded per-OS provider. The sidecar already runs openvpn with
-// CAP_NET_ADMIN, so no install hint is needed.
-type sidecarAdapter struct {
-	ctrl *vpngate.Controller
-}
-
-func (s *sidecarAdapter) Start(ctx context.Context) error {
-	stop := make(chan struct{})
-	go s.ctrl.StartMonitor(5*time.Minute, stop)
-	<-ctx.Done()
-	close(stop)
-	return nil
-}
-func (s *sidecarAdapter) Rotate() error                             { return s.ctrl.ForceNewIP() }
-func (s *sidecarAdapter) ConnectTo(h string) error                  { return s.ctrl.ConnectTo(h) }
-func (s *sidecarAdapter) ListServers() ([]vpn.ServerInfo, error)    { return s.ctrl.ListServers() }
-func (s *sidecarAdapter) RefreshServers() ([]vpn.ServerInfo, error) { return s.ctrl.RefreshServers() }
-func (s *sidecarAdapter) Status() (vpn.StatusInfo, error)           { return s.ctrl.Status() }
-func (s *sidecarAdapter) Ping() (vpn.PingResult, error)             { return s.ctrl.Ping() }
-func (s *sidecarAdapter) CurrentIP() string                         { return s.ctrl.CurrentIP() }
-func (s *sidecarAdapter) InstallHint() string                       { return "" }
-func (s *sidecarAdapter) Close() error                              { s.ctrl.Close(); return nil }
 
 func (v *vpnUI) SetDirect(direct bool) error {
 	v.dialer.SetDirect(direct)
@@ -151,26 +125,19 @@ func New(cfg *config.Config) (*Server, error) {
 	httputil.SetTrustProxyHeaders(cfg.TrustProxyHeaders)
 
 	var vpnProvider vpn.Provider
-	// Docker sidecar mode: VPNGATE_HOST explicitly set to non-loopback (e.g. "vpn")
-	// means the vpn container holds the tunnel. Use its HTTP API and don't
-	// show the per-OS openvpn install hint.
-	if cfg.IsSidecarMode() {
-		ctrl := vpngate.NewController(cfg.VPNGateHost, cfg.VPNGateCtrlPort, time.Duration(cfg.VPNGateRotateInterval)*time.Second)
-		vpnProvider = &sidecarAdapter{ctrl: ctrl}
-	} else {
-		var err error
-		vpnProvider, err = vpn.NewProvider(vpn.ProviderConfig{
-			Enabled:    cfg.VPNEnabled,
-			Provider:   cfg.VPNProvider,
-			SocksAddr:  cfg.SOCKSAddr,
-			Country:    cfg.VPNGateCountry,
-			MinScore:   0,
-			MaxPing:    0,
-			RefreshInt: time.Duration(cfg.VPNGateRotateInterval) * time.Second,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create vpn provider: %w", err)
-		}
+	// Single binary: the tunnel always runs in-process via the embedded
+	// supervisor (the container carries openvpn + NET_ADMIN).
+	vpnProvider, err := vpn.NewProvider(vpn.ProviderConfig{
+		Enabled:    cfg.VPNEnabled,
+		Provider:   cfg.VPNProvider,
+		SocksAddr:  cfg.SOCKSAddr,
+		Country:    cfg.VPNGateCountry,
+		MinScore:   cfg.VPNGateMinScore,
+		MaxPing:    cfg.VPNGateMaxPing,
+		RefreshInt: time.Duration(cfg.VPNGateRefreshSeconds) * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create vpn provider: %w", err)
 	}
 
 	// One shared dialer + transport routes all upstreams; direct vs tunnel
@@ -183,10 +150,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	// Safety fallback for openvpn-missing case where provider is direct
 	// but cfg still carried SOCKSAddr.
-	if _, isSidecar := vpnProvider.(*sidecarAdapter); !isSidecar {
-		if vpnProvider.CurrentIP() == "direct" && !dialer.IsDirect() {
-			dialer.SetDirect(true)
-		}
+	if vpnProvider.CurrentIP() == "direct" && !dialer.IsDirect() {
+		dialer.SetDirect(true)
 	}
 	sharedTr := buildSharedTransport(dialer)
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
@@ -362,7 +327,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	s.manager.Start(bgCtx)
 
-	// VPN provider in-process (replaces external supervisor sidecar)
+	// VPN provider runs the tunnel in-process.
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

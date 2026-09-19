@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"freegate/internal/infrastructure/vpn/supervisor"
-	"freegate/internal/infrastructure/vpngate"
 )
 
 type ProviderConfig struct {
@@ -23,9 +22,9 @@ type ProviderConfig struct {
 	RefreshInt time.Duration
 }
 
-type ServerInfo = vpngate.ServerInfo
-type StatusInfo = vpngate.StatusInfo
-type PingResult = vpngate.PingResult
+type ServerInfo = supervisor.ServerInfo
+type StatusInfo = supervisor.StatusInfo
+type PingResult = supervisor.PingResult
 
 type Provider interface {
 	Start(ctx context.Context) error

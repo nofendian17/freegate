@@ -11,7 +11,7 @@ import (
 
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/vpngate"
+	"freegate/internal/infrastructure/vpn"
 )
 
 // DataSource provides the data the UI needs to render.
@@ -28,12 +28,12 @@ type DataSource interface {
 // VPNClient is the subset of the VPN controller the dashboard needs to
 // render the server picker, drive manual connects, and check connectivity.
 type VPNClient interface {
-	ListServers() ([]vpngate.ServerInfo, error)
-	RefreshServers() ([]vpngate.ServerInfo, error)
+	ListServers() ([]vpn.ServerInfo, error)
+	RefreshServers() ([]vpn.ServerInfo, error)
 	ConnectTo(hostname string) error
 	ForceNewIP() error
-	Status() (vpngate.StatusInfo, error)
-	Ping() (vpngate.PingResult, error)
+	Status() (vpn.StatusInfo, error)
+	Ping() (vpn.PingResult, error)
 	SetDirect(direct bool) error
 	Direct() bool
 	CurrentIP() string

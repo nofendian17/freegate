@@ -144,9 +144,6 @@ func NewStreamState() *StreamState {
 // --- Legacy aliases for backward compatibility with internal callers
 // that pre-date the public streaming API. ---
 
-// geminiStreamState is the legacy name; new code should use StreamState.
-type geminiStreamState = StreamState
-
 // processGeminiChunk is the legacy name; new code should use ProcessChunk.
 func processGeminiChunk(chunk map[string]any, state *StreamState) []string {
 	return ProcessChunk(chunk, state)

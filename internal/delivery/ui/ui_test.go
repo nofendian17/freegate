@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/vpngate"
+	"freegate/internal/infrastructure/vpn"
 )
 
 type fakeData struct {
@@ -58,20 +58,20 @@ func newTestHandler(t *testing.T) *Handler {
 }
 
 type fakeVPN struct {
-	servers   []vpngate.ServerInfo
-	status    vpngate.StatusInfo
-	ping      vpngate.PingResult
+	servers   []vpn.ServerInfo
+	status    vpn.StatusInfo
+	ping      vpn.PingResult
 	connectTo string
 	rotateErr error
 	direct    bool
 }
 
-func (f *fakeVPN) ListServers() ([]vpngate.ServerInfo, error)    { return f.servers, nil }
-func (f *fakeVPN) RefreshServers() ([]vpngate.ServerInfo, error) { return f.servers, nil }
+func (f *fakeVPN) ListServers() ([]vpn.ServerInfo, error)    { return f.servers, nil }
+func (f *fakeVPN) RefreshServers() ([]vpn.ServerInfo, error) { return f.servers, nil }
 func (f *fakeVPN) ConnectTo(h string) error                      { f.connectTo = h; return nil }
 func (f *fakeVPN) ForceNewIP() error                             { return f.rotateErr }
-func (f *fakeVPN) Status() (vpngate.StatusInfo, error)           { return f.status, nil }
-func (f *fakeVPN) Ping() (vpngate.PingResult, error)             { return f.ping, nil }
+func (f *fakeVPN) Status() (vpn.StatusInfo, error)           { return f.status, nil }
+func (f *fakeVPN) Ping() (vpn.PingResult, error)             { return f.ping, nil }
 func (f *fakeVPN) SetDirect(v bool) error                        { f.direct = v; return nil }
 func (f *fakeVPN) Direct() bool                                  { return f.direct }
 func (f *fakeVPN) CurrentIP() string                             { return f.status.IP }
@@ -254,7 +254,7 @@ func TestAPIHealth(t *testing.T) {
 
 func TestAPIVPNServers(t *testing.T) {
 	h := newTestHandler(t)
-	h.vpn.(*fakeVPN).servers = []vpngate.ServerInfo{
+	h.vpn.(*fakeVPN).servers = []vpn.ServerInfo{
 		{Hostname: "vpn-korea-1", IP: "1.2.3.4", Country: "South Korea", Score: 5000, Ping: "12"},
 	}
 	rr := serveViaRoutes(h, "GET", "/api/vpn/servers")
@@ -273,8 +273,8 @@ func TestAPIVPNServers(t *testing.T) {
 
 func TestAPIVPNConnect(t *testing.T) {
 	h := newTestHandler(t)
-	vpn := h.vpn.(*fakeVPN)
-	vpn.status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
+	fvpn := h.vpn.(*fakeVPN)
+	fvpn.status = vpn.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/vpn/connect", strings.NewReader(`{"server":"vpn-korea-1"}`))
@@ -283,8 +283,8 @@ func TestAPIVPNConnect(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
 	}
-	if vpn.connectTo != "vpn-korea-1" {
-		t.Errorf("expected connect to vpn-korea-1, got %q", vpn.connectTo)
+	if fvpn.connectTo != "vpn-korea-1" {
+		t.Errorf("expected connect to vpn-korea-1, got %q", fvpn.connectTo)
 	}
 	if !strings.Contains(rr.Body.String(), `"connected":true`) {
 		t.Errorf("connect response missing status, got: %s", rr.Body.String())
@@ -304,8 +304,8 @@ func TestAPIVPNConnectMissingServer(t *testing.T) {
 
 func TestAPIVPNRotate(t *testing.T) {
 	h := newTestHandler(t)
-	vpn := h.vpn.(*fakeVPN)
-	vpn.status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-2", IP: "5.6.7.8"}
+	fvpn := h.vpn.(*fakeVPN)
+	fvpn.status = vpn.StatusInfo{Connected: true, Server: "vpn-korea-2", IP: "5.6.7.8"}
 
 	rr := serveViaRoutes(h, "POST", "/api/vpn/rotate")
 
@@ -319,7 +319,7 @@ func TestAPIVPNRotate(t *testing.T) {
 
 func TestAPIVPNPing(t *testing.T) {
 	h := newTestHandler(t)
-	h.vpn.(*fakeVPN).ping = vpngate.PingResult{
+	h.vpn.(*fakeVPN).ping = vpn.PingResult{
 		Connected: true,
 		Server:    "vpn-korea-1",
 		DNSOK:     true, DNSMS: 12,
@@ -349,9 +349,9 @@ func TestAPIVPNPingDirectMode(t *testing.T) {
 	// In direct mode the ping result must carry the route mode so the
 	// dashboard can label the tunnel check as such.
 	h := newTestHandler(t)
-	vpn := h.vpn.(*fakeVPN)
-	vpn.direct = true
-	vpn.ping = vpngate.PingResult{
+	fvpn := h.vpn.(*fakeVPN)
+	fvpn.direct = true
+	fvpn.ping = vpn.PingResult{
 		Connected: true,
 		DNSOK:     true, DNSMS: 8,
 		EgressOK: true, EgressIP: "9.9.9.9", HTTPMS: 150, HTTPCode: 200,
@@ -368,7 +368,7 @@ func TestAPIVPNPingDirectMode(t *testing.T) {
 
 func TestAPIVPNPingError(t *testing.T) {
 	h := newTestHandler(t)
-	h.vpn.(*fakeVPN).ping = vpngate.PingResult{Connected: false, DNSError: "tunnel not connected"}
+	h.vpn.(*fakeVPN).ping = vpn.PingResult{Connected: false, DNSError: "tunnel not connected"}
 	rr := serveViaRoutes(h, "POST", "/api/vpn/ping")
 
 	if rr.Code != 200 {
@@ -381,7 +381,7 @@ func TestAPIVPNPingError(t *testing.T) {
 
 func TestAPIVPNDirect(t *testing.T) {
 	h := newTestHandler(t)
-	vpn := h.vpn.(*fakeVPN)
+	fvpn := h.vpn.(*fakeVPN)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":true}`))
@@ -390,7 +390,7 @@ func TestAPIVPNDirect(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
 	}
-	if !vpn.direct {
+	if !fvpn.direct {
 		t.Error("expected dialer to be switched to direct")
 	}
 	if !strings.Contains(rr.Body.String(), `"direct":true`) {
@@ -400,8 +400,8 @@ func TestAPIVPNDirect(t *testing.T) {
 
 func TestAPIVPNDirectBackToTunnel(t *testing.T) {
 	h := newTestHandler(t)
-	vpn := h.vpn.(*fakeVPN)
-	vpn.direct = true
+	fvpn := h.vpn.(*fakeVPN)
+	fvpn.direct = true
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":false}`))
@@ -410,7 +410,7 @@ func TestAPIVPNDirectBackToTunnel(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if vpn.direct {
+	if fvpn.direct {
 		t.Error("expected dialer to be switched back to tunnel")
 	}
 }
@@ -428,7 +428,7 @@ func TestAPIVPNDirectInvalidBody(t *testing.T) {
 
 func TestAPIVPNStatus(t *testing.T) {
 	h := newTestHandler(t)
-	h.vpn.(*fakeVPN).status = vpngate.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
+	h.vpn.(*fakeVPN).status = vpn.StatusInfo{Connected: true, Server: "vpn-korea-1", IP: "1.2.3.4"}
 	rr := serveViaRoutes(h, "GET", "/api/vpn/status")
 
 	if rr.Code != 200 {

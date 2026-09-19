@@ -1,6 +1,6 @@
 # Environment Variables
 
-freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `VPNGATE_HOST:VPNGATE_SOCKS_PORT`), or simply unset.
+freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `127.0.0.1:VPNGATE_SOCKS_PORT`), or simply unset.
 
 The authoritative list lives in `internal/config/config.go::Load`; this file is generated from it and `.env.example`. If you change one, change the other.
 
@@ -15,6 +15,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 | `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
 | `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). **Empty = `/v1/*` is admin-gated**: only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants access (no open API). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
+| `TRUST_PROXY_HEADERS` | No | `false` | Honor `X-Forwarded-For` / `X-Real-IP` when deriving the client IP (rate limit buckets, logs, request history). Leave `false` when exposed directly — forwarded headers are client-controlled and spoofable. Set `true` only behind a reverse proxy that overwrites these headers. |
 
 ## VPN (single-binary per-OS)
 
@@ -25,13 +26,14 @@ freegate now runs as a **single binary** with embedded VPNGate per OS (linux/dar
 | `VPN_ENABLED` | No | `true` | Enable embedded VPN. `false` = direct connections, no tunnel. Also overridable via `--vpn=false` flag. |
 | `VPN_PROVIDER` | No | `auto` | VPN provider: `auto` (GOOS-aware), `vpngate`, or `direct`. |
 | `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port for in-process tunnel (127.0.0.1:9050) |
-| `VPNGATE_CTRL_PORT` | No | `8080` | Deprecated: legacy sidecar control port (kept for docker compat) |
 | `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
-| `VPNGATE_HOST` | No | `127.0.0.1` | Deprecated: docker sidecar host. If set (e.g. `vpn` in compose), `SOCKSAddr` honors it; otherwise 127.0.0.1. |
+| `VPNGATE_MIN_SCORE` | No | `0` | Minimum relay server score (0 = disabled) |
+| `VPNGATE_MAX_PING` | No | `0` | Maximum relay ping in ms (0 = disabled) |
+| `VPNGATE_REFRESH_SECONDS` | No | `300` | How often the VPNGate server list is re-fetched |
 
-The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true` (or `VPNGATE_HOST:VPNGATE_SOCKS_PORT` if `VPNGATE_HOST` is explicitly set for docker compat); empty when direct. Helpers `Config.IsDirect()` and `Config.IsSidecarMode()` centralize this check (replaces scattered `CurrentIP()=="direct"` string compares).
+The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true`; empty when direct (`Config.IsDirect()` is the single source).
 
-`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are now applied in-process by the Provider (`vpn/registry.go` via `matchCountry`/`pickWeighted`); no sidecar env needed.
+`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are applied in-process by the Provider (`vpn/registry.go` via `matchCountry`/`pickWeighted`).
 
 `VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
 
@@ -67,6 +69,8 @@ The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models claimed by nothing else. Accepts `opencode`, `kilo`, or `llm7`. |
+| `RESPONSE_MODELS` | No | `muse-spark,muse_spark` | Comma-separated substrings (case-insensitive) routing models to the OpenAI Responses API (`/zen/v1/responses`). |
+| `MESSAGE_MODELS` | No | `union-alpha` | Comma-separated substrings (case-insensitive) routing models to the Anthropic Messages API (`/zen/v1/messages`). |
 | `PROVIDERS_DB_PATH` | No | `./data/providers.db` | SQLite file (GORM, pure-Go, CGO-free) holding custom providers, tiered combos, and — once seeded — auth + upstream settings. Auto-created on boot. Persist it: mount a volume over `./data` in docker; back up the file before upgrades. |
 
 ## Custom providers + tiered combos (SQLite)
@@ -93,7 +97,7 @@ Related (no env needed): degenerate upstream responses — HTTP 200 with no cont
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
 - Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)
 - Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
-- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `VPNGATE_CTRL_PORT` outside `1–65535` only in sidecar mode (`IsSidecarMode()`); `VPNGATE_ROTATE_INTERVAL` non-positive only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
+- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `VPNGATE_ROTATE_INTERVAL` non-positive only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
 
 A failure prints a multi-line error and exits 1.
 
@@ -101,7 +105,7 @@ Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, 
 
 ## Source-of-truth files
 
-- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`, helpers `IsDirect()`/`IsSidecarMode()`
+- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`, helper `IsDirect()`
 - `internal/infrastructure/vpn/` — `provider.go` + `registry.go` (server list cache) + `tunnel.go` (OpenVPN lifecycle) + `socks.go` per-OS
 - `internal/infrastructure/upstream/` — `client.go` (`NewTransport` shared, `NewHTTPClientWithTransport`), `cache.go` (O(1) `Has`), `upstream.go` (`Upstream = domain.Upstream`)
 - `internal/domain/` — `upstream.go` + `response.go` (`UpstreamResponse` decouples `net/http`), `model.go` canonical
@@ -109,7 +113,6 @@ Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, 
 - `internal/infrastructure/proxy/normalize.go` — `NormalizeDomainResponseWithContext` (ctx-aware streaming), `RateLimiter` sharded 32-way in `internal/delivery/middleware`
 - `internal/application/rawupstream.go` — `rawLineLogger` (opt-in per-line raw upstream log, `UPSTREAM_CAPTURE=true`)
 - `.env.example` — annotated example
-- `docker-compose.yml` — legacy containerized path (proxy + vpn sidecar)
-- `cmd/vpngate-supervisor/main.go` — legacy sidecar (deprecated, kept for docker compat)
+- `docker-compose.yml` — single proxy container (openvpn baked in, `NET_ADMIN` + `/dev/net/tun`)
 
 <!-- /AUTO-GENERATED -->

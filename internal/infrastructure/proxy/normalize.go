@@ -65,10 +65,6 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	return normalizeOpenAIStreamWithMeta(context.Background(), dst, rd, "", "")
 }
 
-func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
-	return normalizeClaudeStreamWithContext(context.Background(), dst, src)
-}
-
 func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	return copyNormalizedWithContext(context.Background(), w, resp)
 }
@@ -88,10 +84,6 @@ func isAnthropicSSE(rd *bufio.Reader) bool {
 // warnings can be tied back to the originating request.
 func correlationMeta(h http.Header) (model, requestID string) {
 	return h.Get("X-Fg-Model"), h.Get("X-Fg-Request-Id")
-}
-
-func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bufio.Reader) TokenUsage {
-	return normalizeOpenAIStreamWithMeta(ctx, dst, rd, "", "")
 }
 
 func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio.Reader, model, requestID string) TokenUsage {
@@ -621,14 +613,14 @@ func normalizeSSELine(line string) string {
 		return line
 	}
 
-	var chunk map[string]interface{}
+	var chunk map[string]any
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return line
 	}
 
-	if choices, _ := chunk["choices"].([]interface{}); len(choices) > 0 {
-		if c, ok := choices[0].(map[string]interface{}); ok {
-			if delta, ok := c["delta"].(map[string]interface{}); ok {
+	if choices, _ := chunk["choices"].([]any); len(choices) > 0 {
+		if c, ok := choices[0].(map[string]any); ok {
+			if delta, ok := c["delta"].(map[string]any); ok {
 				sanitizeDeltaText(delta)
 			}
 		}
@@ -647,14 +639,14 @@ func normalizeSSELine(line string) string {
 	return "data: " + string(transformed) + ending
 }
 
-func syncDeltaReasoning(chunk map[string]interface{}) {
-	choices, _ := chunk["choices"].([]interface{})
+func syncDeltaReasoning(chunk map[string]any) {
+	choices, _ := chunk["choices"].([]any)
 	for _, choice := range choices {
-		c, ok := choice.(map[string]interface{})
+		c, ok := choice.(map[string]any)
 		if !ok {
 			continue
 		}
-		delta, ok := c["delta"].(map[string]interface{})
+		delta, ok := c["delta"].(map[string]any)
 		if !ok {
 			continue
 		}
@@ -666,7 +658,7 @@ func syncDeltaReasoning(chunk map[string]interface{}) {
 // (notably DeepSeek: <system-reminder>, <feature-flag>, DSML tags, git
 // markers) from assistant text fields. Tool-call arguments are never
 // touched — stripping there would corrupt JSON.
-func sanitizeDeltaText(delta map[string]interface{}) {
+func sanitizeDeltaText(delta map[string]any) {
 	for _, k := range []string{"content", "reasoning_content", "reasoning"} {
 		if s, ok := delta[k].(string); ok && s != "" {
 			if cleaned := claude.SanitizeAssistantText(s); cleaned != s {
@@ -679,7 +671,7 @@ func sanitizeDeltaText(delta map[string]interface{}) {
 // sanitizeMessageText is the non-streaming counterpart of
 // sanitizeDeltaText: it cleans the assistant message object, handling
 // both string content and OpenAI content-part arrays.
-func sanitizeMessageText(msg map[string]interface{}) {
+func sanitizeMessageText(msg map[string]any) {
 	for _, k := range []string{"content", "reasoning_content", "reasoning"} {
 		switch v := msg[k].(type) {
 		case string:
@@ -688,9 +680,9 @@ func sanitizeMessageText(msg map[string]interface{}) {
 					msg[k] = cleaned
 				}
 			}
-		case []interface{}:
+		case []any:
 			for _, pAny := range v {
-				p, ok := pAny.(map[string]interface{})
+				p, ok := pAny.(map[string]any)
 				if !ok {
 					continue
 				}
@@ -718,7 +710,7 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 		return TokenUsage{}
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&resp); err != nil {
 		dst.Write(body)
@@ -741,7 +733,7 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 	// {"data": {"choices": [...], "usage": {...}}}. Unwrap it so the
 	// response below normalizes (and clients parse) as OpenAI.
 	if _, hasChoices := resp["choices"]; !hasChoices {
-		if data, ok := resp["data"].(map[string]interface{}); ok {
+		if data, ok := resp["data"].(map[string]any); ok {
 			if _, ok := data["choices"]; ok {
 				resp = data
 			}
@@ -750,7 +742,7 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 
 	// Extract usage before normalizing
 	usage := TokenUsage{}
-	if u, ok := resp["usage"].(map[string]interface{}); ok {
+	if u, ok := resp["usage"].(map[string]any); ok {
 		usage = extractUsageFromMap(u)
 	}
 
@@ -784,27 +776,27 @@ func normalizeJSONWithMeta(dst io.Writer, src io.Reader, model, requestID string
 // carries no assistant payload at all: no choices, or messages with neither
 // content, tool_calls, nor reasoning. An explicit error object is NOT
 // degenerate — that path is already surfaced as an upstream failure.
-func isEmptyJSONCompletion(resp map[string]interface{}) bool {
+func isEmptyJSONCompletion(resp map[string]any) bool {
 	if _, isErr := resp["error"]; isErr {
 		return false
 	}
-	choices, _ := resp["choices"].([]interface{})
+	choices, _ := resp["choices"].([]any)
 	if len(choices) == 0 {
 		return true
 	}
 	for _, cAny := range choices {
-		c, ok := cAny.(map[string]interface{})
+		c, ok := cAny.(map[string]any)
 		if !ok {
 			return true
 		}
-		msg, _ := c["message"].(map[string]interface{})
+		msg, _ := c["message"].(map[string]any)
 		if msg == nil {
 			return true
 		}
 		if s, _ := msg["content"].(string); strings.TrimSpace(s) != "" {
 			return false
 		}
-		if tc, has := msg["tool_calls"].([]interface{}); has && len(tc) > 0 {
+		if tc, has := msg["tool_calls"].([]any); has && len(tc) > 0 {
 			return false
 		}
 		if r, _ := msg["reasoning_content"].(string); r != "" {
@@ -822,10 +814,10 @@ func isEmptyJSONCompletion(resp map[string]interface{}) bool {
 // When a tool_calls choice is present without a finish_reason we default
 // to "tool_calls" so callers treat it as a completed tool call, matching
 // opencode's hasToolCalls → tool-calls coalescing in finishEvents.
-func ensureFinishReason(resp map[string]interface{}) {
-	choices, _ := resp["choices"].([]interface{})
+func ensureFinishReason(resp map[string]any) {
+	choices, _ := resp["choices"].([]any)
 	for i, cAny := range choices {
-		choice, ok := cAny.(map[string]interface{})
+		choice, ok := cAny.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -839,7 +831,7 @@ func ensureFinishReason(resp map[string]interface{}) {
 		// looks like a tool call, else stop. Also stamp remaining nulls
 		// so every choice has a value — strict clients validate all.
 		synthetic := "stop"
-		if msg, _ := choice["message"].(map[string]interface{}); msg != nil {
+		if msg, _ := choice["message"].(map[string]any); msg != nil {
 			if _, hasTC := msg["tool_calls"]; hasTC {
 				synthetic = "tool_calls"
 			}
@@ -857,30 +849,30 @@ func ensureFinishReason(resp map[string]interface{}) {
 // emit arguments that are not valid JSON objects; the client rejects those
 // with "input JSON failed to parse". Each argument string is run through
 // claude.RepairToolArgs, which always yields a valid JSON object (or "{}").
-func repairToolCallsJSON(resp map[string]interface{}) {
-	choices, ok := resp["choices"].([]interface{})
+func repairToolCallsJSON(resp map[string]any) {
+	choices, ok := resp["choices"].([]any)
 	if !ok {
 		return
 	}
 	for _, c := range choices {
-		choice, ok := c.(map[string]interface{})
+		choice, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		msg, ok := choice["message"].(map[string]interface{})
+		msg, ok := choice["message"].(map[string]any)
 		if !ok {
 			continue
 		}
-		tcs, ok := msg["tool_calls"].([]interface{})
+		tcs, ok := msg["tool_calls"].([]any)
 		if !ok {
 			continue
 		}
 		for _, tcAny := range tcs {
-			tc, ok := tcAny.(map[string]interface{})
+			tc, ok := tcAny.(map[string]any)
 			if !ok {
 				continue
 			}
-			fn, ok := tc["function"].(map[string]interface{})
+			fn, ok := tc["function"].(map[string]any)
 			if !ok {
 				continue
 			}
@@ -895,14 +887,14 @@ func repairToolCallsJSON(resp map[string]interface{}) {
 	}
 }
 
-func syncMessageReasoning(resp map[string]interface{}) {
-	choices, _ := resp["choices"].([]interface{})
+func syncMessageReasoning(resp map[string]any) {
+	choices, _ := resp["choices"].([]any)
 	for _, choice := range choices {
-		c, ok := choice.(map[string]interface{})
+		c, ok := choice.(map[string]any)
 		if !ok {
 			continue
 		}
-		msg, ok := c["message"].(map[string]interface{})
+		msg, ok := c["message"].(map[string]any)
 		if !ok {
 			continue
 		}
@@ -931,7 +923,7 @@ func syncMessageReasoning(resp map[string]interface{}) {
 //
 // If neither field is present, `reasoning` is set to nil so the JSON
 // encoder emits the key.
-func syncReasoning(m map[string]interface{}) {
+func syncReasoning(m map[string]any) {
 	rc, hasRC := m["reasoning_content"]
 	_, hasR := m["reasoning"]
 
