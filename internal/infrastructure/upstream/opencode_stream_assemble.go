@@ -112,12 +112,11 @@ func intVal(v any) int64 {
 }
 
 type toolCallAcc struct {
-	index     int
-	id        string
-	typ       string
-	name      string
-	args      strings.Builder
-	seenIndex bool
+	index int
+	id    string
+	typ   string
+	name  string
+	args  strings.Builder
 }
 
 // assembleChatCompletion folds OpenAI chat.completion.chunk deltas into one

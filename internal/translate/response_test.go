@@ -1,7 +1,6 @@
 package translate
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -89,7 +88,6 @@ func TestRequest_ClaudeMixedTextAndToolResult_NoDuplicateToolCallID(t *testing.T
 
 	// Count occurrences of each tool_call_id. Must be exactly 1 per id.
 	seen := map[string]int{}
-	toolOrder := []string{}
 	for i, mAny := range msgs {
 		m, _ := mAny.(map[string]any)
 		if m == nil {
@@ -98,7 +96,6 @@ func TestRequest_ClaudeMixedTextAndToolResult_NoDuplicateToolCallID(t *testing.T
 		}
 		if id, ok := m["tool_call_id"].(string); ok && id != "" {
 			seen[id]++
-			toolOrder = append(toolOrder, id)
 		}
 	}
 	for id, n := range seen {
@@ -355,15 +352,6 @@ func TestProxyChatWithClaudeStreaming(t *testing.T) {
 	if strings.Contains(output, "[DONE]") {
 		t.Errorf("expected [DONE] to be stripped, got: %s", output)
 	}
-}
-
-// Write() that only implements Write
-type writeOnlyWriter struct {
-	buf bytes.Buffer
-}
-
-func (w *writeOnlyWriter) Write(p []byte) (int, error) {
-	return w.buf.Write(p)
 }
 
 func TestNewResponseWriter_NilFormat(t *testing.T) {

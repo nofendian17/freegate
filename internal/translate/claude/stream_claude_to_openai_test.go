@@ -147,17 +147,18 @@ func TestProcessClaudeChunk_ToolUseStreamed(t *testing.T) {
 	if tc["index"] != float64(0) {
 		t.Errorf("index=%v want 0", tc["index"])
 	}
-	// stream args
-	out = s.ProcessChunk(map[string]any{
+	// stream args (return values discarded: only the accumulated state
+	// in s.toolCalls is asserted below)
+	s.ProcessChunk(map[string]any{
 		"type":  "content_block_delta",
 		"index": float64(0),
 		"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"city":`},
 	})
-	out = append(out, s.ProcessChunk(map[string]any{
+	s.ProcessChunk(map[string]any{
 		"type":  "content_block_delta",
 		"index": float64(0),
 		"delta": map[string]any{"type": "input_json_delta", "partial_json": `"SF"}`},
-	})...)
+	})
 	// Accumulated args should be `{"city":"SF"}`
 	if s.toolCalls[0].Args.String() != `{"city":"SF"}` {
 		t.Errorf("accumulated args=%q want %q", s.toolCalls[0].Args.String(), `{"city":"SF"}`)

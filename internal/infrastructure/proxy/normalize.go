@@ -65,10 +65,6 @@ func normalizeOpenAIStream(dst io.Writer, rd *bufio.Reader) TokenUsage {
 	return normalizeOpenAIStreamWithMeta(context.Background(), dst, rd, "", "")
 }
 
-func normalizeClaudeStream(dst io.Writer, src *bufio.Reader) TokenUsage {
-	return normalizeClaudeStreamWithContext(context.Background(), dst, src)
-}
-
 func copyNormalized(w http.ResponseWriter, resp *http.Response) (TokenUsage, error) {
 	return copyNormalizedWithContext(context.Background(), w, resp)
 }
@@ -88,10 +84,6 @@ func isAnthropicSSE(rd *bufio.Reader) bool {
 // warnings can be tied back to the originating request.
 func correlationMeta(h http.Header) (model, requestID string) {
 	return h.Get("X-Fg-Model"), h.Get("X-Fg-Request-Id")
-}
-
-func normalizeOpenAIStreamWithContext(ctx context.Context, dst io.Writer, rd *bufio.Reader) TokenUsage {
-	return normalizeOpenAIStreamWithMeta(ctx, dst, rd, "", "")
 }
 
 func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio.Reader, model, requestID string) TokenUsage {
