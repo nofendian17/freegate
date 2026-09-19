@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,70 @@ func TestComboUpstream_FreeTierRejection_FailsOver(t *testing.T) {
 	}
 	if t1.calls != 1 || t2.calls != 1 {
 		t.Fatalf("calls=%d,%d", t1.calls, t2.calls)
+	}
+}
+
+// flakyTransportStub fails with a transport error failTimes times, then
+// serves status/body. Models a tunnel dial dying transiently (EOF, TLS
+// handshake timeout) while a fresh dial succeeds.
+type flakyTransportStub struct {
+	name      string
+	failTimes int
+	status    int
+	body      string
+	calls     int
+}
+
+func (s *flakyTransportStub) Name() string         { return s.name }
+func (s *flakyTransportStub) Match(id string) bool { return true }
+func (s *flakyTransportStub) ListModels(ctx context.Context) ([]domain.Model, error) {
+	return nil, nil
+}
+func (s *flakyTransportStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
+	s.calls++
+	if s.calls <= s.failTimes {
+		return nil, errors.New(`Post "https://opencode.ai/zen/v1/chat/completions": EOF`)
+	}
+	rec := httptest.NewRecorder()
+	rec.WriteHeader(s.status)
+	_, _ = io.WriteString(rec, s.body)
+	return domain.NewUpstreamResponse(rec.Result()), nil
+}
+func (s *flakyTransportStub) Models() []domain.Model                     { return nil }
+func (s *flakyTransportStub) Start(ctx context.Context, d time.Duration) {}
+
+func TestComboUpstream_TransportError_RetriesSameTier(t *testing.T) {
+	t1 := &flakyTransportStub{name: "opencode", failTimes: 1, status: 200, body: `{"ok":true}`}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"hemat","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	if t1.calls != 2 || t2.calls != 0 {
+		t.Fatalf("expected same-tier retry (t1=2,t2=0), got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+}
+
+func TestComboUpstream_TransportErrorPersisting_FailsOver(t *testing.T) {
+	t1 := &flakyTransportStub{name: "opencode", failTimes: 10, status: 200, body: `{"ok":true}`}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"hemat","messages":[]}`))
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	defer resp.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	// Exactly one retry, then failover — never a retry storm.
+	if t1.calls != 2 || t2.calls != 1 {
+		t.Fatalf("expected t1=2,t2=1, got t1=%d,t2=%d", t1.calls, t2.calls)
 	}
 }
 
