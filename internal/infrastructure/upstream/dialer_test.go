@@ -68,3 +68,13 @@ func TestDialerToggle(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestDialerFlush(t *testing.T) {
+	d := NewDialer("")
+	flushed := false
+	d.SetOnFlush(func() { flushed = true })
+	d.Flush()
+	if !flushed {
+		t.Fatal("Flush did not invoke callback")
+	}
+}

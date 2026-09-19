@@ -22,4 +22,8 @@ type Config struct {
 	MaxPing   int
 	// RefreshInt bounds how often the VPNGate server list is re-fetched.
 	RefreshInt time.Duration
+	// OnConnect is called after a successful tunnel connection. The caller
+	// uses this to flush stale HTTP/2 pooled connections from the shared
+	// transport so they don't hang on the dead previous tunnel.
+	OnConnect func()
 }

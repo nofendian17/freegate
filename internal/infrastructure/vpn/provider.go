@@ -20,6 +20,7 @@ type ProviderConfig struct {
 	MinScore   int
 	MaxPing    int
 	RefreshInt time.Duration
+	OnConnect  func()
 }
 
 type ServerInfo = supervisor.ServerInfo
@@ -49,6 +50,7 @@ func NewProvider(cfg ProviderConfig) (Provider, error) {
 		MinScore:   cfg.MinScore,
 		MaxPing:    cfg.MaxPing,
 		RefreshInt: cfg.RefreshInt,
+		OnConnect:  cfg.OnConnect,
 	})
 	return providerAdapter{core}, nil
 }

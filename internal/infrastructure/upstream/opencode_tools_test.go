@@ -88,17 +88,12 @@ func TestEnsureUpstreamTools_Responses(t *testing.T) {
 }
 
 func TestEnsureUpstreamTools_Passthrough(t *testing.T) {
-	// Non-empty tools untouched.
-	in := `{"model":"x","messages":[],"tools":[{"type":"function","function":{"name":"real"}}]}`
-	if out := ensureUpstreamTools([]byte(in), "/chat/completions"); string(out) != in {
-		t.Fatalf("rewrote body with tools: %s", out)
-	}
 	// Unparseable untouched.
 	if out := ensureUpstreamTools([]byte(`{oops`), "/chat/completions"); string(out) != `{oops` {
 		t.Fatalf("rewrote invalid body: %s", out)
 	}
 	// Present-but-malformed tools pass through for a clear upstream 4xx.
-	in = `{"model":"x","messages":[],"tools":"nope"}`
+	in := `{"model":"x","messages":[],"tools":"nope"}`
 	if out := ensureUpstreamTools([]byte(in), "/chat/completions"); string(out) != in {
 		t.Fatalf("rewrote malformed tools: %s", out)
 	}
@@ -112,5 +107,47 @@ func TestEnsureUpstreamTools_Passthrough(t *testing.T) {
 	}
 	if raw["model"] != "x" || !strings.Contains(string(out), `"messages":[]`) {
 		t.Fatalf("fields lost: %s", out)
+	}
+}
+
+func TestEnsureUpstreamTools_MergesForeignTools(t *testing.T) {
+	// Foreign-only tools (e.g. Hermes browser_*/clarify) drew 403
+	// FreeTierError live 2026-09-19; the gate needs its canonical names
+	// present. Caller tools are preserved, missing gate names appended.
+	in := `{"model":"muse-spark","input":[],"tools":[{"type":"function","name":"browser_navigate","description":"x","parameters":{"type":"object"}},{"type":"function","name":"clarify","description":"y","parameters":{"type":"object"}}]}`
+	out := ensureUpstreamTools([]byte(in), "/responses")
+	tools := toolsOf(t, out)
+	got := toolNames(tools)
+	if len(tools) != 2+len(gateToolNames) {
+		t.Fatalf("tools=%v, want 2 foreign + %d gate stubs", got, len(gateToolNames))
+	}
+	if got[0] != "browser_navigate" || got[1] != "clarify" {
+		t.Fatalf("caller tools not preserved in order: %v", got)
+	}
+	seen := make(map[string]bool)
+	for _, n := range got {
+		seen[n] = true
+	}
+	for _, want := range gateToolNames {
+		if !seen[want] {
+			t.Fatalf("missing gate tool %q in %v", want, got)
+		}
+	}
+	// Appended stubs use the endpoint native shape.
+	last, _ := tools[len(tools)-1].(map[string]any)
+	if last["type"] != "function" || last["strict"] != false {
+		t.Fatalf("merged stub not responses shape: %v", last)
+	}
+}
+
+func TestEnsureUpstreamTools_NoDupWhenComplete(t *testing.T) {
+	// A body already carrying the full gate set is byte-identical.
+	var parts []string
+	for _, n := range gateToolNames {
+		parts = append(parts, `{"type":"function","name":"`+n+`"}`)
+	}
+	in := `{"model":"muse-spark","input":[],"tools":[` + strings.Join(parts, ",") + `]}`
+	if out := ensureUpstreamTools([]byte(in), "/responses"); string(out) != in {
+		t.Fatalf("rewrote complete body: %s", out)
 	}
 }

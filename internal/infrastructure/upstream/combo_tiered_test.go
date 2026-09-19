@@ -53,10 +53,19 @@ func TestComboUpstream_MessagesTierToolSchema(t *testing.T) {
 		if r.URL.Path != "/messages" || raw.Model != "union-alpha" {
 			t.Errorf("path=%s model=%s", r.URL.Path, raw.Model)
 		}
-		if len(raw.Tools) != 1 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+		if len(raw.Tools) != 1+len(gateToolNames) || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
 			t.Errorf("invalid Messages tools: %+v", raw.Tools)
 			w.WriteHeader(http.StatusBadRequest)
 			return
+		}
+		seen := make(map[string]bool, len(raw.Tools))
+		for _, tl := range raw.Tools {
+			seen[tl.Name] = true
+		}
+		for _, want := range gateToolNames {
+			if !seen[want] {
+				t.Errorf("missing gate tool %q in %+v", want, raw.Tools)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"msg_test","type":"message","role":"assistant","model":"union-alpha","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
