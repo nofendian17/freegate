@@ -15,10 +15,10 @@ import (
 var nameRe = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 type Provider struct {
-	ID         uint              `gorm:"primaryKey" json:"id"`
-	Name       string            `gorm:"uniqueIndex;not null" json:"name"`
-	BaseURL    string            `gorm:"not null" json:"base_url"`
-	APIKeys []string `gorm:"serializer:json;not null" json:"-"`
+	ID      uint              `gorm:"primaryKey" json:"id"`
+	Name    string            `gorm:"uniqueIndex;not null" json:"name"`
+	BaseURL string            `gorm:"not null" json:"base_url"`
+	APIKeys []string          `gorm:"serializer:json;not null" json:"-"`
 	Headers map[string]string `gorm:"serializer:json" json:"headers,omitempty"`
 	// Models is the explicit user-curated selection: only these model IDs
 	// are stored and routed. The background refresh never adds models on

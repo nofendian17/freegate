@@ -14,7 +14,7 @@ type mockRegistry struct {
 }
 
 func (m *mockRegistry) AllModels() []domain.Model { return m.models }
-func (m *mockRegistry) IsReady() bool              { return m.ready }
+func (m *mockRegistry) IsReady() bool             { return m.ready }
 
 func TestNewModelService(t *testing.T) {
 	t.Parallel()
@@ -158,16 +158,16 @@ func TestModelService_AllModels(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
+		name    string
 		routers []RouterRegistry
 		wantIDs []string
 		// optional check for first-wins ownership when IDs overlap
 		wantOwnedBy map[string]string
 	}{
 		{
-			name:      "no routers returns empty",
-			routers:   nil,
-			wantIDs:   nil,
+			name:    "no routers returns empty",
+			routers: nil,
+			wantIDs: nil,
 		},
 		{
 			name: "single router single model",
@@ -204,7 +204,7 @@ func TestModelService_AllModels(t *testing.T) {
 				&mockRegistry{models: []domain.Model{{ID: "shared", OwnedBy: "first"}, {ID: "a"}}},
 				&mockRegistry{models: []domain.Model{{ID: "shared", OwnedBy: "second"}, {ID: "b"}}},
 			},
-			wantIDs: []string{"shared", "a", "b"},
+			wantIDs:     []string{"shared", "a", "b"},
 			wantOwnedBy: map[string]string{"shared": "first"},
 		},
 		{
@@ -214,7 +214,7 @@ func TestModelService_AllModels(t *testing.T) {
 				&mockRegistry{models: []domain.Model{{ID: "x", Provider: "p2"}}},
 				&mockRegistry{models: []domain.Model{{ID: "x", Provider: "p3"}}},
 			},
-			wantIDs: []string{"x"},
+			wantIDs:     []string{"x"},
 			wantOwnedBy: nil, // provider check below is not keyed; just verify len
 		},
 		{

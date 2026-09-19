@@ -282,9 +282,9 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 					if tcs, _ := delta["tool_calls"].([]any); len(tcs) > 0 {
 						sawAnyPayload = true
 					}
-				bufferToolArgs(delta, toolArgs, toolSeen)
-				sanitizeDeltaText(delta)
-				syncDeltaReasoning(chunk)
+					bufferToolArgs(delta, toolArgs, toolSeen)
+					sanitizeDeltaText(delta)
+					syncDeltaReasoning(chunk)
 				}
 			}
 		}

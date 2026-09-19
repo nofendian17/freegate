@@ -26,7 +26,7 @@ func (s *chainStub) ListModels(ctx context.Context) ([]domain.Model, error) { re
 func (s *chainStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	return nil, nil
 }
-func (s *chainStub) Models() []domain.Model                      { return s.models }
+func (s *chainStub) Models() []domain.Model                     { return s.models }
 func (s *chainStub) Start(ctx context.Context, d time.Duration) {}
 
 func TestCombo_SelectChain_OrderAndFallback(t *testing.T) {
