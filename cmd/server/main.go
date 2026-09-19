@@ -34,6 +34,8 @@ func main() {
 	portFlag := flag.Int("port", 0, "override PORT")
 	flag.Parse()
 
+	log.Printf("freegate %s (commit %s, built %s)", version, commit, date)
+
 	cfg := config.Load()
 	if !*vpnFlag {
 		cfg.VPNEnabled = false
