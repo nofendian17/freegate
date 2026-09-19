@@ -139,6 +139,9 @@ func (r *serverRegistry) refreshServers() ([]ServerInfo, error) {
 	r.mu.Unlock()
 	out := make([]ServerInfo, 0, len(servers))
 	for _, sv := range servers {
+		if !r.matches(sv) {
+			continue
+		}
 		out = append(out, serverInfoOf(sv))
 	}
 	return out, nil

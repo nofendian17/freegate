@@ -31,7 +31,6 @@ type Config struct {
 	// in-process supervisor, exposing SOCKS5 through it for all upstream
 	// traffic.
 	VPNGateSocksPort      int // SOCKS5 port used for all upstream traffic
-	VPNGateRotateInterval int // minimum seconds between scheduled IP rotations
 	// VPNGateCountry filters the relay list by country: a country name
 	// substring ("Japan") or ISO code ("JP"), prefix with "!" to exclude
 	// ("!US"). Empty = all countries.
@@ -99,7 +98,6 @@ func Load() *Config {
 		VPNProvider: envStr("VPN_PROVIDER", "auto"),
 
 		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
-		VPNGateRotateInterval: envInt("VPNGATE_ROTATE_INTERVAL", 30),
 		VPNGateCountry:        envStr("VPNGATE_COUNTRY", ""),
 		VPNGateMinScore:       envInt("VPNGATE_MIN_SCORE", 0),
 		VPNGateMaxPing:        envInt("VPNGATE_MAX_PING", 0),
@@ -174,9 +172,6 @@ func (c *Config) Validate() error {
 	if c.VPNEnabled {
 		if c.VPNGateSocksPort <= 0 || c.VPNGateSocksPort > 65535 {
 			errs = append(errs, fmt.Sprintf("VPNGATE_SOCKS_PORT must be between 1 and 65535, got %d", c.VPNGateSocksPort))
-		}
-		if c.VPNGateRotateInterval <= 0 {
-			errs = append(errs, fmt.Sprintf("VPNGATE_ROTATE_INTERVAL must be positive, got %d", c.VPNGateRotateInterval))
 		}
 	}
 	if c.RateLimit <= 0 {

@@ -183,9 +183,6 @@ func (s *Supervisor) reconnectLoop() {
 			continue
 		}
 		slog.Info("vpngate: connected", "server", s.serverName(), "ip", s.CurrentIP())
-		if s.cfg.OnConnect != nil {
-			s.cfg.OnConnect()
-		}
 		if !sleepCtx(s.ctx, 5*time.Second) {
 			slog.Info("vpngate: reconnect loop stopped")
 			return
@@ -398,6 +395,12 @@ func (s *Supervisor) connectToServer(server vpn.Server) error {
 	s.connected = true
 	s.connectedAt = time.Now()
 	s.mu.Unlock()
+	// Flush point for pooled upstream connections: fires on every
+	// successful connect regardless of path (reconnect loop, manual
+	// Rotate, ConnectTo) so stale conns never survive a tunnel change.
+	if s.cfg.OnConnect != nil {
+		s.cfg.OnConnect()
+	}
 	return nil
 }
 

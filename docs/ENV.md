@@ -26,7 +26,6 @@ freegate now runs as a **single binary** with embedded VPNGate per OS (linux/dar
 | `VPN_ENABLED` | No | `true` | Enable embedded VPN. `false` = direct connections, no tunnel. Also overridable via `--vpn=false` flag. |
 | `VPN_PROVIDER` | No | `auto` | VPN provider: `auto` (GOOS-aware), `vpngate`, or `direct`. |
 | `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port for in-process tunnel (127.0.0.1:9050) |
-| `VPNGATE_ROTATE_INTERVAL` | No | `30` | Minimum seconds between scheduled IP rotations (`NewIP`). `ForceNewIP` (dashboard rotate button) bypasses it. |
 | `VPNGATE_MIN_SCORE` | No | `0` | Minimum relay server score (0 = disabled) |
 | `VPNGATE_MAX_PING` | No | `0` | Maximum relay ping in ms (0 = disabled) |
 | `VPNGATE_REFRESH_SECONDS` | No | `300` | How often the VPNGate server list is re-fetched |
@@ -97,7 +96,7 @@ Related (no env needed): degenerate upstream responses — HTTP 200 with no cont
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
 - Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)
 - Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
-- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `VPNGATE_ROTATE_INTERVAL` non-positive only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
+- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
 
 A failure prints a multi-line error and exits 1.
 
