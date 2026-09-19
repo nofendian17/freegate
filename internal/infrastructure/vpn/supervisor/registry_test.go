@@ -166,3 +166,24 @@ func TestListAndRefreshShareOneFlight(t *testing.T) {
 		t.Fatalf("fetch ran %d times across racing getServers+refreshServers, want 1", got)
 	}
 }
+
+func TestRefreshServersAppliesFilters(t *testing.T) {
+	// Regression: refreshServers returned the unfiltered list while
+	// listServers filtered, so the dashboard picker could offer relays
+	// that ConnectTo rejects.
+	r := newServerRegistry(Config{RefreshInt: time.Hour, Country: "JP"})
+	r.fetch = func(refresh bool) (*[]vpn.Server, error) {
+		list := []vpn.Server{
+			{HostName: "jp", CountryLong: "Japan", CountryShort: "JP", Score: 5},
+			{HostName: "us", CountryLong: "United States", CountryShort: "US", Score: 9},
+		}
+		return &list, nil
+	}
+	servers, err := r.refreshServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Hostname != "jp" {
+		t.Fatalf("refreshServers unfiltered: %+v", servers)
+	}
+}
