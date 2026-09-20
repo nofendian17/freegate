@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func TestReproNormalStream(t *testing.T) {
 	in += "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
 	in += "data: [DONE]\n\n"
 	var out bytes.Buffer
-	normalizeOpenAIStream(&out, bufio.NewReader(strings.NewReader(in)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &out, bufio.NewReader(strings.NewReader(in)), "", "")
 	fmt.Println("--- NORMAL STREAM OUTPUT ---")
 	fmt.Print(out.String())
 	fmt.Println("--- END ---")
