@@ -144,8 +144,42 @@ func TestAdmin_PoolLifecycle(t *testing.T) {
 	}
 }
 
-func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {
+func TestAdmin_PoolTest_DisablesDeadRelay(t *testing.T) {
 	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	row, err := s.CreatePool(providers.ProxyPool{Name: "dead-relay", ProxyURL: "http://127.0.0.1:1", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/pools/"+strconv.FormatUint(uint64(row.ID), 10)+"/test", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.OK {
+		t.Fatalf("expected ok=false, got %v %s", out, w.Body.String())
+	}
+	got, err := s.GetPool(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled {
+		t.Error("dead relay must be disabled after failed test")
+	}
+	if got.TestStatus != "error" || got.LastError == "" {
+		t.Errorf("expected error status persisted, got %+v", got)
+	}
+}
+
+func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {	s, err := providers.Open(t.TempDir() + "/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}

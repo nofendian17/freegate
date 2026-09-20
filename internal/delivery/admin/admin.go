@@ -97,6 +97,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Get("/api/pools/{id}", h.getPool)
 	r.Put("/api/pools/{id}", h.updatePool)
 	r.Delete("/api/pools/{id}", h.deletePool)
+	r.Post("/api/pools/{id}/test", h.testPool)
 }
 
 type providerIn struct {

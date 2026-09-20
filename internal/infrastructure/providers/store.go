@@ -84,6 +84,19 @@ type ProxyPool struct {
 	NoProxy     string `json:"no_proxy,omitempty"`
 	StrictProxy bool   `json:"strict_proxy"`
 	Enabled     bool   `gorm:"default:true" json:"enabled"`
+	TestStatus  string `json:"test_status,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+}
+
+// MarkPoolTest records the outcome of a pool probe.
+func (s *Store) MarkPoolTest(id uint, ok bool, lastErr string) error {
+	status := "active"
+	if !ok {
+		status = "error"
+	}
+	return s.db.Model(&ProxyPool{}).Where("id = ?", id).Updates(map[string]any{
+		"test_status": status, "last_error": lastErr,
+	}).Error
 }
 
 func (p *ProxyPool) Validate() error {
