@@ -187,9 +187,26 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 				req.Header.Del("x-api-key")
 			}
 		}
-		SharedRelay.Apply(req)
+		strict, applied := SharedRelay.ApplyStrict(req)
 
 		resp, err := c.client.Do(req)
+		if err != nil && applied && !strict {
+			// Non-strict relay unreachable: rebuild the request without
+			// relay rewriting and try direct once.
+			directReq, derr := build()
+			if derr != nil {
+				return nil, derr
+			}
+			key = c.currentKey()
+			directReq.Header.Set("Authorization", "Bearer "+key)
+			for k, v := range c.headers {
+				directReq.Header.Set(k, v)
+			}
+			for k, v := range extra {
+				directReq.Header.Set(k, v)
+			}
+			resp, err = c.client.Do(directReq)
+		}
 		if err != nil {
 			return nil, err
 		}

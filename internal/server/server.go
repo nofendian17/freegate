@@ -92,7 +92,7 @@ func syncRelayPools(pstore *providers.Store) {
 		if !p.Enabled {
 			continue
 		}
-		rp = append(rp, upstream.RelayPool{URL: p.ProxyURL, NoProxy: p.NoProxy})
+		rp = append(rp, upstream.RelayPool{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy})
 	}
 	upstream.SharedRelay.SetPools(rp)
 }

@@ -67,6 +67,7 @@ func BuildEdgeRelayHeaders(targetURL string, existing map[string]string) map[str
 type RelayPool struct {
 	URL     string
 	NoProxy string
+	Strict  bool
 }
 
 type RelaySelector struct {
@@ -98,17 +99,25 @@ func (s *RelaySelector) Next() (RelayPool, bool) {
 }
 
 func (s *RelaySelector) Apply(req *http.Request) bool {
+	_, applied := s.ApplyStrict(req)
+	return applied
+}
+
+// ApplyStrict rewrites req to the next pool and reports whether that pool
+// is strict. Callers use strict to decide fallback: a failed strict relay
+// must error, a failed non-strict one retries direct.
+func (s *RelaySelector) ApplyStrict(req *http.Request) (strict, applied bool) {
 	pool, ok := s.Next()
 	if !ok || req == nil || req.URL == nil {
-		return false
+		return false, false
 	}
 	relayURL := strings.TrimSpace(pool.URL)
 	if relayURL == "" || ShouldBypassNoProxy(req.URL.String(), pool.NoProxy) {
-		return false
+		return false, false
 	}
 	parsed, err := url.Parse(relayURL)
 	if err != nil {
-		return false
+		return false, false
 	}
 	for k, v := range BuildEdgeRelayHeaders(req.URL.String(), nil) {
 		req.Header.Set(k, v)
@@ -118,5 +127,5 @@ func (s *RelaySelector) Apply(req *http.Request) bool {
 	req.URL.Path = parsed.Path
 	req.URL.RawQuery = parsed.RawQuery
 	req.Host = parsed.Host
-	return true
+	return pool.Strict, true
 }

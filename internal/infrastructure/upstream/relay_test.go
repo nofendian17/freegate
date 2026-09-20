@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -55,5 +56,38 @@ func TestRelayRoundRobin(t *testing.T) {
 	}
 	if !seen["a.example.com"] || !seen["b.example.com"] {
 		t.Errorf("expected rotation across both, got %v", seen)
+	}
+}
+
+func TestRelayStrictFallback(t *testing.T) {
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("direct-ok"))
+	}))
+	defer direct.Close()
+
+	// Non-strict pool with dead relay: falls back to direct.
+	sel := NewRelaySelector()
+	sel.SetPools([]RelayPool{{URL: "http://127.0.0.1:1", Strict: false}})
+	old := SharedRelay
+	SharedRelay = sel
+	defer func() { SharedRelay = old }()
+	c := NewHTTPClientWithTransport(direct.URL, []string{"k"}, nil, nil)
+	resp, err := c.Get(context.Background(), "/")
+	if err != nil {
+		t.Fatalf("non-strict must fall back to direct: %v", err)
+	}
+	defer resp.Body.Close()
+	body := make([]byte, 9)
+	n, _ := resp.Body.Read(body)
+	if string(body[:n]) != "direct-ok" {
+		t.Errorf("expected direct fallback body, got %q", body[:n])
+	}
+
+	// Strict pool with dead relay: surfaces the error.
+	selStrict := NewRelaySelector()
+	selStrict.SetPools([]RelayPool{{URL: "http://127.0.0.1:1", Strict: true}})
+	SharedRelay = selStrict
+	if _, err := c.Get(context.Background(), "/"); err == nil {
+		t.Fatal("strict must fail, not fall back")
 	}
 }
