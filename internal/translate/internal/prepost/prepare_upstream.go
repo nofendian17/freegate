@@ -30,8 +30,12 @@ func PrepareUpstreamWithModel(body []byte, modelID string) ([]byte, []string, er
 	hasTopP := bytes.Contains(body, []byte(`"top_p"`))
 	hasMessages := bytes.Contains(body, []byte(`"messages"`))
 	hasTools := bytes.Contains(body, []byte(`"tools"`))
+	hasResponseFormat := bytes.Contains(body, []byte(`"response_format"`))
+	// Tool/response schemas carrying Unicode property escapes (\p{...})
+	// are rejected by strict providers, independent of model.
+	hasBadPattern := (hasTools || hasResponseFormat) && HasUnicodePropertyPattern(body)
 	needsParse := hasDeveloper || hasReasoning || hasStream || (isFlash && !hasTopP && hasMessages) ||
-		(isDeepSeek && (hasMessages || hasTools))
+		(isDeepSeek && (hasMessages || hasTools)) || hasBadPattern
 	if !needsParse {
 		return body, nil, nil
 	}
@@ -125,6 +129,25 @@ func PrepareUpstreamWithModel(body []byte, modelID string) ([]byte, []string, er
 			if ensureDSMLToolStop(raw) {
 				mark(AppliedDeepSeekToolStop)
 			}
+		}
+	}
+
+	// 6. Drop regex patterns with Unicode property escapes from tool
+	// and response schemas. Strict providers reject \p{...} with
+	// invalid_request_error ("is not a regex"); dropping loosens
+	// validation but keeps the request working. Model-independent.
+	if hasBadPattern {
+		dropped := 0
+		if tools, ok := raw["tools"].([]any); ok {
+			for _, t := range tools {
+				dropped += SanitizeUnsupportedPatterns(t)
+			}
+		}
+		if rf, ok := raw["response_format"].(map[string]any); ok {
+			dropped += SanitizeUnsupportedPatterns(rf)
+		}
+		if dropped > 0 {
+			mark(AppliedToolPatternDrop)
 		}
 	}
 

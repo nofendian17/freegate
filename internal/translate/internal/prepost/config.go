@@ -33,6 +33,10 @@ const (
 	// AppliedClaudeStripEmpty marks stripped Anthropic-rejected blocks
 	// and dropped emptied messages.
 	AppliedClaudeStripEmpty = "claude-strip-empty"
+	// AppliedToolPatternDrop marks dropped regex patterns containing
+	// Unicode property escapes (\p{...}), which strict providers reject
+	// with invalid_request_error.
+	AppliedToolPatternDrop = "tool-pattern-drop"
 )
 
 // AnthropicToolIDPattern is the regex pattern required by the Anthropic
