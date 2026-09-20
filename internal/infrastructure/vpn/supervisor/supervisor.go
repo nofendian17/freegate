@@ -44,6 +44,11 @@ var (
 )
 
 // Supervisor owns the tunnel lifecycle and the current connection state.
+// All ctx/cancel/closed accesses are guarded by mu; use getCtx() instead
+// of reading s.ctx directly so Start racing Rotate/Close is race-free.
+// connects.Add is paired with the closed check under the same lock so
+// Close's connects.Wait can never run concurrently with Add when the
+// counter is zero (sync: WaitGroup misuse).
 type Supervisor struct {
 	cfg      Config
 	registry *serverRegistry
@@ -52,6 +57,9 @@ type Supervisor struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	// closed is set by Close under mu; enterConnect fails once set so no
+	// new Add can race with connects.Wait.
+	closed bool
 	wg     sync.WaitGroup
 
 	// connects tracks in-flight connect attempts from API callers so a
@@ -107,6 +115,14 @@ func (s *Supervisor) IsDirect() bool {
 	return s.direct
 }
 
+// getCtx returns the run context under lock. Nil when never started
+// (direct mode / tests).
+func (s *Supervisor) getCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx
+}
+
 // Start launches the SOCKS proxy and the background loops (reconnect +
 // IP refresher). In direct mode it only logs and succeeds. The SOCKS
 // listener is created synchronously so bind errors surface to the caller.
@@ -121,13 +137,16 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("socks listen %s: %w", s.socksAddr, err)
 	}
+	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.socksLn = ln
+	s.ctx = runCtx
+	s.cancel = cancel
+	s.closed = false
 	s.mu.Unlock()
-	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	// Background goroutines — tracked via WaitGroup.Go so shutdown waits
-	// for them.
+	// for them. Capture runCtx once so loops never re-read s.ctx (race).
 	s.wg.Go(func() {
 		if err := serveSOCKS(ln); err != nil {
 			if errors.Is(err, net.ErrClosed) {
@@ -137,8 +156,8 @@ func (s *Supervisor) Start(ctx context.Context) error {
 			}
 		}
 	})
-	s.wg.Go(s.reconnectLoop)
-	s.wg.Go(s.ipRefresher)
+	s.wg.Go(func() { s.reconnectLoop(runCtx) })
+	s.wg.Go(func() { s.ipRefresher(runCtx) })
 	return nil
 }
 
@@ -151,17 +170,20 @@ func (s *Supervisor) Start(ctx context.Context) error {
 // Close stops background loops, shuts down the SOCKS listener, kills the
 // active tunnel, and removes its temp config.
 func (s *Supervisor) Close() error {
-	// Unblock the SOCKS accept loop first so wg.Wait is prompt.
+	// Mark closed and grab listener + cancel under one lock so no new
+	// enterConnect.Add can slip in after we start waiting.
 	s.mu.Lock()
 	ln := s.socksLn
 	s.socksLn = nil
+	s.closed = true
+	cancel := s.cancel
 	s.mu.Unlock()
 	if ln != nil {
 		ln.Close()
 	}
 
-	if s.cancel != nil {
-		s.cancel()
+	if cancel != nil {
+		cancel()
 	}
 	// Wait for background loops AND any in-flight API connect attempt:
 	// a Rotate/ConnectTo that passed enterConnect before cancel may still

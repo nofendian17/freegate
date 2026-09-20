@@ -6,12 +6,15 @@ import (
 	"time"
 )
 
-func (s *Supervisor) ipRefresher() {
+func (s *Supervisor) ipRefresher(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			slog.Info("vpngate: IP refresher stopped")
 			return
 		case <-ticker.C:
@@ -21,8 +24,10 @@ func (s *Supervisor) ipRefresher() {
 		if !s.refreshBusy.CompareAndSwap(false, true) {
 			continue
 		}
-		s.refreshCycle(s.ctx)
-		s.refreshBusy.Store(false)
+		func() {
+			defer s.refreshBusy.Store(false)
+			s.refreshCycle(ctx)
+		}()
 	}
 }
 

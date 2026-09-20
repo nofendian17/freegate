@@ -10,21 +10,21 @@ import (
 	"github.com/davegallant/vpngate/pkg/vpn"
 )
 
-func (s *Supervisor) reconnectLoop() {
+func (s *Supervisor) reconnectLoop(ctx context.Context) {
 	for {
-		if !sleepCtx(s.ctx, 0) {
+		if !sleepCtx(ctx, 0) {
 			slog.Info("vpngate: reconnect loop stopped")
 			return
 		}
 		if s.isConnected() {
-			if !sleepCtx(s.ctx, 5*time.Second) {
+			if !sleepCtx(ctx, 5*time.Second) {
 				slog.Info("vpngate: reconnect loop stopped")
 				return
 			}
 			continue
 		}
 		if s.isRotating() {
-			if !sleepCtx(s.ctx, 2*time.Second) {
+			if !sleepCtx(ctx, 2*time.Second) {
 				slog.Info("vpngate: reconnect loop stopped")
 				return
 			}
@@ -36,14 +36,14 @@ func (s *Supervisor) reconnectLoop() {
 			if !errors.Is(err, ErrRotationInProgress) && !errors.Is(err, context.Canceled) {
 				slog.Warn("vpngate: connect failed", "error", err)
 			}
-			if !sleepCtx(s.ctx, 2*time.Second) {
+			if !sleepCtx(ctx, 2*time.Second) {
 				slog.Info("vpngate: reconnect loop stopped")
 				return
 			}
 			continue
 		}
 		slog.Info("vpngate: connected", "server", s.serverName(), "ip", s.CurrentIP())
-		if !sleepCtx(s.ctx, 5*time.Second) {
+		if !sleepCtx(ctx, 5*time.Second) {
 			slog.Info("vpngate: reconnect loop stopped")
 			return
 		}
@@ -126,14 +126,21 @@ func (s *Supervisor) Rotate() error {
 
 // shutdownStarted reports context cancellation so long-running work can
 // bail out instead of racing Close. Nil-safe for supervisors constructed
-// without Start (tests).
+// without Start (tests). Reads ctx under lock to stay race-free with Start.
 func (s *Supervisor) shutdownStarted() error {
-	if s.ctx == nil {
+	s.mu.Lock()
+	ctx := s.ctx
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return context.Canceled
+	}
+	if ctx == nil {
 		return nil
 	}
 	select {
-	case <-s.ctx.Done():
-		return fmt.Errorf("supervisor shutting down: %w", s.ctx.Err())
+	case <-ctx.Done():
+		return fmt.Errorf("supervisor shutting down: %w", ctx.Err())
 	default:
 		return nil
 	}
@@ -141,12 +148,23 @@ func (s *Supervisor) shutdownStarted() error {
 
 // enterConnect registers an in-flight connect attempt. It fails once
 // shutdown has started, so a caller that passes here is guaranteed that
-// Close's wg.Wait (which runs after cancel) will wait for it — closing
+// Close's connects.Wait (which runs after cancel) will wait for it — closing
 // the window where a tunnel could be spawned after Close returns.
+// The closed check and connects.Add are atomic under mu, so Add can never
+// run concurrently with Close's Wait when the counter is zero.
 // Pair every successful call with s.connects.Done() via defer.
 func (s *Supervisor) enterConnect() error {
-	if err := s.shutdownStarted(); err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return context.Canceled
+	}
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			return fmt.Errorf("supervisor shutting down: %w", s.ctx.Err())
+		default:
+		}
 	}
 	s.connects.Add(1)
 	return nil
@@ -154,8 +172,11 @@ func (s *Supervisor) enterConnect() error {
 
 // sleepCtx waits for d, returning false as soon as ctx is cancelled so
 // background loops exit promptly on shutdown instead of sleeping through
-// it.
+// it. Nil ctx sleeps the full duration.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
@@ -196,7 +217,7 @@ func (s *Supervisor) connectToServer(server vpn.Server) error {
 		return err
 	}
 	// Bounds this connect attempt; Background when never started (tests).
-	ctx := s.ctx
+	ctx := s.getCtx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
