@@ -71,6 +71,30 @@
 
     <div class="card section-block section-gap">
       <div class="card-header">
+        <span class="card-title"># Proxy Pools</span>
+        <button id="pool-new" class="btn-secondary" type="button">> new pool</button>
+      </div>
+      <p class="subtitle">// vercel edge relays — round-robin via x-relay-target / x-relay-path</p>
+      <div id="pool-err" class="prov-err" role="alert" style="display:none"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>name</th>
+              <th>proxy_url</th>
+              <th style="width:80px">enabled</th>
+              <th style="width:160px">actions</th>
+            </tr>
+          </thead>
+          <tbody id="pool-table">
+            <tr><td colspan="4" class="dim" aria-busy="true">// loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card section-block section-gap">
+      <div class="card-header">
         <span class="card-title"># Routing Combos</span>
         <button id="combo-new" class="btn-secondary" type="button">> new combo</button>
       </div>
@@ -405,6 +429,73 @@
     }).catch(function(e) { show(formErr, '! delete: ' + e.message); });
   });
 
+  var poolTable = document.getElementById('pool-table');
+  var poolErr = document.getElementById('pool-err');
+
+  function loadPools() {
+    getJSON('/api/pools')
+      .then(function(body) {
+        var rows = body.data || body || [];
+        if (!rows.length) {
+          poolTable.innerHTML = '<tr><td colspan="4" class="dim">// no proxy pools yet — use "> new pool"</td></tr>';
+          return;
+        }
+        poolTable.innerHTML = rows.map(function(p) {
+          return '<tr data-id="' + p.id + '">' +
+            '<td>' + esc(p.name) + '</td>' +
+            '<td class="dim">' + esc(p.proxy_url) + '</td>' +
+            '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
+            '<td><button class="btn-tertiary pool-edit" type="button" data-id="' + p.id + '">> edit</button> ' +
+            '<button class="btn-tertiary pool-delete" type="button" data-id="' + p.id + '" style="color:var(--error)">x</button></td>' +
+            '</tr>';
+        }).join('');
+      })
+      .catch(function(e) { poolTable.innerHTML = '<tr><td colspan="4" class="dim">! load failed — ' + esc(e.message) + '</td></tr>'; show(poolErr, '! load pools: ' + e.message); });
+  }
+
+  function savePool(id, payload, btn) {
+    var method = id ? 'PUT' : 'POST';
+    var url = id ? '/api/pools/' + id : '/api/pools';
+    withBusy(btn, '> saving…', function() {
+      return getJSON(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
+        .then(function() { loadPools(); });
+    }).catch(function(e) { show(poolErr, '! save pool: ' + e.message); });
+  }
+
+  document.getElementById('pool-new').addEventListener('click', function() {
+    var btn = this;
+    var name = prompt('pool name (a-z0-9-):', 'relay-1');
+    if (name == null) return;
+    var proxyUrl = prompt('proxy_url (vercel relay https://…):', 'https://');
+    if (proxyUrl == null) return;
+    var noProxy = prompt('no_proxy (comma list, optional):', '');
+    if (noProxy == null) return;
+    savePool('', {name: name.trim(), proxy_url: proxyUrl.trim(), no_proxy: (noProxy || '').trim(), enabled: true}, btn);
+  });
+
+  poolTable.addEventListener('click', function(e) {
+    var edt = e.target.closest('.pool-edit');
+    var del = e.target.closest('.pool-delete');
+    if (edt) {
+      var row = edt.closest('tr');
+      var cells = row.querySelectorAll('td');
+      var name = cells[0].textContent.trim();
+      var proxyUrl = prompt('proxy_url for "' + name + '":', cells[1].textContent.trim());
+      if (proxyUrl == null) return;
+      var noProxy = prompt('no_proxy (comma list, optional):', '');
+      if (noProxy == null) return;
+      var enabled = confirm('enable pool "' + name + '"? (cancel = disable)');
+      savePool(edt.dataset.id, {name: name, proxy_url: proxyUrl.trim(), no_proxy: (noProxy || '').trim(), enabled: enabled}, edt);
+    } else if (del) {
+      if (!confirm('delete pool ' + del.dataset.id + '?')) return;
+      withBusy(del, '> deleting…', function() {
+        return getJSON('/api/pools/' + del.dataset.id, {method: 'DELETE'}).then(function() {
+          loadPools();
+        });
+      }).catch(function(e2) { show(poolErr, '! delete pool: ' + e2.message); });
+    }
+  });
+
   var comboErr = document.getElementById('provider-err-combo');
   var comboProviders = ['opencode', 'kilo', 'llm7'];
   var combosCache = {};
@@ -579,6 +670,7 @@
   });
 
   loadProviders();
+  loadPools();
   loadCombos();
   loadTierEditor();
 })();
