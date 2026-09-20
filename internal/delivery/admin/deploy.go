@@ -39,6 +39,17 @@ export default async function handler(req) {
   headers.delete("x-relay-target");
   headers.delete("x-relay-path");
   headers.delete("host");
+  // Strip client-IP headers so the upstream only sees the relay's edge
+  // egress IP, never the original client IP.
+  for (const h of ["forwarded", "x-forwarded-for", "x-forwarded-host",
+    "x-real-ip", "true-client-ip", "cf-connecting-ip",
+    "x-vercel-proxied-for", "x-vercel-ip-city", "x-vercel-ip-country",
+    "x-vercel-ip-country-region", "x-vercel-ip-continent",
+    "x-vercel-ip-latitude", "x-vercel-ip-longitude",
+    "x-vercel-ip-postal-code", "x-vercel-ip-timezone",
+    "x-vercel-ip-as-number", "x-vercel-ja4-digest"]) {
+    headers.delete(h);
+  }
 
   const response = await fetch(targetUrl, {
     method: req.method,
