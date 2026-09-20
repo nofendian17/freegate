@@ -37,7 +37,7 @@ func (u *LLM7Upstream) Start(ctx context.Context, refreshInterval time.Duration)
 		}
 		u.cache.Set(models)
 		return nil
-	}, refreshInterval)
+	}, refreshInterval).WithOnFailure(u.client.CloseIdleConnections)
 	refresher.Run(ctx)
 }
 

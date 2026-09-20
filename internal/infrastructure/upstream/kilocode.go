@@ -35,7 +35,7 @@ func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration)
 		}
 		k.cache.Set(models)
 		return nil
-	}, refreshInterval)
+	}, refreshInterval).WithOnFailure(k.client.CloseIdleConnections)
 	refresher.Run(ctx)
 }
 

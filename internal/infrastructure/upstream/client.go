@@ -76,7 +76,15 @@ func NewTransport(d *Dialer) *http.Transport {
 		ResponseHeaderTimeout: 30 * time.Second,
 		MaxIdleConns:          50,
 		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       60 * time.Second,
+		// Must stay below the model refresh cadence (60s): a pooled
+		// connection blackholed by a VPN rotation (e.g. an h2 session with
+		// a stream in flight during OnConnect flush, so CloseIdleConnections
+		// misses it) would otherwise be reused by every refresh, and each
+		// failed reuse resets the idle clock — pinning the refresher on the
+		// dead session forever. At 30s the poisoned session ages out between
+		// refreshes and the next attempt redials. Chat traffic is unaffected
+		// (it reuses connections within seconds).
+		IdleConnTimeout: 30 * time.Second,
 	}
 	if d != nil {
 		tr.DialContext = d.DialContext
@@ -206,6 +214,19 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
+}
+
+// CloseIdleConnections drops pooled idle connections so the next request
+// redials. Used as a Refresher on-failure hook: a refresh that fails on a
+// blackholed pooled session (e.g. VPN rotation killed the TCP mid-flight)
+// must not let the next retry reuse the same dead session.
+func (c *HTTPClient) CloseIdleConnections() {
+	if c == nil || c.client == nil {
+		return
+	}
+	if tr, ok := c.client.Transport.(interface{ CloseIdleConnections() }); ok && tr != nil {
+		tr.CloseIdleConnections()
+	}
 }
 
 // currentKey returns the API key used for this request. With multiple keys

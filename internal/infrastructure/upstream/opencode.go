@@ -118,7 +118,7 @@ func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Durat
 		}
 		o.cache.Set(models)
 		return nil
-	}, refreshInterval)
+	}, refreshInterval).WithOnFailure(o.client.CloseIdleConnections)
 	refresher.Run(ctx)
 	wg.Wait()
 }

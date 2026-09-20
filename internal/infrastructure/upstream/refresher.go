@@ -14,6 +14,10 @@ type Refresher struct {
 	interval time.Duration
 	backoff  time.Duration
 	maxBack  time.Duration
+	// onFailure runs after a failed refresh, before the backoff wait.
+	// Upstreams wire pool flushing here so a retry never reuses the
+	// blackholed pooled session that just failed. Nil = no hook.
+	onFailure func()
 }
 
 func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refresher {
@@ -27,6 +31,13 @@ func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refreshe
 		backoff:  InitialBackoff,
 		maxBack:  MaxBackoff,
 	}
+}
+
+// WithOnFailure registers a hook invoked after every failed refresh.
+// It returns the refresher for chaining.
+func (r *Refresher) WithOnFailure(fn func()) *Refresher {
+	r.onFailure = fn
+	return r
 }
 
 // Run blocks and runs the refresh loop until ctx is cancelled.
@@ -45,6 +56,9 @@ func (r *Refresher) Run(ctx context.Context) {
 
 		if err := r.refresh(ctx); err != nil {
 			slog.Warn("model refresh failed", "upstream", r.name, "error", err)
+			if r.onFailure != nil {
+				r.onFailure()
+			}
 			t.Reset(backoff)
 			select {
 			case <-ctx.Done():
