@@ -6,19 +6,6 @@ import (
 	"fmt"
 )
 
-// PrepareUpstream applies the three handler-level normalizations that were
-// previously done as three separate JSON passes (NormalizeRoles,
-// NormalizeRequestReasoning, EnsureStreamOptions) in a single pass.
-//
-// It performs one Unmarshal, applies all mutations on the same map, and
-// marshals once. This reduces allocs from 3x to 1x on the hot path.
-//
-// For model-aware DeepSeek normalization (reasoning_content guarantee,
-// flash top_p default), use PrepareUpstreamWithModel.
-func PrepareUpstream(body []byte) ([]byte, []string, error) {
-	return PrepareUpstreamWithModel(body, "")
-}
-
 // PrepareUpstreamWithModel is PrepareUpstream plus DeepSeek model-aware
 // normalization for OpenAI-targeted bodies: every assistant message gets a
 // reasoning_content field (copied from "reasoning" when present, "" when

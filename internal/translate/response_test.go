@@ -187,7 +187,7 @@ func TestResponseJSON_ClaudeToOpenAI(t *testing.T) {
 
 func TestResponseWriter_NonStreamingJSON(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	rw.Header().Set("Content-Type", "application/json")
 
 	// Write response body
@@ -207,7 +207,7 @@ func TestResponseWriter_NonStreamingJSON(t *testing.T) {
 
 func TestResponseWriter_ErrorPassthrough(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	rw.WriteHeader(http.StatusBadRequest)
 	rw.Write([]byte(`{"error":{"type":"invalid","message":"bad request"}}`))
 	rw.Close()
@@ -223,7 +223,7 @@ func TestResponseWriter_ErrorPassthrough(t *testing.T) {
 
 func TestResponseWriter_StreamingPassthrough(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	rw.Header().Set("Content-Type", "text/event-stream")
 
 	lines := []string{
@@ -243,7 +243,7 @@ func TestResponseWriter_StreamingPassthrough(t *testing.T) {
 
 func TestResponseWriter_StreamingDropsUpstreamSSEEventNames(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	rw.Header().Set("Content-Type", "text/event-stream")
 
 	streamData := []string{
@@ -270,7 +270,7 @@ func TestResponseWriter_StreamingDropsUpstreamSSEEventNames(t *testing.T) {
 
 func TestResponseWriter_CloseEmpty(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	err := rw.Close()
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -296,7 +296,7 @@ func TestProxyChatWithClaudeFormat(t *testing.T) {
 	}
 
 	// Mock upstream response (writes OpenAI-format JSON)
-	wr := NewResponseWriter(inner, format)
+	wr := NewResponseWriterWithDst(inner, FormatOpenAI, format)
 	upstreamBody := `{"choices":[{"message":{"role":"assistant","content":"Hello there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`
 	wr.Header().Set("Content-Type", "application/json")
 	wr.Write([]byte(upstreamBody))
@@ -322,7 +322,7 @@ func TestProxyChatWithClaudeStreaming(t *testing.T) {
 		t.Fatalf("expected Claude format, got %s", format)
 	}
 
-	wr := NewResponseWriter(inner, format)
+	wr := NewResponseWriterWithDst(inner, FormatOpenAI, format)
 	wr.Header().Set("Content-Type", "text/event-stream")
 
 	// Simulate streaming upstream response
@@ -356,7 +356,7 @@ func TestProxyChatWithClaudeStreaming(t *testing.T) {
 
 func TestNewResponseWriter_NilFormat(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, "")
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, "")
 	if rw.dst != "" {
 		t.Errorf("expected empty dst, got %s", rw.dst)
 	}
@@ -368,7 +368,7 @@ func TestNewResponseWriter_NilFormat(t *testing.T) {
 // Additional edge case: Write with no Content-Type set
 func TestResponseWriter_NoContentType(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	n, err := rw.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -383,7 +383,7 @@ func TestResponseWriter_NoContentType(t *testing.T) {
 
 func TestResponseWriter_MultipleWrites(t *testing.T) {
 	inner := httptest.NewRecorder()
-	rw := NewResponseWriter(inner, FormatClaude)
+	rw := NewResponseWriterWithDst(inner, FormatOpenAI, FormatClaude)
 	rw.Header().Set("Content-Type", "application/json")
 
 	// Multiple small writes

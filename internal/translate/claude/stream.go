@@ -2,11 +2,11 @@ package claude
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // --- Streaming state ---
@@ -82,7 +82,7 @@ type usageInfo struct {
 // NewStreamState creates a new Claude stream state.
 func NewStreamState() *StreamState {
 	return &StreamState{
-		messageID:    "msg_" + randID(8),
+		messageID:    "msg_" + helpers.RandomID(8),
 		nextBlockIdx: 0,
 		toolCalls:    make(map[int]*toolCallInfo),
 		toolArgBufs:  make(map[int]*bytes.Buffer),
@@ -94,22 +94,9 @@ func NewStreamState() *StreamState {
 // Partial trailing data is retained for the next call.
 func (s *StreamState) Feed(p []byte) []string {
 	s.sseBuf.Write(p)
-	return s.drainLines()
-}
-
-func (s *StreamState) drainLines() []string {
-	data := s.sseBuf.String()
-	var lines []string
-	for {
-		idx := strings.IndexByte(data, '\n')
-		if idx < 0 {
-			break
-		}
-		lines = append(lines, data[:idx])
-		data = data[idx+1:]
-	}
+	lines, rest := helpers.SplitSSE(s.sseBuf.String(), "\n")
 	s.sseBuf.Reset()
-	s.sseBuf.WriteString(data)
+	s.sseBuf.WriteString(rest)
 	return lines
 }
 
@@ -565,7 +552,7 @@ func emitOrphanToolUse(call OrphanToolCall, state *StreamState) []string {
 	if state.thinkingOpen {
 		events = append(events, state.closeThinkingBlock()...)
 	}
-	id := "toolu_" + randID(8)
+	id := "toolu_" + helpers.RandomID(8)
 	blockIdx := state.nextBlockIdx
 	state.nextBlockIdx++
 	state.orphanRecovered = true
@@ -1110,35 +1097,6 @@ func contentBlockStop(index int) []string {
 	})
 }
 
-// --- SSE helpers ---
-
-// sseBuffer accumulates bytes until a complete SSE message (\n\n) is available.
-type sseBuffer struct {
-	buf bytes.Buffer
-}
-
-func (sb *sseBuffer) Feed(p []byte) []string {
-	sb.buf.Write(p)
-	return sb.Drain()
-}
-
-func (sb *sseBuffer) Drain() []string {
-	data := sb.buf.String()
-	var lines []string
-	for {
-		idx := strings.Index(data, "\n\n")
-		if idx < 0 {
-			break
-		}
-		block := data[:idx]
-		lines = append(lines, block)
-		data = data[idx+2:]
-	}
-	sb.buf.Reset()
-	sb.buf.WriteString(data)
-	return lines
-}
-
 func buildClaudeMessage(state *StreamState) map[string]any {
 	msg := map[string]any{
 		"id":            state.messageID,
@@ -1166,16 +1124,4 @@ func formatSSE(event string, data map[string]any) []string {
 		"event: " + event + "\n",
 		"data: " + string(dataBytes) + "\n\n",
 	}
-}
-
-// --- Random ID generation ---
-
-func randID(n int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		b[i] = chars[idx.Int64()]
-	}
-	return string(b)
 }

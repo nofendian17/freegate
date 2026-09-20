@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // StreamState holds state for streaming translation.
@@ -63,18 +65,9 @@ func NewStreamState() *StreamState {
 // Feed splits SSE buffer into complete blocks (delimited by \n\n)
 func (s *StreamState) Feed(p []byte) []string {
 	s.sseBuf.Write(p)
-	data := s.sseBuf.String()
-	var blocks []string
-	for {
-		idx := strings.Index(data, "\n\n")
-		if idx < 0 {
-			break
-		}
-		blocks = append(blocks, data[:idx])
-		data = data[idx+2:]
-	}
+	blocks, rest := helpers.SplitSSE(s.sseBuf.String(), "\n\n")
 	s.sseBuf.Reset()
-	s.sseBuf.WriteString(data)
+	s.sseBuf.WriteString(rest)
 	return blocks
 }
 

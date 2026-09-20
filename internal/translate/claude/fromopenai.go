@@ -174,8 +174,7 @@ type claudeToolChoice struct {
 
 // FromOpenAI converts an OpenAI-format chat-completions request body to
 // Claude format. Produces a plain Anthropic /v1/messages payload: no
-// OAuth tool-name prefixing and no product-specific system-prompt
-// injection.
+// tool-name prefixing and no product-specific system-prompt injection.
 //
 // The caller is expected to have already run prepost.* helpers on the
 // OpenAI body (AdjustMaxTokens, EnsureToolCallIds, FixMissingToolResponses,

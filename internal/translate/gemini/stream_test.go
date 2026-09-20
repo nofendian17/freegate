@@ -11,19 +11,19 @@ import (
 // TestProcessGeminiChunk_FinishOnlyOnLast asserts that finishReason is
 // emitted only on the terminal chunk, not duplicated on every chunk.
 func TestProcessGeminiChunk_FinishOnlyOnLast(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 	mid := map[string]any{
 		"choices": []any{
 			map[string]any{"index": 0.0, "delta": map[string]any{"content": "hi"}},
 		},
 	}
-	if events := processGeminiChunk(mid, state); events == nil {
+	if events := ProcessChunk(mid, state); events == nil {
 		t.Fatal("expected events for mid chunk")
 	}
 	if state.finishReason != "" {
 		t.Errorf("finishReason set too early: %q", state.finishReason)
 	}
-	if strings.Contains(eventsText(t, processGeminiChunk(mid, state)), "STOP") {
+	if strings.Contains(eventsText(t, ProcessChunk(mid, state)), "STOP") {
 		t.Error("finishReason must not appear on intermediate chunks")
 	}
 
@@ -32,7 +32,7 @@ func TestProcessGeminiChunk_FinishOnlyOnLast(t *testing.T) {
 			map[string]any{"index": 0.0, "delta": map[string]any{}, "finish_reason": "stop"},
 		},
 	}
-	last := processGeminiChunk(fin, state)
+	last := ProcessChunk(fin, state)
 	if !strings.Contains(eventsText(t, last), "STOP") {
 		t.Error("expected STOP on final chunk")
 	}
@@ -44,13 +44,13 @@ func TestProcessGeminiChunk_FinishOnlyOnLast(t *testing.T) {
 // TestProcessGeminiChunk_ReasoningAsThought asserts reasoning_content is
 // surfaced to Gemini clients as a thought part, not dropped.
 func TestProcessGeminiChunk_ReasoningAsThought(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 	chunk := map[string]any{
 		"choices": []any{
 			map[string]any{"index": 0.0, "delta": map[string]any{"reasoning_content": "thinking..."}},
 		},
 	}
-	events := processGeminiChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 	text := eventsText(t, events)
 	if !strings.Contains(text, "thinking...") {
 		t.Errorf("reasoning not surfaced; got %s", text)
@@ -73,14 +73,14 @@ func eventsText(t *testing.T, events []string) string {
 // Emitting the whole buffer on every chunk corrupts Gemini streaming output
 // and makes the stream O(n^2).
 func TestProcessGeminiChunk_IncrementalText(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 
 	first := map[string]any{
 		"choices": []any{
 			map[string]any{"index": 0.0, "delta": map[string]any{"content": "Hello "}},
 		},
 	}
-	events1 := processGeminiChunk(first, state)
+	events1 := ProcessChunk(first, state)
 	got1 := firstDataText(t, events1)
 	if got1 != "Hello " {
 		t.Errorf("chunk 1 emitted text=%q, want %q", got1, "Hello ")
@@ -91,7 +91,7 @@ func TestProcessGeminiChunk_IncrementalText(t *testing.T) {
 			map[string]any{"index": 0.0, "delta": map[string]any{"content": "world"}},
 		},
 	}
-	events2 := processGeminiChunk(second, state)
+	events2 := ProcessChunk(second, state)
 	got2 := firstDataText(t, events2)
 	if got2 != "world" {
 		t.Errorf("chunk 2 emitted text=%q, want %q (must be the delta, not the full buffer)", got2, "world")
@@ -132,7 +132,7 @@ func firstDataText(t *testing.T, events []string) string {
 }
 
 func TestProcessGeminiChunk_Text(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 	chunk := map[string]any{
 		"choices": []any{
 			map[string]any{
@@ -141,7 +141,7 @@ func TestProcessGeminiChunk_Text(t *testing.T) {
 			},
 		},
 	}
-	events := processGeminiChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 	if len(events) == 0 {
 		t.Fatal("expected events")
 	}
@@ -151,7 +151,7 @@ func TestProcessGeminiChunk_Text(t *testing.T) {
 }
 
 func TestProcessGeminiChunk_Finish(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 	chunk := map[string]any{
 		"choices": []any{
 			map[string]any{
@@ -164,7 +164,7 @@ func TestProcessGeminiChunk_Finish(t *testing.T) {
 			"prompt_tokens": 5.0, "completion_tokens": 3.0,
 		},
 	}
-	events := processGeminiChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 	if !state.closed {
 		t.Error("expected state to be closed")
 	}
@@ -190,8 +190,8 @@ func TestProcessGeminiChunk_Finish(t *testing.T) {
 }
 
 func TestProcessGeminiChunk_EmptyChunk(t *testing.T) {
-	state := NewGeminiStreamState()
-	if events := processGeminiChunk(map[string]any{}, state); events != nil {
+	state := NewStreamState()
+	if events := ProcessChunk(map[string]any{}, state); events != nil {
 		t.Errorf("expected nil for empty chunk, got %v", events)
 	}
 }

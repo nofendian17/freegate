@@ -3,6 +3,8 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // --- Non-streaming JSON response translation ---
@@ -15,7 +17,7 @@ func JSONToClaude(body []byte) ([]byte, error) {
 	}
 
 	claude := map[string]any{
-		"id":            "msg_" + randID(8),
+		"id":            "msg_" + helpers.RandomID(8),
 		"type":          "message",
 		"role":          "assistant",
 		"content":       []any{},
@@ -107,7 +109,7 @@ func convertOpenAIMessage(msg map[string]any) []any {
 		for _, call := range orphanCallsFor(input) {
 			content = append(content, map[string]any{
 				"type":  "tool_use",
-				"id":    "toolu_" + randID(8),
+				"id":    "toolu_" + helpers.RandomID(8),
 				"name":  call.Name,
 				"input": json.RawMessage(call.Input),
 			})
@@ -190,7 +192,7 @@ func convertOpenAIMessage(msg map[string]any) []any {
 
 			baseID, _ := tc["id"].(string)
 			if baseID == "" {
-				baseID = "toolu_" + randID(8)
+				baseID = "toolu_" + helpers.RandomID(8)
 			}
 			for i, part := range parts {
 				id := baseID

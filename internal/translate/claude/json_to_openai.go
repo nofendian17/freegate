@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // JSONToOpenAI converts a non-streaming Claude-format response body to
@@ -42,7 +44,7 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 	model, _ := claude["model"].(string)
 	id, _ := claude["id"].(string)
 	if id == "" {
-		id = "chatcmpl-" + randID(12)
+		id = "chatcmpl-" + helpers.RandomID(12)
 	} else if !strings.HasPrefix(id, "chatcmpl-") {
 		id = "chatcmpl-" + id
 	}
@@ -125,7 +127,7 @@ func extractToolCallsFromBlocks(blocks []any) []any {
 		}
 		id, _ := b["id"].(string)
 		if id == "" {
-			id = "toolu_" + randID(8)
+			id = "toolu_" + helpers.RandomID(8)
 		}
 		name, _ := b["name"].(string)
 
