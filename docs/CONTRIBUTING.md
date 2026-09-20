@@ -5,7 +5,6 @@ Dev setup, scripts, testing, code style, and PR checklist for freegate.
 ## Prerequisites
 
 - **Go 1.26+** (matches `go.mod`)
-- **VPNGate/OpenVPN** (only if running outside docker compose with VPN enabled — requires `openvpn` installed plus tun access: Linux with `/dev/net/tun`, macOS via Homebrew + sudo, Windows admin)
 - **Docker + Docker Compose** (only if using `make up` / `make down`)
 - **`make`** (GNU make; standard on Linux/macOS)
 
@@ -24,7 +23,7 @@ See `README.md → Project Structure`. Source of truth for new code organization
 - `internal/application` — use cases (chat, models)
 - `internal/delivery` — HTTP-facing layer (handlers, middleware, UI)
 - `internal/domain` — types and interfaces that don't depend on frameworks
-- `internal/infrastructure` — out-of-process integrations (VPNGate, upstreams, metrics, recorder)
+- `internal/infrastructure` — out-of-process integrations (upstreams, metrics, recorder)
 - `internal/translate` — OpenAI ↔ Claude ↔ Gemini format translation
 - `web/` — embedded templates, CSS, JS, fonts
 
@@ -50,7 +49,7 @@ Run `make help` for the full inline list. Targets in the `Makefile`:
 | `make up` | `docker compose up -d` |
 | `make down` | `docker compose down` |
 | `make restart` | `docker compose restart` |
-| `make logs svc=proxy` | Tail a service's logs (e.g. `svc=vpn`) |
+| `make logs svc=proxy` | Tail a service's logs |
 | `make ps` | List running compose services |
 | `make ps-all` | List all compose services including stopped |
 | `make compose-build` | Build compose service images |
@@ -65,8 +64,7 @@ Run `make help` for the full inline list. Targets in the `Makefile`:
 ### Without docker
 
 ```bash
-# 1. Run the proxy (embedded supervisor starts the tunnel in-process;
-#    needs tun access — see Prerequisites)
+# 1. Run the proxy
 LOG_LEVEL=debug make run
 
 # 2. In another shell
@@ -77,7 +75,7 @@ curl http://localhost:1234/v1/models
 ### With docker compose
 
 ```bash
-make up            # start proxy + vpn
+make up            # start proxy
 make logs svc=proxy
 make ps
 make down
@@ -104,8 +102,8 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/translate/gemini` | Gemini ↔ OpenAI JSON, streaming |
 | `internal/translate/internal/prepost` | thinking normalization, max-tokens adjustment, history sanitization, id/role fixing |
 | `internal/infrastructure/proxy` | response normalization, `reasoning_content` collapse, SSE line handling |
-| `internal/infrastructure/upstream` | client, model cache, Kilo/OpenCode parsing |
-| `internal/infrastructure/vpn/supervisor` | tunnel lifecycle, SOCKS5, server list, rotation, IP probing |
+| `internal/infrastructure/upstream` | client, model cache, relay pools, Kilo/OpenCode parsing |
+| `internal/infrastructure/providers` | SQLite store (providers, combos, pools) |
 | `internal/infrastructure/recorder` | ring buffer + timeseries sampler |
 | `internal/infrastructure/metrics` | counter / snapshot |
 | `internal/infrastructure/ringbuffer` | generic typed ring buffer |
@@ -133,7 +131,7 @@ make test-race     # run with -race if you touched any concurrency code
 - **`gofmt -s`** (run via `make fmt`); CI-equivalent is `make check`
 - **`go vet ./...`** (run via `make vet`); must be clean
 - **No external linter yet** — `make check` is the gate
-- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`, `golang.org/x/net/proxy`, `github.com/davegallant/vpngate/pkg/vpn`, `github.com/armon/go-socks5`, `golang.org/x/sync` — singleflight only, to dedupe concurrent VPNGate server-list fetches)
+- **Imports** — stdlib first, then a blank line, then third-party; do not introduce new third-party deps without a strong reason (current deps: `github.com/go-chi/chi/v5`)
 - **Naming** — exported types/functions from `internal/...` are still `PascalCase`; unexported helpers are `camelCase`; tests use `TestXxx` / `t.Run("case", ...)`
 - **Errors** — wrap with `fmt.Errorf("...: %w", err)`; never discard with `_` unless the API forces it (and then add a comment)
 - **Logging** — `slog` via the default logger set in `internal/server/server.go`; don't introduce `log` or `fmt.Println`
@@ -180,8 +178,7 @@ This proxy is anonymous-by-design but ships with sensible defaults:
 
 - `ADMIN_TOKEN` is required (dashboard login + admin superset for `/v1/*`). `API_KEY` is comma-separated for external clients; empty keeps `/v1/*` admin-gated. Set both before exposing past `127.0.0.1`.
 - Rate limiter is per-IP, in-memory; it does not survive restart.
-- All upstream traffic goes through the VPN; don't add direct-connect code paths.
-- Upstream responses (including 429) are passed through to the client unchanged; the operator picks a relay server manually from the dashboard (`POST /connect` on the supervisor) or rotates to a random one (`POST /rotate`).
+- Upstream responses (including 429) are passed through to the client unchanged; the operator manages exit IPs via proxy pools (`/providers` → Proxy Pools).
 - The proxy is a pass-through — it does not persist request bodies, but it does log request IDs, IPs, models, and status codes. Do not log full prompt/response content.
 
 If you find a security issue, please open a private issue rather than a public PR.

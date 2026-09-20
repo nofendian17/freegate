@@ -27,7 +27,7 @@
     </div>
     <div class="login-card">
       <div class="login-title">> login</div>
-      <p class="login-subtitle">// authenticate to access dashboard and VPN controls</p>
+      <p class="login-subtitle">// authenticate to access dashboard</p>
       {{if .Error}}<div class="login-error">! {{.Error}}</div>{{end}}
       <form method="POST" action="/login{{if .Next}}?next={{.Next}}{{end}}">
         {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
