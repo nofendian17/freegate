@@ -23,19 +23,6 @@ type chainSelector interface {
 	SelectChain(modelID string) []domain.Upstream
 }
 
-// isCandidateRetryable mirrors the combo tier policy: 429/5xx plus
-// free-tier access rejections, which are candidate-scoped rather than
-// request-scoped.
-func isCandidateRetryable(rsp *domain.UpstreamResponse) bool {
-	if rsp == nil {
-		return true
-	}
-	if rsp.StatusCode == http.StatusTooManyRequests || rsp.StatusCode >= 500 {
-		return true
-	}
-	return rsp.StatusCode >= 400 && domain.IsFreeTierRejection(rsp)
-}
-
 func (s *ChatService) candidates(modelID string) []domain.Upstream {
 	if cs, ok := s.router.(chainSelector); ok {
 		if chain := cs.SelectChain(modelID); len(chain) > 0 {
@@ -197,7 +184,7 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 			slog.Error("upstream returned nil response", "request_id", requestID, "upstream", u.Name())
 			return wrappedErr
 		}
-		if isCandidateRetryable(rsp) && !last {
+		if domain.IsRetryableStatus(rsp) && !last {
 			slog.Warn("upstream retryable status, trying next candidate", "request_id", requestID, "upstream", u.Name(), "status", rsp.StatusCode)
 			rsp.Close()
 			continue

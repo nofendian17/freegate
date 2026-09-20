@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/providers"
 )
 
 type tierStub struct {
@@ -189,6 +190,52 @@ func TestComboUpstream_TransportErrorPersisting_FailsOver(t *testing.T) {
 	}
 }
 
+func TestComboUpstream_FailedTierCooldown_SkipsOnNextRequest(t *testing.T) {
+	t1 := &flakyTransportStub{name: "opencode", failTimes: 10, status: 200, body: `{"ok":true}`}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+	body := []byte(`{"model":"hemat","messages":[]}`)
+	resp, err := cu.ChatCompletion(context.Background(), body)
+	if err != nil {
+		t.Fatalf("first chat: %v", err)
+	}
+	resp.Close()
+	if t1.calls != 2 || t2.calls != 1 {
+		t.Fatalf("first: expected t1=2,t2=1, got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+	// t1 just failed and is in cooldown; the next request must skip it and
+	// go straight to the healthy tier instead of parking another 30s stall.
+	resp, err = cu.ChatCompletion(context.Background(), body)
+	if err != nil {
+		t.Fatalf("second chat: %v", err)
+	}
+	resp.Close()
+	if t1.calls != 2 || t2.calls != 2 {
+		t.Fatalf("second: expected t1=2 (skipped),t2=2, got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+}
+
+func TestComboUpstream_AllTiersCooled_FallsBackToStale(t *testing.T) {
+	t1 := &flakyTransportStub{name: "opencode", failTimes: 10, status: 200, body: `{"ok":true}`}
+	t2 := &flakyTransportStub{name: "kilo", failTimes: 10, status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+	body := []byte(`{"model":"hemat","messages":[]}`)
+	if _, err := cu.ChatCompletion(context.Background(), body); err == nil {
+		t.Fatal("first: expected error when all tiers fail")
+	}
+	if t1.calls != 2 || t2.calls != 2 {
+		t.Fatalf("first: expected t1=2,t2=2, got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+	// Every tier is cooled, but a request must still attempt (stale fallback)
+	// rather than fail fast with an "in cooldown" error.
+	if _, err := cu.ChatCompletion(context.Background(), body); err == nil {
+		t.Fatal("second: expected error when all tiers fail")
+	}
+	if t1.calls != 4 || t2.calls != 4 {
+		t.Fatalf("second: expected stale retry t1=4,t2=4, got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+}
+
 func TestComboUpstream_Exhausted_ReturnsLast(t *testing.T) {
 	t1 := &tierStub{name: "a", status: 429, body: `{"error":"first"}`}
 	t2 := &tierStub{name: "b", status: 500, body: `{"error":"second"}`}
@@ -320,7 +367,7 @@ func TestComboRouter_Rebuild_PreservesTierModels(t *testing.T) {
 	cr := NewComboRouter(NewRouter(def))
 	cr.RebuildCombos([]ComboTierRow{{
 		Name: "sparky",
-		Tiers: []ComboTierInput{
+		Tiers: []providers.ComboTier{
 			{Provider: "opencode", Model: "muse-spark-1.3-contributor-free"},
 		},
 	}}, func(name string) domain.Upstream { return def })

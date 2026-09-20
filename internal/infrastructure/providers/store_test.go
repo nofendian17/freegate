@@ -420,3 +420,4 @@ func TestCombo_Members_Migrated_To_Tiers(t *testing.T) {
 		t.Fatalf("not migrated: %+v", list[0].Tiers)
 	}
 }
+
