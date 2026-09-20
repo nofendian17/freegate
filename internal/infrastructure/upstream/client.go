@@ -58,8 +58,8 @@ func (k *keyCooldown) isLimited(key string) bool {
 
 // NewTransport builds a tuned http.Transport for upstream calls.
 // Shared between all upstreams so idle connections are pooled once
-// rather than per-upstream. DialContext routes via VPN when enabled.
-func NewTransport(d *Dialer) *http.Transport {
+// rather than per-upstream.
+func NewTransport() *http.Transport {
 	tr := &http.Transport{
 		// HTTP/2 multiplexes concurrent streams over a single TCP+TLS
 		// connection, so far fewer handshakes cross the lossy VPN tunnel
@@ -86,9 +86,6 @@ func NewTransport(d *Dialer) *http.Transport {
 		// (it reuses connections within seconds).
 		IdleConnTimeout: 30 * time.Second,
 	}
-	if d != nil {
-		tr.DialContext = d.DialContext
-	}
 	return tr
 }
 
@@ -98,7 +95,7 @@ func NewHTTPClientWithTransport(baseURL string, apiKeys []string, headers map[st
 		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
 			tr = dt
 		} else {
-			tr = NewTransport(nil)
+			tr = NewTransport()
 		}
 	}
 	hc := &http.Client{Timeout: 0, Transport: tr}
@@ -192,6 +189,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 				req.Header.Del("x-api-key")
 			}
 		}
+		SharedRelay.Apply(req)
 
 		resp, err := c.client.Do(req)
 		if err != nil {

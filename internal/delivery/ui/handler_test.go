@@ -21,7 +21,6 @@ func NewTestHandlerWithAdminToken(adminToken string, _ *httptest.ResponseRecorde
 	}
 	return &Handler{
 		data:       &fakeData{},
-		vpn:        &fakeVPN{},
 		templates:  tpl,
 		staticFS:   webStaticFS(&testing.T{}),
 		adminToken: adminToken,

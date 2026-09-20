@@ -11,7 +11,6 @@ import (
 
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/vpn"
 )
 
 // DataSource provides the data the UI needs to render.
@@ -22,48 +21,26 @@ type DataSource interface {
 	Timeseries() []domain.TimeseriesEntry
 	UptimeSeconds() int64
 	StartedAtUnix() int64
-	VPNIP() string
-}
-
-// DirectSwitcher toggles upstream routing between direct (no tunnel) and
-// tunneled. Satisfied by the shared upstream Dialer.
-type DirectSwitcher interface {
-	SetDirect(direct bool)
-	IsDirect() bool
 }
 
 // Handler serves the dashboard UI.
 type Handler struct {
 	data       DataSource
-	vpn        vpn.Provider
-	direct     DirectSwitcher
 	templates  *template.Template
 	staticFS   fs.FS
 	adminToken string
 }
 
-// nopDirect is a DirectSwitcher default that keeps tunnel routing.
-// Used when New is called with a nil switcher.
-type nopDirect struct{}
-
-func (nopDirect) SetDirect(bool) {}
-func (nopDirect) IsDirect() bool { return false }
-
-// New creates a Handler with the given data source, VPN provider, direct
-// switch, parsed templates, and static FS. If adminToken is non-empty,
-// Login/Logout and dashboard auth flows are enabled.
-func New(data DataSource, vpn vpn.Provider, direct DirectSwitcher, tpl *template.Template, staticFS fs.FS, adminToken ...string) *Handler {
+// New creates a Handler with the given data source, parsed templates, and
+// static FS. If adminToken is non-empty, Login/Logout and dashboard auth
+// flows are enabled.
+func New(data DataSource, tpl *template.Template, staticFS fs.FS, adminToken ...string) *Handler {
 	var tok string
 	if len(adminToken) > 0 {
 		tok = adminToken[0]
 	}
-	if direct == nil {
-		direct = nopDirect{}
-	}
 	return &Handler{
 		data:       data,
-		vpn:        vpn,
-		direct:     direct,
 		templates:  tpl,
 		staticFS:   staticFS,
 		adminToken: tok,
@@ -155,15 +132,6 @@ func (h *Handler) Routes() chi.Router {
 
 	r.Get("/api/timeseries", h.apiTimeseries)
 	r.Get("/api/health", h.apiHealth)
-
-	// VPN server picker (manual connect, no automatic 429 handling)
-	r.Get("/api/vpn/servers", h.apiVPNServers)
-	r.Post("/api/vpn/servers/refresh", h.apiVPNRefreshServers)
-	r.Get("/api/vpn/status", h.apiVPNStatus)
-	r.Post("/api/vpn/connect", h.apiVPNConnect)
-	r.Post("/api/vpn/rotate", h.apiVPNRotate)
-	r.Post("/api/vpn/ping", h.apiVPNPing)
-	r.Post("/api/vpn/direct", h.apiVPNDirect)
 
 	r.Get("/static/*", func(w http.ResponseWriter, req *http.Request) {
 		req.URL.Path = "/" + chi.URLParam(req, "*")

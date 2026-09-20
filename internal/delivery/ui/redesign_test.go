@@ -79,19 +79,6 @@ func TestDashboard_ModelTestParseFailureMarksError(t *testing.T) {
 	}
 }
 
-// TestDashboard_VPNRefreshChecksHTTPStatus pins the refresh-list fix: a
-// non-OK POST /api/vpn/servers/refresh must surface an http failure instead
-// of reporting "server list refreshed".
-func TestDashboard_VPNRefreshChecksHTTPStatus(t *testing.T) {
-	rr := serveViaRoutes(newTestHandler(t), "GET", "/")
-	if rr.Code != 200 {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "refresh failed: http") {
-		t.Error("VPN refresh-list handler does not check the response status")
-	}
-}
-
 // TestRequestsPartial_KiloUsesAmberTone pins tone consistency: the Go view
 // model emits tone "amber" for kilo; the partial must not recolor it purple.
 func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
@@ -106,7 +93,7 @@ func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
 			{Ts: time.Now(), Method: "POST", Path: "/v1/chat/completions", Model: "m", Upstream: "kilo", Status: 200, DurationMs: 5, IP: "127.0.0.1"},
 		},
 		ts: nil, uptime: 1, start: time.Now().Unix(),
-	}, &fakeVPN{}, &fakeDirect{}, mustLoadTemplates(t), webStaticFS(t))
+	}, mustLoadTemplates(t), webStaticFS(t))
 
 	rr := serveViaRoutes(h, "GET", "/partials/requests")
 	if rr.Code != 200 {

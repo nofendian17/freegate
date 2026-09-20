@@ -20,7 +20,6 @@ type Recorder struct {
 	requests   *ringbuffer.RingBuffer[domain.RequestLogEntry]
 	timeseries *ringbuffer.RingBuffer[domain.TimeseriesEntry]
 	modelsFn   func() []domain.Model
-	vpnIPFn    func() string
 	startedAt  time.Time
 }
 
@@ -28,7 +27,6 @@ type Recorder struct {
 type Deps struct {
 	Metrics func() map[string]any
 	Models  func() []domain.Model
-	VPNIP   func() string
 }
 
 // NewRecorderWithDeps creates a Recorder with all dependencies wired at
@@ -37,7 +35,6 @@ func NewRecorderWithDeps(d Deps) *Recorder {
 	return &Recorder{
 		metricsFn:  d.Metrics,
 		modelsFn:   d.Models,
-		vpnIPFn:    d.VPNIP,
 		requests:   ringbuffer.New[domain.RequestLogEntry](100),
 		timeseries: ringbuffer.New[domain.TimeseriesEntry](TimeseriesCapacity),
 		startedAt:  time.Now(),
@@ -83,14 +80,6 @@ func (r *Recorder) Models() []domain.Model {
 		return nil
 	}
 	return r.modelsFn()
-}
-
-// VPNIP returns the current VPN tunnel IP, or empty if no callback is set.
-func (r *Recorder) VPNIP() string {
-	if r.vpnIPFn == nil {
-		return ""
-	}
-	return r.vpnIPFn()
 }
 
 // Metrics returns the current metrics snapshot.

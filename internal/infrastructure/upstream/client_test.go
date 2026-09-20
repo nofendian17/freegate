@@ -12,7 +12,7 @@ func TestNewTransport_AttemptsHTTP2(t *testing.T) {
 	// Regression guard: h2 multiplexes concurrent streams over one tunnel
 	// TCP+TLS connection, avoiding lossy-tunnel handshakes. A custom
 	// DialContext disables h2 unless ForceAttemptHTTP2 is set.
-	tr := NewTransport(nil)
+	tr := NewTransport()
 	if !tr.ForceAttemptHTTP2 {
 		t.Error("ForceAttemptHTTP2=false disables h2 with the custom dialer")
 	}
