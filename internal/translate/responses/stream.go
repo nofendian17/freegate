@@ -26,6 +26,7 @@ type StreamState struct {
 	reasoningID        string
 	reasoningIdx       int
 	reasoningBuf       string
+	reasoningEncrypted string
 	reasoningPartAdded bool
 	reasoningDone      bool
 	inThinking         bool
@@ -163,6 +164,13 @@ func (s *StreamState) OpenAIChunkToResponses(chunk map[string]any) []string {
 		events = append(events, s.startReasoning(idx)...)
 		events = append(events, s.emitReasoningDelta(rc)...)
 	}
+	// Encrypted reasoning blob: not streamable as text, so accumulate and
+	// attach to the reasoning item on done. Opens the item even when no
+	// summary text arrives.
+	if enc, ok := delta["encrypted_content"].(string); ok && enc != "" {
+		events = append(events, s.startReasoning(idx)...)
+		s.reasoningEncrypted += enc
+	}
 
 	// content
 	if content, ok := delta["content"].(string); ok && content != "" {
@@ -267,9 +275,13 @@ func (s *StreamState) closeReasoning() []string {
 		"item_id": s.reasoningID, "output_index": s.reasoningIdx, "summary_index": 0,
 		"part": map[string]any{"type": "summary_text", "text": s.reasoningBuf},
 	}))
+	reasoningItem := map[string]any{"id": s.reasoningID, "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": s.reasoningBuf}}}
+	if s.reasoningEncrypted != "" {
+		reasoningItem["encrypted_content"] = s.reasoningEncrypted
+	}
 	ev = append(ev, formatResponsesEvent("response.output_item.done", map[string]any{
 		"type": "response.output_item.done", "sequence_number": s.nextSeq(), "output_index": s.reasoningIdx,
-		"item": map[string]any{"id": s.reasoningID, "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": s.reasoningBuf}}},
+		"item": reasoningItem,
 	}))
 	return ev
 }
