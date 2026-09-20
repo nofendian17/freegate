@@ -59,6 +59,43 @@ func TestRelayRoundRobin(t *testing.T) {
 	}
 }
 
+func TestRelayStrategies(t *testing.T) {
+	pools := []RelayPool{{URL: "https://a.example.com"}, {URL: "https://b.example.com"}}
+
+	sel := NewRelaySelector()
+	sel.SetPools(pools)
+	sel.SetStrategy("none")
+	for i := 0; i < 3; i++ {
+		p, _ := sel.Next()
+		if p.URL != "https://a.example.com" {
+			t.Fatalf("none must always pick first, got %s", p.URL)
+		}
+	}
+
+	sel.SetStrategy("round-robin")
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		p, _ := sel.Next()
+		seen[p.URL] = true
+	}
+	if !seen["https://a.example.com"] || !seen["https://b.example.com"] {
+		t.Fatalf("round-robin must rotate, got %v", seen)
+	}
+
+	sel.SetStrategy("random")
+	for i := 0; i < 10; i++ {
+		if _, ok := sel.Next(); !ok {
+			t.Fatal("random must return a pool")
+		}
+	}
+
+	sel.SetStrategy("bogus")
+	p, _ := sel.Next()
+	if p.URL == "" {
+		t.Fatal("unknown strategy must keep current behavior")
+	}
+}
+
 func TestRelayStrictFallback(t *testing.T) {
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("direct-ok"))

@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,9 +72,10 @@ type RelayPool struct {
 }
 
 type RelaySelector struct {
-	mu    sync.RWMutex
-	pools []RelayPool
-	idx   uint64 // atomic round-robin
+	mu       sync.RWMutex
+	pools    []RelayPool
+	strategy string // round-robin (default), random, none
+	idx      uint64 // atomic round-robin
 }
 
 var SharedRelay = NewRelaySelector()
@@ -86,6 +88,17 @@ func (s *RelaySelector) SetPools(pools []RelayPool) {
 	s.mu.Unlock()
 }
 
+// SetStrategy switches rotation: round-robin (default), random, or none
+// (always first pool). Unknown values keep the current strategy.
+func (s *RelaySelector) SetStrategy(strategy string) {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "random", "none", "round-robin", "":
+		s.mu.Lock()
+		s.strategy = strings.ToLower(strings.TrimSpace(strategy))
+		s.mu.Unlock()
+	}
+}
+
 func (s *RelaySelector) Next() (RelayPool, bool) {
 	s.mu.RLock()
 	n := len(s.pools)
@@ -94,8 +107,16 @@ func (s *RelaySelector) Next() (RelayPool, bool) {
 		return RelayPool{}, false
 	}
 	pools := s.pools
+	strategy := s.strategy
 	s.mu.RUnlock()
-	return pools[atomic.AddUint64(&s.idx, 1)%uint64(n)], true
+	switch strategy {
+	case "random":
+		return pools[rand.N(n)], true
+	case "none":
+		return pools[0], true
+	default:
+		return pools[atomic.AddUint64(&s.idx, 1)%uint64(n)], true
+	}
 }
 
 func (s *RelaySelector) Apply(req *http.Request) bool {
