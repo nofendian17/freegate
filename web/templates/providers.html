@@ -193,22 +193,29 @@
           <input type="hidden" id="pf-id">
           <div class="prov-grid">
             <div class="prov-field">
-              <label class="prov-label" for="pf-name">name</label>
-              <input id="pf-name" class="prov-input" required placeholder="relay-1">
+              <label class="prov-label" for="pf-name">Name</label>
+              <input id="pf-name" class="prov-input" required placeholder="Office Proxy">
+              <span class="dim">// spaces/uppercase auto-converted to lowercase-dashes</span>
             </div>
             <div class="prov-field" id="pf-name-hint" style="display:none">
-              <span class="dim">// unique Vercel project name — leave empty for auto-generated</span>
+              <span class="dim">// deploy mode: unique Vercel project name — leave empty for auto-generated</span>
             </div>
             <div class="prov-field">
-              <label class="prov-label" for="pf-proxy-url">proxy_url</label>
-              <input id="pf-proxy-url" class="prov-input" required placeholder="https://relay-1.vercel.app">
+              <label class="prov-label" for="pf-proxy-url">Proxy URL</label>
+              <input id="pf-proxy-url" class="prov-input" required placeholder="http://127.0.0.1:7897">
             </div>
             <div class="prov-field full">
-              <label class="prov-label" for="pf-no-proxy">no_proxy (comma list, optional)</label>
-              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,*.internal">
+              <label class="prov-label" for="pf-no-proxy">No Proxy</label>
+              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,127.0.0.1,.internal">
+              <span class="dim">// comma-separated hosts/domains to bypass proxy</span>
             </div>
             <div class="prov-field full">
-              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked> enabled</label>
+              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked> Active</label>
+              <span class="dim">// inactive pools are ignored by runtime resolution</span>
+            </div>
+            <div class="prov-field full">
+              <label class="prov-check"><input id="pf-strict" type="checkbox"> Strict Proxy</label>
+              <span class="dim">// fail request if proxy is unreachable instead of falling back to direct</span>
             </div>
             <div class="prov-field full" id="pf-token-wrap" style="display:none">
               <label class="prov-label" for="pf-token">vercel token (used once for deployment, never stored) — <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">get token</a></label>
@@ -520,9 +527,12 @@
     document.getElementById('pf-proxy-url').value = p.proxy_url || '';
     document.getElementById('pf-no-proxy').value = p.no_proxy || '';
     document.getElementById('pf-enabled').checked = p.enabled !== false;
+    document.getElementById('pf-strict').checked = !!p.strict_proxy;
     document.getElementById('pf-token').value = '';
     document.getElementById('pf-token-wrap').style.display = deployMode ? '' : 'none';
     document.getElementById('pf-proxy-url').closest('.prov-field').style.display = deployMode ? 'none' : '';
+    document.getElementById('pf-name').required = !deployMode;
+    document.getElementById('pf-proxy-url').required = !deployMode;
     document.getElementById('pf-name-hint').style.display = deployMode ? '' : 'none';
     document.getElementById('pf-explainer').style.display = deployMode ? '' : 'none';
     document.getElementById('pool-deploy-go').style.display = deployMode ? '' : 'none';
@@ -549,11 +559,15 @@
   document.getElementById('pool-form').addEventListener('submit', function(e) {
     e.preventDefault();
     var id = document.getElementById('pf-id').value;
+    var rawName = document.getElementById('pf-name').value.trim();
+    var slug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+    if (!slug) { show(poolFormErr, '! save pool: name must contain a-z0-9'); return; }
     savePool(id, {
-      name: document.getElementById('pf-name').value.trim(),
+      name: slug,
       proxy_url: document.getElementById('pf-proxy-url').value.trim(),
       no_proxy: document.getElementById('pf-no-proxy').value.trim(),
-      enabled: document.getElementById('pf-enabled').checked
+      enabled: document.getElementById('pf-enabled').checked,
+      strict_proxy: document.getElementById('pf-strict').checked
     }, document.getElementById('pool-save'));
   });
 
