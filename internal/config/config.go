@@ -81,9 +81,6 @@ type Config struct {
 // IsDirect reports whether upstreams should bypass the VPN tunnel.
 func (c *Config) IsDirect() bool { return c.SOCKSAddr == "" }
 
-// IsAdminAuthEnabled reports whether admin auth is configured.
-func (c *Config) IsAdminAuthEnabled() bool { return c.AdminToken != "" }
-
 func Load() *Config {
 	cfg := &Config{
 		Port:       envInt("PORT", 1234),

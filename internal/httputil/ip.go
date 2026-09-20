@@ -19,9 +19,6 @@ var trustProxyHeaders atomic.Bool
 // Call it once during bootstrap from configuration (TRUST_PROXY_HEADERS).
 func SetTrustProxyHeaders(trust bool) { trustProxyHeaders.Store(trust) }
 
-// TrustProxyHeaders reports whether forwarded headers are currently trusted.
-func TrustProxyHeaders() bool { return trustProxyHeaders.Load() }
-
 // ClientIP returns the originating client IP for r. When proxy headers are
 // trusted, it prefers X-Forwarded-For (first hop) then X-Real-IP; otherwise
 // it always uses the host portion of RemoteAddr.

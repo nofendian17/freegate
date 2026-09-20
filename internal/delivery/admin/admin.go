@@ -75,12 +75,6 @@ func (h *Handler) warmCache(name string) {
 	}()
 }
 
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	h.Register(r)
-	return r
-}
-
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/api/providers", h.listProviders)
 	r.Post("/api/providers", h.createProvider)

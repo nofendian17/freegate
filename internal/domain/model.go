@@ -27,8 +27,3 @@ type ErrorDetail struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
 }
-
-// NewError builds an ErrorResp with the given type and message.
-func NewError(tp, msg string) ErrorResp {
-	return ErrorResp{Error: ErrorDetail{Type: tp, Message: msg}}
-}

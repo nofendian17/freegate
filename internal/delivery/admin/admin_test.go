@@ -17,6 +17,14 @@ import (
 
 var errRebuildSentinel = errors.New("rebuild boom")
 
+// testRouter wires the admin endpoints onto a fresh router. It is test
+// scaffolding: production mounts via Handler.Register in server.go.
+func testRouter(h *Handler) chi.Router {
+	r := chi.NewRouter()
+	h.Register(r)
+	return r
+}
+
 func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 	s, err := providers.Open(t.TempDir() + "/providers.db")
 	if err != nil {
@@ -25,7 +33,7 @@ func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	rebuilt := 0
 	h := New(s, func() error { rebuilt++; return nil }, nil)
-	r := h.Routes()
+	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -84,7 +92,7 @@ func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	rebuilt := 0
 	h := New(s, func() error { rebuilt++; return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "acme", "base_url": "https://api.acme.test/v1", "api_keys": []string{"sk-1"}, "refresh_sec": 60, "enabled": true})
 	req := httptest.NewRequest("POST", "/api/providers", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -106,7 +114,7 @@ func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 	}
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "keepme", "base_url": "https://api.keep.test/v1", "refresh_sec": 60, "enabled": true})
 	req := httptest.NewRequest("PUT", "/api/providers/1", bytes.NewReader(body))
 	w := httptest.NewRecorder()
@@ -127,7 +135,7 @@ func TestAdmin_CreateCombo_Tiers(t *testing.T) {
 	s, _ := providers.Open("file:adcombo?mode=memory&cache=shared")
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "hemat", "tiers": []any{
 		map[string]any{"provider": "opencode"},
 		map[string]any{"provider": "kilo"},
@@ -162,7 +170,7 @@ func TestAdmin_TestCombo_PerTier(t *testing.T) {
 	}
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("POST", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10)+"/test", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -198,7 +206,7 @@ func TestAdmin_DeleteCombo_TriggersRebuild(t *testing.T) {
 	var rebuildErr error
 	h := New(s, func() error { rebuilt++; return rebuildErr }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "gone", "tiers": []any{
 		map[string]any{"provider": "opencode"},
 	}})
@@ -250,7 +258,7 @@ func TestAdmin_DeleteCombo_RebuildError(t *testing.T) {
 	}
 	h := New(s, func() error { return errRebuildSentinel }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("DELETE", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -283,7 +291,7 @@ func TestAdmin_CreateProvider_WarmsCatalog(t *testing.T) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	mgr := upstream.NewProviderManager(s, tr)
 	h := New(s, mgr.Rebuild, nil).WithWarmer(mgr.Warm)
-	r := h.Routes()
+	r := testRouter(h)
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers",
@@ -317,7 +325,7 @@ func TestAdmin_TestProvider_WarmsCatalog(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	mgr := upstream.NewProviderManager(s, http.DefaultTransport.(*http.Transport).Clone())
 	h := New(s, mgr.Rebuild, nil).WithWarmer(mgr.Warm)
-	r := h.Routes()
+	r := testRouter(h)
 
 	// Register first while the upstream is unreachable: create warms
 	// best-effort and must still return 201.
@@ -376,7 +384,7 @@ func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	h := New(s, func() error { return nil }, nil)
-	r := h.Routes()
+	r := testRouter(h)
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",
@@ -435,7 +443,7 @@ func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 	}
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("POST", "/api/providers/1/test", nil)
 	w := httptest.NewRecorder()
 	defer func() {
@@ -470,7 +478,7 @@ func TestAdmin_UpdateProvider_OmitModels_KeepsSelection(t *testing.T) {
 	}
 	h := New(s, func() error { return nil }, nil)
 	r := chi.NewRouter()
-	r.Mount("/", h.Routes())
+	r.Mount("/", testRouter(h))
 	put := func(body string) {
 		t.Helper()
 		req := httptest.NewRequest("PUT", "/api/providers/1", bytes.NewBufferString(body))
@@ -514,7 +522,7 @@ func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	h := New(s, func() error { return nil }, nil)
-	r := h.Routes()
+	r := testRouter(h)
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",

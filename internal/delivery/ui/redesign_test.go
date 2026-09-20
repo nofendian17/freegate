@@ -95,7 +95,7 @@ func TestDashboard_VPNRefreshChecksHTTPStatus(t *testing.T) {
 // TestRequestsPartial_KiloUsesAmberTone pins tone consistency: the Go view
 // model emits tone "amber" for kilo; the partial must not recolor it purple.
 func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
-	h := NewHandler(&fakeData{
+	h := New(&fakeData{
 		metrics: map[string]any{
 			"total_requests": int64(1), "upstream_errors": int64(0),
 			"input_tokens": int64(1), "output_tokens": int64(1),
@@ -106,7 +106,7 @@ func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
 			{Ts: time.Now(), Method: "POST", Path: "/v1/chat/completions", Model: "m", Upstream: "kilo", Status: 200, DurationMs: 5, IP: "127.0.0.1"},
 		},
 		ts: nil, uptime: 1, start: time.Now().Unix(),
-	}, &fakeVPN{}, mustLoadTemplates(t), webStaticFS(t))
+	}, &fakeVPN{}, &fakeDirect{}, mustLoadTemplates(t), webStaticFS(t))
 
 	rr := serveViaRoutes(h, "GET", "/partials/requests")
 	if rr.Code != 200 {

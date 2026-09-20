@@ -46,12 +46,13 @@ func TestClientIP(t *testing.T) {
 
 func TestTrustProxyHeaders_DefaultOff(t *testing.T) {
 	defer SetTrustProxyHeaders(false)
+	r := &http.Request{RemoteAddr: "1.2.3.4:5678", Header: http.Header{"X-Forwarded-For": []string{"9.9.9.9"}}}
 	SetTrustProxyHeaders(true)
-	if !TrustProxyHeaders() {
-		t.Fatal("expected TrustProxyHeaders() = true after enabling")
+	if got := ClientIP(r); got != "9.9.9.9" {
+		t.Fatalf("expected forwarded IP honored after enabling, got %q", got)
 	}
 	SetTrustProxyHeaders(false)
-	if TrustProxyHeaders() {
-		t.Fatal("expected TrustProxyHeaders() = false after disabling")
+	if got := ClientIP(r); got != "1.2.3.4" {
+		t.Fatalf("expected direct IP after disabling, got %q", got)
 	}
 }

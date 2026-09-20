@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"freegate/internal/domain"
 )
 
@@ -54,23 +56,17 @@ func newMockHandler() (*Handler, *mockChat, *mockModels, *mockMetrics) {
 	return New(chat, models, mtr), chat, models, mtr
 }
 
-func TestHandler_Root(t *testing.T) {
-	h, _, _, _ := newMockHandler()
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-
-	h.Root(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-		t.Fatalf("failed to unmarshal: %v", err)
-	}
-	if result["service"] != "freegate - multi-upstream AI proxy" {
-		t.Errorf("unexpected service field: %v", result["service"])
-	}
+// testRouter wires the handler endpoints the same way server.go mounts them
+// under /v1. It is test scaffolding: production routing lives in server.go.
+func testRouter(h *Handler) chi.Router {
+	r := chi.NewRouter()
+	r.Get("/v1/models", h.ListModels)
+	r.Get("/v1/metrics", h.Metrics)
+	r.Get("/ready", h.Ready)
+	r.Post("/v1/chat/completions", h.Chat)
+	r.Post("/v1/messages", h.Chat)
+	r.Post("/v1/responses", h.Chat)
+	return r
 }
 
 func TestHandler_Ready_Ready(t *testing.T) {
@@ -79,7 +75,7 @@ func TestHandler_Ready_Ready(t *testing.T) {
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -96,7 +92,7 @@ func TestHandler_Ready_NotReady(t *testing.T) {
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", w.Code)
@@ -108,7 +104,7 @@ func TestHandler_ListModels_Empty(t *testing.T) {
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", w.Code)
@@ -124,7 +120,7 @@ func TestHandler_ListModels_WithData(t *testing.T) {
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -144,7 +140,7 @@ func TestHandler_Metrics(t *testing.T) {
 	req := httptest.NewRequest("GET", "/v1/metrics", nil)
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -165,7 +161,7 @@ func TestHandler_Chat_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -186,7 +182,7 @@ func TestHandler_Chat_UpstreamError_Returns502(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected status 502, got %d", w.Code)
@@ -205,7 +201,7 @@ func TestHandler_Chat_EmptyBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(""))
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -219,7 +215,7 @@ func TestHandler_Chat_MissingModel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -238,7 +234,7 @@ func TestHandler_Chat_StreamAddsStreamOptions(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -276,7 +272,7 @@ func TestHandler_Chat_StreamOptionsAlreadyPresent(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -310,7 +306,7 @@ func TestHandler_Chat_NonStreamNoStreamOptions(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -333,7 +329,7 @@ func TestHandler_Chat_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString("not json"))
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
@@ -347,7 +343,7 @@ func TestHandler_Chat_NormalizedHeaderDeepSeekFlash(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -367,7 +363,7 @@ func TestHandler_Chat_NoNormalizedHeaderWhenClean(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
@@ -384,7 +380,7 @@ func TestHandler_Chat_NormalizedHeaderClaudeStrip(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.Routes().ServeHTTP(w, req)
+	testRouter(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", w.Code)
