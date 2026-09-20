@@ -103,8 +103,14 @@ func (o *OpenCodeUpstream) Name() string {
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	// Client-version probe runs alongside the model catalog refresher so
 	// the advertised User-Agent tracks OpenCode releases. Fail-open: a
-	// failed probe keeps the fallback version.
-	go NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
+	// failed probe keeps the fallback version. Both refreshers share ctx
+	// and are joined so Server shutdown waits for the inner probe too.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
+	}()
 	refresher := NewRefresher("opencode", func(ctx context.Context) error {
 		models, err := o.ListModels(ctx)
 		if err != nil {
@@ -114,6 +120,7 @@ func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Durat
 		return nil
 	}, refreshInterval)
 	refresher.Run(ctx)
+	wg.Wait()
 }
 
 func (o *OpenCodeUpstream) Match(modelID string) bool {

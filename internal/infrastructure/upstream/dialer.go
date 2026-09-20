@@ -114,11 +114,19 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	select {
 	case <-ctx.Done():
 		// Drain the goroutine: if Dial succeeded after cancellation, close
-		// the connection so it is not leaked.
+		// the connection so it is not leaked. Bounded so a hung
+		// context-unaware Dial cannot pin this goroutine forever — after
+		// the grace period both the dial and the drain are abandoned and
+		// reaped when Dial eventually returns (buffered ch, no block).
 		go func() {
-			ce := <-ch
-			if ce.conn != nil {
-				ce.conn.Close()
+			timer := time.NewTimer(30 * time.Second)
+			defer timer.Stop()
+			select {
+			case ce := <-ch:
+				if ce.conn != nil {
+					ce.conn.Close()
+				}
+			case <-timer.C:
 			}
 		}()
 		return nil, ctx.Err()
