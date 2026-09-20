@@ -28,19 +28,18 @@ func NormalizeClaudeContent(body []byte) ([]byte, []string, error) {
 	if len(body) == 0 {
 		return body, nil, nil
 	}
-	// Fast path: without these keys there is nothing to strip.
-	if !bytes.Contains(body, []byte(`"content"`)) {
+	// Fast path: without these keys there is nothing to strip. Tools are
+	// checked separately: schemas with Unicode property escapes are
+	// dropped below even when no message content needs stripping.
+	hasContent := bytes.Contains(body, []byte(`"content"`))
+	hasBadPattern := bytes.Contains(body, []byte(`"tools"`)) && HasUnicodePropertyPattern(body)
+	if !hasContent && !hasBadPattern {
 		return body, nil, nil
 	}
 
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, nil, fmt.Errorf("prepost: normalize claude content: %w", err)
-	}
-
-	msgs, ok := raw["messages"].([]any)
-	if !ok || len(msgs) == 0 {
-		return body, nil, nil
 	}
 
 	var applied []string
@@ -52,6 +51,34 @@ func NormalizeClaudeContent(body []byte) ([]byte, []string, error) {
 		}
 		applied = append(applied, token)
 	}
+
+	// Drop Unicode-property regex patterns from tool schemas up front:
+	// strict providers reject \p{...} with invalid_request_error even on
+	// Claude-native endpoints.
+	if hasBadPattern {
+		if tools, ok := raw["tools"].([]any); ok {
+			dropped := 0
+			for _, t := range tools {
+				dropped += SanitizeUnsupportedPatterns(t)
+			}
+			if dropped > 0 {
+				mark(AppliedToolPatternDrop)
+			}
+		}
+	}
+
+	msgs, ok := raw["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		if len(applied) == 0 {
+			return body, nil, nil
+		}
+		out, err := json.Marshal(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("prepost: normalize claude content: marshal: %w", err)
+		}
+		return out, applied, nil
+	}
+
 	if stripRejectableBlocks(msgs) {
 		mark(AppliedClaudeStripEmpty)
 	}
