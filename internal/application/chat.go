@@ -39,8 +39,8 @@ func (s *ChatService) candidates(modelID string) []domain.Upstream {
 // logging, and metrics. Ordered upstream candidates are tried in turn:
 // transport errors, 429s, and 5xx fail over to the next candidate; the
 // first success — or the last failure when exhausted — is passed through
-// to the client verbatim. There is no IP rotation here: the user picks
-// the VPN exit server manually from the dashboard.
+// to the client verbatim. There is no IP rotation here: upstream requests
+// route through the enabled proxy pools (Vercel edge relays) in round-robin.
 type ChatService struct {
 	router         Router
 	metrics        *metrics.Metrics

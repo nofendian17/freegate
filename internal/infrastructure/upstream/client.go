@@ -62,23 +62,21 @@ func (k *keyCooldown) isLimited(key string) bool {
 func NewTransport() *http.Transport {
 	tr := &http.Transport{
 		// HTTP/2 multiplexes concurrent streams over a single TCP+TLS
-		// connection, so far fewer handshakes cross the lossy VPN tunnel
-		// (fresh tunnel handshakes intermittently die with EOF/TLS
-		// timeouts). All upstreams negotiate h2 (verified live); others
+		// connection, so far fewer handshakes cross lossy networks.
+		// All upstreams negotiate h2 (verified live); others
 		// fall back to HTTP/1.1 automatically.
 		ForceAttemptHTTP2:   true,
 		TLSHandshakeTimeout: 10 * time.Second,
 		// Fail fast on stalled upstreams so the same-tier retry and combo
 		// failover can try the next candidate: a healthy upstream sends
-		// response headers within seconds (streaming) and transient tunnel
-		// stalls resolve in ~10s, so 30s is ample headroom without parking
-		// a request for a minute on a dead tier.
+		// response headers within seconds (streaming), so 30s is ample
+		// headroom without parking a request for a minute on a dead tier.
 		ResponseHeaderTimeout: 30 * time.Second,
 		MaxIdleConns:          50,
 		MaxIdleConnsPerHost:   20,
 		// Must stay below the model refresh cadence (60s): a pooled
-		// connection blackholed by a VPN rotation (e.g. an h2 session with
-		// a stream in flight during OnConnect flush, so CloseIdleConnections
+		// connection blackholed mid-flight (e.g. an h2 session with
+		// a stream in flight during CloseIdleConnections, which
 		// misses it) would otherwise be reused by every refresh, and each
 		// failed reuse resets the idle clock — pinning the refresher on the
 		// dead session forever. At 30s the poisoned session ages out between
@@ -216,8 +214,8 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 
 // CloseIdleConnections drops pooled idle connections so the next request
 // redials. Used as a Refresher on-failure hook: a refresh that fails on a
-// blackholed pooled session (e.g. VPN rotation killed the TCP mid-flight)
-// must not let the next retry reuse the same dead session.
+// blackholed pooled session must not let the next retry reuse the same
+// dead session.
 func (c *HTTPClient) CloseIdleConnections() {
 	if c == nil || c.client == nil {
 		return

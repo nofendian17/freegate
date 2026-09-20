@@ -98,7 +98,7 @@ func syncRelayPools(pstore *providers.Store) {
 }
 
 // New constructs a Server from configuration. It wires all
-// dependencies (VPN, upstreams, application services, recorder, UI,
+// dependencies (upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
 // Use Run for that.
 func New(cfg *config.Config) (*Server, error) {

@@ -222,7 +222,7 @@ func TestLogger_SkipsDashboardAndProbeNoise(t *testing.T) {
 		{"dashboard root", "/"},
 		{"htmx stats partial", "/partials/stats"},
 		{"dashboard json api", "/api/health"},
-		{"vpn status poll", "/api/vpn/status"},
+		{"pools status poll", "/api/pools"},
 		{"static asset", "/static/css/app.css"},
 		{"metrics endpoint", "/v1/metrics"},
 		{"ready probe", "/v1/ready"},

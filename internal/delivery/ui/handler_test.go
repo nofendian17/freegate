@@ -130,10 +130,10 @@ func TestLoginPage_Renders(t *testing.T) {
 		}
 	}
 	// next param should be reflected in form action
-	req2 := httptest.NewRequest("GET", "/login?next=/api/vpn/status", nil)
+	req2 := httptest.NewRequest("GET", "/login?next=/api/pools", nil)
 	w2 := httptest.NewRecorder()
 	h.LoginPage(w2, req2)
-	if !strings.Contains(w2.Body.String(), "/api/vpn/status") {
+	if !strings.Contains(w2.Body.String(), "/api/pools") {
 		t.Errorf("login page should reflect next param in form")
 	}
 }
