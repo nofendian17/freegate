@@ -4,8 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"freegate/internal/domain"
 )
 
@@ -38,16 +36,4 @@ type Handler struct {
 
 func New(chat ChatProxy, models ModelLister, mtr MetricsProvider) *Handler {
 	return &Handler{chat: chat, models: models, mtr: mtr}
-}
-
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Get("/v1/models", h.ListModels)
-	r.Get("/v1/metrics", h.Metrics)
-	r.Get("/ready", h.Ready)
-	r.Post("/v1/chat/completions", h.Chat)
-	// Claude-native endpoint (optional, clients can also POST Claude bodies to /v1/chat/completions)
-	r.Post("/v1/messages", h.Chat)
-	r.Post("/v1/responses", h.Chat)
-	return r
 }

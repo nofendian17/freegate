@@ -25,41 +25,45 @@ type DataSource interface {
 	VPNIP() string
 }
 
-// VPNClient is the subset of the VPN controller the dashboard needs to
-// render the server picker, drive manual connects, and check connectivity.
-type VPNClient interface {
-	ListServers() ([]vpn.ServerInfo, error)
-	RefreshServers() ([]vpn.ServerInfo, error)
-	ConnectTo(hostname string) error
-	ForceNewIP() error
-	Status() (vpn.StatusInfo, error)
-	Ping() (vpn.PingResult, error)
-	SetDirect(direct bool) error
-	Direct() bool
-	CurrentIP() string
-	InstallHint() string
+// DirectSwitcher toggles upstream routing between direct (no tunnel) and
+// tunneled. Satisfied by the shared upstream Dialer.
+type DirectSwitcher interface {
+	SetDirect(direct bool)
+	IsDirect() bool
 }
 
 // Handler serves the dashboard UI.
 type Handler struct {
 	data       DataSource
-	vpn        VPNClient
+	vpn        vpn.Provider
+	direct     DirectSwitcher
 	templates  *template.Template
 	staticFS   fs.FS
 	adminToken string
 }
 
-// NewHandler creates a Handler with the given data source, VPN client,
-// parsed templates, and static FS. If adminToken is non-empty, Login/Logout
-// and dashboard auth flows are enabled.
-func NewHandler(data DataSource, vpn VPNClient, tpl *template.Template, staticFS fs.FS, adminToken ...string) *Handler {
+// nopDirect is a DirectSwitcher default that keeps tunnel routing.
+// Used when New is called with a nil switcher.
+type nopDirect struct{}
+
+func (nopDirect) SetDirect(bool) {}
+func (nopDirect) IsDirect() bool { return false }
+
+// New creates a Handler with the given data source, VPN provider, direct
+// switch, parsed templates, and static FS. If adminToken is non-empty,
+// Login/Logout and dashboard auth flows are enabled.
+func New(data DataSource, vpn vpn.Provider, direct DirectSwitcher, tpl *template.Template, staticFS fs.FS, adminToken ...string) *Handler {
 	var tok string
 	if len(adminToken) > 0 {
 		tok = adminToken[0]
 	}
+	if direct == nil {
+		direct = nopDirect{}
+	}
 	return &Handler{
 		data:       data,
 		vpn:        vpn,
+		direct:     direct,
 		templates:  tpl,
 		staticFS:   staticFS,
 		adminToken: tok,

@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,6 +44,11 @@ var (
 )
 
 // Supervisor owns the tunnel lifecycle and the current connection state.
+// All ctx/cancel/closed accesses are guarded by mu; use getCtx() instead
+// of reading s.ctx directly so Start racing Rotate/Close is race-free.
+// connects.Add is paired with the closed check under the same lock so
+// Close's connects.Wait can never run concurrently with Add when the
+// counter is zero (sync: WaitGroup misuse).
 type Supervisor struct {
 	cfg      Config
 	registry *serverRegistry
@@ -55,6 +57,9 @@ type Supervisor struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	// closed is set by Close under mu; enterConnect fails once set so no
+	// new Add can race with connects.Wait.
+	closed bool
 	wg     sync.WaitGroup
 
 	// connects tracks in-flight connect attempts from API callers so a
@@ -110,6 +115,14 @@ func (s *Supervisor) IsDirect() bool {
 	return s.direct
 }
 
+// getCtx returns the run context under lock. Nil when never started
+// (direct mode / tests).
+func (s *Supervisor) getCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx
+}
+
 // Start launches the SOCKS proxy and the background loops (reconnect +
 // IP refresher). In direct mode it only logs and succeeds. The SOCKS
 // listener is created synchronously so bind errors surface to the caller.
@@ -124,13 +137,16 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("socks listen %s: %w", s.socksAddr, err)
 	}
+	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.socksLn = ln
+	s.ctx = runCtx
+	s.cancel = cancel
+	s.closed = false
 	s.mu.Unlock()
-	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	// Background goroutines — tracked via WaitGroup.Go so shutdown waits
-	// for them.
+	// for them. Capture runCtx once so loops never re-read s.ctx (race).
 	s.wg.Go(func() {
 		if err := serveSOCKS(ln); err != nil {
 			if errors.Is(err, net.ErrClosed) {
@@ -140,8 +156,8 @@ func (s *Supervisor) Start(ctx context.Context) error {
 			}
 		}
 	})
-	s.wg.Go(s.reconnectLoop)
-	s.wg.Go(s.ipRefresher)
+	s.wg.Go(func() { s.reconnectLoop(runCtx) })
+	s.wg.Go(func() { s.ipRefresher(runCtx) })
 	return nil
 }
 
@@ -150,477 +166,24 @@ func (s *Supervisor) Start(ctx context.Context) error {
 // retries aggressively (2s) to minimize dead-tunnel windows. When another
 // rotation is already running (e.g. a request-triggered rotate), it waits
 // silently instead of logging or racing it.
-func (s *Supervisor) reconnectLoop() {
-	for {
-		if !sleepCtx(s.ctx, 0) {
-			slog.Info("vpngate: reconnect loop stopped")
-			return
-		}
-		if s.isConnected() {
-			if !sleepCtx(s.ctx, 5*time.Second) {
-				slog.Info("vpngate: reconnect loop stopped")
-				return
-			}
-			continue
-		}
-		if s.isRotating() {
-			if !sleepCtx(s.ctx, 2*time.Second) {
-				slog.Info("vpngate: reconnect loop stopped")
-				return
-			}
-			continue
-		}
-		slog.Info("vpngate: connecting to a vpn server")
-		if err := s.Rotate(); err != nil {
-			// Shutdown-triggered aborts are expected, not failures.
-			if !errors.Is(err, ErrRotationInProgress) && !errors.Is(err, context.Canceled) {
-				slog.Warn("vpngate: connect failed", "error", err)
-			}
-			if !sleepCtx(s.ctx, 2*time.Second) {
-				slog.Info("vpngate: reconnect loop stopped")
-				return
-			}
-			continue
-		}
-		slog.Info("vpngate: connected", "server", s.serverName(), "ip", s.CurrentIP())
-		if !sleepCtx(s.ctx, 5*time.Second) {
-			slog.Info("vpngate: reconnect loop stopped")
-			return
-		}
-	}
-}
-
-// Rotate tears down the current tunnel (if any) and connects to a
-// different server. Free VPNGate relays are flaky, so it tries up to
-// rotateAttempts servers before giving up. It blocks until a tunnel is up
-// or all attempts fail.
-//
-// Only one rotation runs at a time: concurrent callers (e.g. the reconnect
-// loop racing an explicit rotate request) are no-ops. The mutex is only
-// held for short state reads/writes, never while a tunnel is being brought
-// up, so control endpoints stay responsive during a slow rotation.
-func (s *Supervisor) Rotate() error {
-	// Registering before the rotation guard keeps Close's accounting
-	// conservative: it may wait for a rotation that then no-ops on the
-	// guard, never the reverse.
-	if err := s.enterConnect(); err != nil {
-		return err
-	}
-	defer s.connects.Done()
-
-	end, err := s.beginRotation()
-	if err != nil {
-		return err
-	}
-	defer end()
-
-	success := false
-	defer func() {
-		if !success {
-			s.mu.Lock()
-			s.connected = false
-			s.mu.Unlock()
-		}
-	}()
-
-	// Build the tried set from the current connection.
-	s.mu.Lock()
-	tried := map[string]bool{}
-	if s.current != nil {
-		tried[s.current.HostName] = true
-	}
-	s.mu.Unlock()
-
-	// Pick up to rotateAttempts candidates up-front: getServers may fetch
-	// the list over the network.
-	candidates := make([]vpn.Server, 0, rotateAttempts)
-	for len(candidates) < rotateAttempts {
-		server, err := s.registry.pickServer(tried)
-		if err != nil {
-			break
-		}
-		tried[server.HostName] = true
-		candidates = append(candidates, server)
-	}
-	if len(candidates) == 0 {
-		return fmt.Errorf("rotation failed: no servers matched the filters")
-	}
-
-	var lastErr error
-	for _, server := range candidates {
-		// Stop trying further candidates once shutdown started: a
-		// tunnel spawned now would outlive Close.
-		if err := s.shutdownStarted(); err != nil {
-			return err
-		}
-		if err := s.connectToServer(server); err != nil {
-			lastErr = err
-			slog.Warn("vpngate: connect attempt failed, trying another server", "server", server.HostName, "error", err)
-			continue
-		}
-		success = true
-		return nil
-	}
-	return fmt.Errorf("rotation failed after %d attempt(s): %w", len(candidates), lastErr)
-}
-
-// shutdownStarted reports context cancellation so long-running work can
-// bail out instead of racing Close. Nil-safe for supervisors constructed
-// without Start (tests).
-func (s *Supervisor) shutdownStarted() error {
-	if s.ctx == nil {
-		return nil
-	}
-	select {
-	case <-s.ctx.Done():
-		return fmt.Errorf("supervisor shutting down: %w", s.ctx.Err())
-	default:
-		return nil
-	}
-}
-
-// enterConnect registers an in-flight connect attempt. It fails once
-// shutdown has started, so a caller that passes here is guaranteed that
-// Close's wg.Wait (which runs after cancel) will wait for it — closing
-// the window where a tunnel could be spawned after Close returns.
-// Pair every successful call with s.connects.Done() via defer.
-func (s *Supervisor) enterConnect() error {
-	if err := s.shutdownStarted(); err != nil {
-		return err
-	}
-	s.connects.Add(1)
-	return nil
-}
-
-// sleepCtx waits for d, returning false as soon as ctx is cancelled so
-// background loops exit promptly on shutdown instead of sleeping through
-// it.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-// beginRotation acquires the single-rotation guard, or returns
-// ErrRotationInProgress if another rotation is already running. The
-// returned func releases the guard; call it via defer.
-func (s *Supervisor) beginRotation() (func(), error) {
-	s.mu.Lock()
-	if s.rotating {
-		s.mu.Unlock()
-		return nil, ErrRotationInProgress
-	}
-	s.rotating = true
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		s.rotating = false
-		s.mu.Unlock()
-	}, nil
-}
-
-// connectToServer tears down the current tunnel (if any) and brings up a
-// new one to the given server. The caller must hold the rotation guard.
-// The mutex is only held for short state reads/writes, never while the
-// tunnel is being killed or brought up, so control endpoints stay
-// responsive during a slow connect.
-func (s *Supervisor) connectToServer(server vpn.Server) error {
-	// Don't spawn a new tunnel while shutting down: a process started
-	// after Close ran would be orphaned holding the tun device.
-	if err := s.shutdownStarted(); err != nil {
-		return err
-	}
-	// Bounds this connect attempt; Background when never started (tests).
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	// Tear down the previous tunnel outside the lock so control
-	// endpoints stay responsive while the process is being killed.
-	s.mu.Lock()
-	old := s.cur
-	s.cur = nil
-	s.connected = false
-	s.mu.Unlock()
-	if old != nil {
-		old.stop(5 * time.Second)
-		old.removeCfg()
-	}
-
-	// stop() blocks until the process is reaped, which also destroys its
-	// tun device — no extra wait-for-device-down is needed before the
-	// next connect. Snapshot the interface list first so the new tunnel
-	// device can be told apart from pre-existing ones (system utuns on
-	// macOS, for example).
-	before := snapshotIfaces()
-
-	bin, err := findOpenVPN()
-	if err != nil {
-		return fmt.Errorf("openvpn binary: %w", err)
-	}
-	m, err := startOpenVPN(bin, server)
-	if err != nil {
-		return err
-	}
-	// Deliberately NOT tracked by the supervisor's WaitGroup: watch blocks
-	// on cmd.Wait until the process exits, and Close kills the process
-	// only after wg.Wait — adding it would deadlock shutdown. The done
-	// channel below is the synchronization point instead.
-	go s.watch(m)
-
-	ip, err := waitTunnelUp(ctx, m, before)
-	if err != nil {
-		m.stop(5 * time.Second)
-		return err
-	}
-
-	s.mu.Lock()
-	s.cur = m
-	s.current = &server
-	if ip == "" {
-		// The measured egress IP is often blank on slow relays: the
-		// check right after the tun device is up is best-effort and
-		// frequently times out. The relay's own address is a reliable
-		// stand-in — traffic exits at the relay — so /ip and the
-		// dashboard label stay populated instead of showing "—" until
-		// the refresher refines the value.
-		ip = server.IPAddr
-	}
-	s.ip = ip
-	s.connected = true
-	s.connectedAt = time.Now()
-	s.mu.Unlock()
-	// Flush point for pooled upstream connections: fires on every
-	// successful connect regardless of path (reconnect loop, manual
-	// Rotate, ConnectTo) so stale conns never survive a tunnel change.
-	if s.cfg.OnConnect != nil {
-		s.cfg.OnConnect()
-	}
-	return nil
-}
-
-// ConnectTo resolves a hostname from the cached server list and connects
-// to it, holding the rotation guard. This is the explicit user-driven
-// path. Only servers that pass the configured filters are connectable, so
-// the picker and the direct API agree on what the operator may select.
-func (s *Supervisor) ConnectTo(hostname string) error {
-	if err := s.enterConnect(); err != nil {
-		return err
-	}
-	defer s.connects.Done()
-
-	servers, err := s.registry.getServers()
-	if err != nil {
-		return fmt.Errorf("fetch server list: %w", err)
-	}
-	for _, sv := range servers {
-		if sv.HostName == hostname && s.registry.matches(sv) {
-			end, err := s.beginRotation()
-			if err != nil {
-				return err
-			}
-			defer end()
-			if err := s.connectToServer(sv); err != nil {
-				s.mu.Lock()
-				s.connected = false
-				s.mu.Unlock()
-				return err
-			}
-			return nil
-		}
-	}
-	return ErrServerNotFound
-}
-
-// watch waits for an openvpn process and marks the tunnel disconnected if
-// it was still the active one. It closes the process's done channel once
-// Wait has reaped the exit.
-func (s *Supervisor) watch(m *managedProcess) {
-	err := m.cmd.Wait()
-	close(m.done)
-
-	s.mu.Lock()
-	isCurrent := s.cur == m
-	if isCurrent {
-		s.cur = nil
-		s.connected = false
-	}
-	s.mu.Unlock()
-	m.removeCfg()
-
-	if !isCurrent {
-		return // a newer process replaced this one
-	}
-	if err != nil {
-		slog.Warn("vpngate: openvpn exited", "error", err)
-	} else {
-		slog.Info("vpngate: openvpn exited")
-	}
-}
-
-// ListServers returns the relay servers currently offered (after filters)
-// so a dashboard can render a picker.
-func (s *Supervisor) ListServers() ([]ServerInfo, error) {
-	if s.IsDirect() {
-		return nil, nil
-	}
-	return s.registry.listServers()
-}
-
-// RefreshServers forces a re-fetch of the live vpngate list (ignoring the
-// refresh interval) and returns the freshly filtered relays.
-func (s *Supervisor) RefreshServers() ([]ServerInfo, error) {
-	if s.IsDirect() {
-		return nil, nil
-	}
-	return s.registry.refreshServers()
-}
-
-// Status returns the supervisor's current tunnel state.
-func (s *Supervisor) Status() StatusInfo {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return StatusInfo{
-		Connected:   s.connected,
-		Server:      s.serverNameLocked(),
-		Country:     s.countryLocked(),
-		IP:          s.ip,
-		ConnectedAt: s.connectedAt.Unix(),
-	}
-}
-
-// Healthy reports whether the service should be considered up by health
-// checks: connected, or mid-rotation (it either succeeds or the reconnect
-// loop keeps retrying until it does).
-func (s *Supervisor) Healthy() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rotating || (s.connected && s.cur != nil)
-}
-
-// Ping performs a live connectivity check through the tunnel: DNS
-// resolution, then an HTTPS GET to a public IP echo service measuring
-// round-trip latency. This answers "is the VPN actually routing traffic?"
-// beyond the device being up — a tunnel can be connected while the relay
-// or the route is dead.
-func (s *Supervisor) Ping() PingResult {
-	res := PingResult{}
-	s.mu.Lock()
-	// Direct mode has no tunnel to probe; report it as such instead of
-	// failing DNS/egress checks (pre-consolidation parity).
-	if s.direct {
-		s.mu.Unlock()
-		return PingResult{Direct: true}
-	}
-	res.Connected = s.connected && s.cur != nil
-	if s.current != nil {
-		res.Server = s.current.HostName
-		res.Country = s.current.CountryLong
-	}
-	res.IP = s.ip
-	s.mu.Unlock()
-
-	if !res.Connected {
-		res.DNSError = "tunnel not connected"
-		res.EgressErr = "tunnel not connected"
-		return res
-	}
-
-	// DNS resolution through the tunnel (Docker DNS + relay routing).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	dnsStart := time.Now()
-	_, err := net.DefaultResolver.LookupHost(ctx, pingDNSHost)
-	dnsMS := time.Since(dnsStart).Milliseconds()
-	cancel()
-	res.DNSMS = dnsMS
-	if err != nil {
-		res.DNSError = err.Error()
-	} else {
-		res.DNSOK = true
-	}
-
-	// HTTPS egress probe through the tunnel with latency measurement.
-	// Tries the endpoint list in order so a single slow/down service
-	// (common through flaky free relays) does not report the tunnel as
-	// broken. Shares probeClient's connection pool; timeout per request.
-	var lastErr string
-	for _, u := range pingEgressURL {
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		httpStart := time.Now()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			cancel()
-			lastErr = err.Error()
-			continue
-		}
-		resp, err := probeClient.Do(req)
-		httpMS := time.Since(httpStart).Milliseconds()
-		cancel()
-		res.HTTPMS = httpMS
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		res.HTTPCode = resp.StatusCode
-		if resp.StatusCode == http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 128))
-			resp.Body.Close()
-			if ip := strings.TrimSpace(string(body)); ip != "" {
-				res.EgressOK = true
-				res.EgressIP = ip
-				return res
-			}
-			lastErr = fmt.Sprintf("status %d, empty body", resp.StatusCode)
-		} else {
-			resp.Body.Close()
-			lastErr = fmt.Sprintf("status %d", resp.StatusCode)
-		}
-	}
-	res.EgressErr = lastErr
-	if res.EgressErr == "" {
-		res.EgressErr = "no egress endpoint reachable"
-	}
-	return res
-}
-
-// CurrentIP returns the last known tunnel IP, or the literal "direct"
-// when no openvpn binary was found at construction.
-func (s *Supervisor) CurrentIP() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.direct {
-		return "direct"
-	}
-	return s.ip
-}
-
-// InstallHint returns an OS-specific hint for installing openvpn when the
-// supervisor fell back to direct mode.
-func (s *Supervisor) InstallHint() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.installHint
-}
 
 // Close stops background loops, shuts down the SOCKS listener, kills the
 // active tunnel, and removes its temp config.
 func (s *Supervisor) Close() error {
-	// Unblock the SOCKS accept loop first so wg.Wait is prompt.
+	// Mark closed and grab listener + cancel under one lock so no new
+	// enterConnect.Add can slip in after we start waiting.
 	s.mu.Lock()
 	ln := s.socksLn
 	s.socksLn = nil
+	s.closed = true
+	cancel := s.cancel
 	s.mu.Unlock()
 	if ln != nil {
 		ln.Close()
 	}
 
-	if s.cancel != nil {
-		s.cancel()
+	if cancel != nil {
+		cancel()
 	}
 	// Wait for background loops AND any in-flight API connect attempt:
 	// a Rotate/ConnectTo that passed enterConnect before cancel may still
@@ -678,54 +241,3 @@ func (s *Supervisor) countryLocked() string {
 // a slow egress check used to recycle healthy relays every ~40s. Dead
 // tunnels are detected by openvpn itself (ping-restart / connect-retry-max)
 // and replaced by the reconnect loop when the process exits.
-func (s *Supervisor) ipRefresher() {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			slog.Info("vpngate: IP refresher stopped")
-			return
-		case <-ticker.C:
-		}
-		// Skip this tick if the previous probe cycle is still running
-		// (single-flight): cycles can outlast the 15s tick on slow relays.
-		if !s.refreshBusy.CompareAndSwap(false, true) {
-			continue
-		}
-		s.refreshCycle(s.ctx)
-		s.refreshBusy.Store(false)
-	}
-}
-
-// refreshCycle runs one connected-check + bounded-retry IP probe. It
-// returns early when ctx is cancelled so Close is not delayed by retry
-// sleeps.
-func (s *Supervisor) refreshCycle(ctx context.Context) {
-	s.mu.Lock()
-	connected := s.connected && s.cur != nil
-	s.mu.Unlock()
-	if !connected {
-		return
-	}
-	// Egress probes through free relays routinely need a few tries
-	// before any echo service answers. Retry inside the tick so a
-	// slow-but-working tunnel fills the label in this cycle instead
-	// of waiting for the next tick.
-	for attempt := 0; attempt < ipRefreshAttempts; attempt++ {
-		ip, err := fetchPublicIP()
-		if err == nil && ip != "" {
-			s.mu.Lock()
-			if s.connected && s.cur != nil {
-				s.ip = ip
-			}
-			s.mu.Unlock()
-			break
-		}
-		slog.Debug("vpngate: ip refresh attempt failed",
-			"attempt", attempt+1, "error", err)
-		if attempt+1 < ipRefreshAttempts && !sleepCtx(ctx, ipRefreshRetryDelay) {
-			return
-		}
-	}
-}

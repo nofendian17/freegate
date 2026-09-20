@@ -29,6 +29,9 @@ type ProviderManager struct {
 	runCtx    context.Context
 	runs      map[string]context.CancelFunc
 	cancel    context.CancelFunc
+	// wg tracks background refresher goroutines so Stop waits for them
+	// instead of returning while they are still unwinding.
+	wg sync.WaitGroup
 }
 
 func NewProviderManager(s *providers.Store, tr *http.Transport) *ProviderManager {
@@ -117,15 +120,20 @@ func (m *ProviderManager) All() []*CustomUpstream {
 
 // startOne launches a background refresher for a custom upstream. It must
 // be called with m.mu held because it writes to m.runs. The goroutine
-// launch (go u.Start) is non-blocking, so lock hold time stays O(n) where
-// n is the number of upstreams — safe for the small counts involved.
+// is tracked by m.wg so Stop waits for it; the launch itself is
+// non-blocking, so lock hold time stays O(n) where n is the number of
+// upstreams — safe for the small counts involved.
 func (m *ProviderManager) startOne(name string, u *CustomUpstream, d time.Duration) {
 	if d <= 0 {
 		d = 60 * time.Second
 	}
 	child, cancel := context.WithCancel(m.runCtx)
 	m.runs[name] = cancel
-	go u.Start(child, d)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		u.Start(child, d)
+	}()
 }
 
 func (m *ProviderManager) reconcile() {
@@ -173,14 +181,22 @@ func (m *ProviderManager) Start(ctx context.Context) {
 
 func (m *ProviderManager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	cancels := make([]context.CancelFunc, 0, len(m.runs))
 	for name, c := range m.runs {
-		c()
+		cancels = append(cancels, c)
 		delete(m.runs, name)
 	}
 	if m.cancel != nil {
-		m.cancel()
+		cancels = append(cancels, m.cancel)
 		m.cancel = nil
 	}
 	m.runCtx = nil
+	m.mu.Unlock()
+	// Cancel outside the lock, then join: refreshers observe child Done
+	// and return, so Server never returns while they unwind. Rebuild's
+	// reconcile sees runCtx==nil under lock and will not Add during Wait.
+	for _, c := range cancels {
+		c()
+	}
+	m.wg.Wait()
 }

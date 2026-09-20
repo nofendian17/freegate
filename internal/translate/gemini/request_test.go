@@ -129,7 +129,7 @@ func TestGeminiToOpenAI_RoleModel(t *testing.T) {
 }
 
 func TestProcessGeminiChunk(t *testing.T) {
-	state := NewGeminiStreamState()
+	state := NewStreamState()
 
 	// First chunk
 	chunk := map[string]any{
@@ -140,7 +140,7 @@ func TestProcessGeminiChunk(t *testing.T) {
 			},
 		},
 	}
-	events := processGeminiChunk(chunk, state)
+	events := ProcessChunk(chunk, state)
 	if len(events) == 0 {
 		t.Fatal("expected events")
 	}
@@ -157,7 +157,7 @@ func TestProcessGeminiChunk(t *testing.T) {
 			},
 		},
 	}
-	processGeminiChunk(chunk2, state)
+	ProcessChunk(chunk2, state)
 	if state.textBuffer != "Hello world" {
 		t.Errorf("expected textBuffer=Hello world, got %s", state.textBuffer)
 	}
@@ -175,7 +175,7 @@ func TestProcessGeminiChunk(t *testing.T) {
 			"prompt_tokens": 5.0, "completion_tokens": 3.0,
 		},
 	}
-	events3 := processGeminiChunk(chunk3, state)
+	events3 := ProcessChunk(chunk3, state)
 	if !state.closed {
 		t.Error("expected state to be closed")
 	}
@@ -201,8 +201,8 @@ func TestProcessGeminiChunk(t *testing.T) {
 }
 
 func TestProcessGeminiChunk_Empty(t *testing.T) {
-	state := NewGeminiStreamState()
-	events := processGeminiChunk(map[string]any{}, state)
+	state := NewStreamState()
+	events := ProcessChunk(map[string]any{}, state)
 	if events != nil {
 		t.Error("expected nil for empty chunk")
 	}

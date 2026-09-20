@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func newTestHandler(t *testing.T) *Handler {
 	if err != nil {
 		t.Fatalf("LoadTemplates: %v", err)
 	}
-	return NewHandler(&fakeData{
+	return New(&fakeData{
 		metrics: map[string]any{
 			"total_requests":  int64(42),
 			"upstream_errors": int64(1),
@@ -54,7 +55,7 @@ func newTestHandler(t *testing.T) *Handler {
 		},
 		uptime: 90,
 		start:  time.Now().Add(-90 * time.Second).Unix(),
-	}, &fakeVPN{}, tpl, webStaticFS(t))
+	}, &fakeVPN{}, &fakeDirect{}, tpl, webStaticFS(t))
 }
 
 type fakeVPN struct {
@@ -63,19 +64,23 @@ type fakeVPN struct {
 	ping      vpn.PingResult
 	connectTo string
 	rotateErr error
-	direct    bool
 }
 
+func (f *fakeVPN) Start(ctx context.Context) error           { return nil }
+func (f *fakeVPN) Rotate() error                             { return f.rotateErr }
+func (f *fakeVPN) Close() error                              { return nil }
 func (f *fakeVPN) ListServers() ([]vpn.ServerInfo, error)    { return f.servers, nil }
 func (f *fakeVPN) RefreshServers() ([]vpn.ServerInfo, error) { return f.servers, nil }
-func (f *fakeVPN) ConnectTo(h string) error                      { f.connectTo = h; return nil }
-func (f *fakeVPN) ForceNewIP() error                             { return f.rotateErr }
+func (f *fakeVPN) ConnectTo(h string) error                  { f.connectTo = h; return nil }
 func (f *fakeVPN) Status() (vpn.StatusInfo, error)           { return f.status, nil }
 func (f *fakeVPN) Ping() (vpn.PingResult, error)             { return f.ping, nil }
-func (f *fakeVPN) SetDirect(v bool) error                        { f.direct = v; return nil }
-func (f *fakeVPN) Direct() bool                                  { return f.direct }
-func (f *fakeVPN) CurrentIP() string                             { return f.status.IP }
-func (f *fakeVPN) InstallHint() string                           { return "" }
+func (f *fakeVPN) CurrentIP() string                         { return f.status.IP }
+func (f *fakeVPN) InstallHint() string                       { return "" }
+
+type fakeDirect struct{ direct bool }
+
+func (f *fakeDirect) SetDirect(v bool) { f.direct = v }
+func (f *fakeDirect) IsDirect() bool   { return f.direct }
 
 func serveViaRoutes(h *Handler, method, target string) *httptest.ResponseRecorder {
 	rr := httptest.NewRecorder()
@@ -350,7 +355,7 @@ func TestAPIVPNPingDirectMode(t *testing.T) {
 	// dashboard can label the tunnel check as such.
 	h := newTestHandler(t)
 	fvpn := h.vpn.(*fakeVPN)
-	fvpn.direct = true
+	h.direct.(*fakeDirect).direct = true
 	fvpn.ping = vpn.PingResult{
 		Connected: true,
 		DNSOK:     true, DNSMS: 8,
@@ -381,7 +386,6 @@ func TestAPIVPNPingError(t *testing.T) {
 
 func TestAPIVPNDirect(t *testing.T) {
 	h := newTestHandler(t)
-	fvpn := h.vpn.(*fakeVPN)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":true}`))
@@ -390,7 +394,7 @@ func TestAPIVPNDirect(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
 	}
-	if !fvpn.direct {
+	if !h.direct.(*fakeDirect).direct {
 		t.Error("expected dialer to be switched to direct")
 	}
 	if !strings.Contains(rr.Body.String(), `"direct":true`) {
@@ -400,8 +404,7 @@ func TestAPIVPNDirect(t *testing.T) {
 
 func TestAPIVPNDirectBackToTunnel(t *testing.T) {
 	h := newTestHandler(t)
-	fvpn := h.vpn.(*fakeVPN)
-	fvpn.direct = true
+	h.direct.(*fakeDirect).direct = true
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/vpn/direct", strings.NewReader(`{"direct":false}`))
@@ -410,7 +413,7 @@ func TestAPIVPNDirectBackToTunnel(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if fvpn.direct {
+	if h.direct.(*fakeDirect).direct {
 		t.Error("expected dialer to be switched back to tunnel")
 	}
 }

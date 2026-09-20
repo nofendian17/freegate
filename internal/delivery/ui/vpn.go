@@ -38,7 +38,7 @@ func (h *Handler) apiVPNStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"direct":       h.vpn.Direct(),
+		"direct":       h.direct.IsDirect(),
 		"connected":    st.Connected,
 		"server":       st.Server,
 		"country":      st.Country,
@@ -62,10 +62,7 @@ func (h *Handler) apiVPNDirect(w http.ResponseWriter, r *http.Request) {
 		writeVPNJSONError(w, http.StatusBadRequest, "body must be {\"direct\": true|false}")
 		return
 	}
-	if err := h.vpn.SetDirect(*req.Direct); err != nil {
-		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
-		return
-	}
+	h.direct.SetDirect(*req.Direct)
 	writeVPNJSON(w, http.StatusOK, map[string]any{"direct": *req.Direct})
 }
 
@@ -104,14 +101,14 @@ func (h *Handler) apiVPNPing(w http.ResponseWriter, r *http.Request) {
 		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	res.Direct = h.vpn.Direct()
+	res.Direct = h.direct.IsDirect()
 	writeVPNJSON(w, http.StatusOK, res)
 }
 
 // apiVPNRotate disconnects and connects to a different random server
 // (manual equivalent of the old automatic 429 rotation).
 func (h *Handler) apiVPNRotate(w http.ResponseWriter, r *http.Request) {
-	if err := h.vpn.ForceNewIP(); err != nil {
+	if err := h.vpn.Rotate(); err != nil {
 		writeVPNJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}

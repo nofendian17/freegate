@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestNormalizeStream_MissingFinishReasonEOF_PreservesToolArgs(t *testing.T) 
 		"data: {\"id\":\"c1\",\"model\":\"muse-spark\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":null}]}\n"
 
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 
 	normalized := buf.String()
 	// Arguments ride inside a JSON string value, so they appear escaped.

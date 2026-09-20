@@ -114,15 +114,29 @@ func TestPrepareUpstreamWithModel_DeepSeekToolStopSkipped(t *testing.T) {
 
 func TestPrepareUpstreamWithModel_EmptyModelPreservesLegacy(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"assistant","content":"hi","reasoning":"think"}]}`)
-	want, _, err := PrepareUpstream(body)
+	got, applied, err := PrepareUpstreamWithModel(body, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	got, _, err := PrepareUpstreamWithModel(body, "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	var raw map[string]any
+	if err := json.Unmarshal(got, &raw); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
 	}
-	if string(got) != string(want) {
-		t.Errorf("expected legacy equivalence\ngot:  %s\nwant: %s", got, want)
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %v", raw["messages"])
+	}
+	m, _ := msgs[0].(map[string]any)
+	if m["reasoning_content"] != "think" {
+		t.Errorf("expected reasoning_content copied from reasoning, got %v", m["reasoning_content"])
+	}
+	found := false
+	for _, tok := range applied {
+		if tok == AppliedReasoningContent {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %q in applied tokens %v", AppliedReasoningContent, applied)
 	}
 }

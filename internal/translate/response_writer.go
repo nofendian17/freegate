@@ -30,9 +30,10 @@ type streamState struct {
 // calls and performs format-specific translation for both streaming
 // (SSE) and non-streaming (JSON) responses.
 //
-// All upstreams in the current hub-and-spoke design speak OpenAI, so the
-// default NewResponseWriter constructor assumes src=FormatOpenAI. To
-// translate from a non-OpenAI upstream, use NewResponseWriterWithDst.
+// All upstreams in the current hub-and-spoke design speak OpenAI, so
+// response writers are built with src=FormatOpenAI via
+// NewResponseWriterWithDst. To translate from a non-OpenAI upstream, pass
+// its format as src.
 type ResponseWriter struct {
 	inner         http.ResponseWriter
 	src           Format
@@ -42,13 +43,6 @@ type ResponseWriter struct {
 	buf           bytes.Buffer // for non-streaming buffering
 	state         *streamState
 	headerWritten bool
-}
-
-// NewResponseWriter creates a response translator for the given client
-// format. The upstream is assumed to speak OpenAI. This is the
-// constructor used by the existing handler; it remains source-compatible.
-func NewResponseWriter(w http.ResponseWriter, dst Format) *ResponseWriter {
-	return NewResponseWriterWithDst(w, FormatOpenAI, dst)
 }
 
 // NewResponseWriterWithDst creates a response translator that

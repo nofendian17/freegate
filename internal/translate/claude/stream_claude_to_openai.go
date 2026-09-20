@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // ClaudeToOpenAIState tracks per-stream state for the Claude → OpenAI
@@ -45,7 +47,7 @@ type c2oUsage struct {
 // and a creation timestamp.
 func NewClaudeToOpenAIState() *ClaudeToOpenAIState {
 	return &ClaudeToOpenAIState{
-		messageID: "msg_" + randID(12),
+		messageID: "msg_" + helpers.RandomID(12),
 		created:   time.Now().Unix(),
 		toolCalls: make(map[int]*c2oToolCall),
 	}
@@ -55,18 +57,9 @@ func NewClaudeToOpenAIState() *ClaudeToOpenAIState {
 // lines. Partial trailing data is retained for the next call.
 func (s *ClaudeToOpenAIState) Feed(p []byte) []string {
 	s.sseBuf.Write(p)
-	data := s.sseBuf.String()
-	var lines []string
-	for {
-		idx := strings.IndexByte(data, '\n')
-		if idx < 0 {
-			break
-		}
-		lines = append(lines, data[:idx])
-		data = data[idx+1:]
-	}
+	lines, rest := helpers.SplitSSE(s.sseBuf.String(), "\n")
 	s.sseBuf.Reset()
-	s.sseBuf.WriteString(data)
+	s.sseBuf.WriteString(rest)
 	return lines
 }
 
@@ -123,14 +116,14 @@ func (s *ClaudeToOpenAIState) onContentBlockStart(chunk map[string]any) []string
 		return nil
 	case "thinking":
 		s.inThinking = true
-		idx := asInt(chunk["index"])
+		idx := helpers.AsInt(chunk["index"])
 		s.thinkingBlock = &idx
 		// Emit the <think> marker as ordinary content.
 		return []string{s.chunkLine(map[string]any{"content": "<think>"}, nil)}
 	case "tool_use":
 		id, _ := block["id"].(string)
 		name, _ := block["name"].(string)
-		blockIdx := asInt(chunk["index"])
+		blockIdx := helpers.AsInt(chunk["index"])
 		tc := &c2oToolCall{Index: s.toolCallIndex, ID: id, Name: name}
 		s.toolCalls[blockIdx] = tc
 		s.toolCallIndex++
@@ -170,7 +163,7 @@ func (s *ClaudeToOpenAIState) onContentBlockDelta(chunk map[string]any) []string
 		if pj == "" {
 			return nil
 		}
-		blockIdx := asInt(chunk["index"])
+		blockIdx := helpers.AsInt(chunk["index"])
 		tc, ok := s.toolCalls[blockIdx]
 		if !ok {
 			return nil
@@ -186,7 +179,7 @@ func (s *ClaudeToOpenAIState) onContentBlockDelta(chunk map[string]any) []string
 }
 
 func (s *ClaudeToOpenAIState) onContentBlockStop(chunk map[string]any) []string {
-	blockIdx := asInt(chunk["index"])
+	blockIdx := helpers.AsInt(chunk["index"])
 	// Flush buffered + repaired tool arguments as a single delta so the
 	// client receives one valid JSON object (no duplicated/concatenated X}{Y).
 	if tc, ok := s.toolCalls[blockIdx]; ok && tc.Args.Len() > 0 {
@@ -200,7 +193,7 @@ func (s *ClaudeToOpenAIState) onContentBlockStop(chunk map[string]any) []string 
 		}, nil)}
 	}
 	if s.inThinking {
-		idx := asInt(chunk["index"])
+		idx := helpers.AsInt(chunk["index"])
 		if s.thinkingBlock != nil && *s.thinkingBlock == idx {
 			s.inThinking = false
 			s.thinkingBlock = nil
@@ -322,45 +315,19 @@ func (s *ClaudeToOpenAIState) finalChunk() string {
 // construct the map by hand in tests or upstream code).
 func parseClaudeUsage(u map[string]any) *c2oUsage {
 	out := &c2oUsage{}
-	if v, ok := asInt64(u["input_tokens"]); ok {
+	if v, ok := helpers.AsInt64(u["input_tokens"]); ok {
 		out.PromptTokens = v
 	}
-	if v, ok := asInt64(u["output_tokens"]); ok {
+	if v, ok := helpers.AsInt64(u["output_tokens"]); ok {
 		out.CompletionTokens = v
 	}
-	if v, ok := asInt64(u["cache_read_input_tokens"]); ok {
+	if v, ok := helpers.AsInt64(u["cache_read_input_tokens"]); ok {
 		out.CacheReadTokens = v
 	}
-	if v, ok := asInt64(u["cache_creation_input_tokens"]); ok {
+	if v, ok := helpers.AsInt64(u["cache_creation_input_tokens"]); ok {
 		out.CacheCreateTokens = v
 	}
 	out.PromptTokens = out.PromptTokens + out.CacheReadTokens + out.CacheCreateTokens
 	out.TotalTokens = out.PromptTokens + out.CompletionTokens
 	return out
-}
-
-// asInt64 coerces a JSON-decoded numeric value (typically float64) to
-// int64. Also accepts int and int64 for callers that build maps by hand.
-func asInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return int64(n), true
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	}
-	return 0, false
-}
-
-func asInt(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case int64:
-		return int(n)
-	}
-	return 0
 }

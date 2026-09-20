@@ -40,10 +40,6 @@ type OpenCodeUpstream struct {
 	messageModels  []string
 }
 
-func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
-	return NewOpenCodeUpstreamWithTransport(baseURL, apiKeys, NewTransport(d), freeAllowlist)
-}
-
 func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http.Transport, freeAllowlist []string) *OpenCodeUpstream {
 	// Static headers for catalog fetches (/models). Chat requests build
 	// compliant per-request Zen headers in ChatCompletion (see buildOpencodeHeaders),
@@ -107,8 +103,14 @@ func (o *OpenCodeUpstream) Name() string {
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	// Client-version probe runs alongside the model catalog refresher so
 	// the advertised User-Agent tracks OpenCode releases. Fail-open: a
-	// failed probe keeps the fallback version.
-	go NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
+	// failed probe keeps the fallback version. Both refreshers share ctx
+	// and are joined so Server shutdown waits for the inner probe too.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
+	}()
 	refresher := NewRefresher("opencode", func(ctx context.Context) error {
 		models, err := o.ListModels(ctx)
 		if err != nil {
@@ -116,8 +118,9 @@ func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Durat
 		}
 		o.cache.Set(models)
 		return nil
-	}, refreshInterval)
+	}, refreshInterval).WithOnFailure(o.client.CloseIdleConnections)
 	refresher.Run(ctx)
+	wg.Wait()
 }
 
 func (o *OpenCodeUpstream) Match(modelID string) bool {
@@ -507,10 +510,6 @@ var (
 )
 
 const opencodeIDChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-func genOpencodeID(prefix string) string {
-	return genOpencodeIDWithClock(prefix, false)
-}
 
 func genOpencodeIDWithClock(prefix string, complement bool) string {
 	now := time.Now().UnixMilli()

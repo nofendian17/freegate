@@ -3,6 +3,8 @@ package gemini
 import (
 	"bytes"
 	"encoding/json"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // StreamState tracks state for OpenAI → Gemini streaming translation.
@@ -18,18 +20,9 @@ type StreamState struct {
 // lines. Partial trailing data is retained for the next call.
 func (s *StreamState) Feed(p []byte) []string {
 	s.sseBuf.Write(p)
-	data := s.sseBuf.String()
-	var lines []string
-	for {
-		idx := bytes.IndexByte([]byte(data), '\n')
-		if idx < 0 {
-			break
-		}
-		lines = append(lines, data[:idx])
-		data = data[idx+1:]
-	}
+	lines, rest := helpers.SplitSSE(s.sseBuf.String(), "\n")
 	s.sseBuf.Reset()
-	s.sseBuf.WriteString(data)
+	s.sseBuf.WriteString(rest)
 	return lines
 }
 
@@ -139,17 +132,4 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 // NewStreamState creates a new Gemini streaming state.
 func NewStreamState() *StreamState {
 	return &StreamState{}
-}
-
-// --- Legacy aliases for backward compatibility with internal callers
-// that pre-date the public streaming API. ---
-
-// processGeminiChunk is the legacy name; new code should use ProcessChunk.
-func processGeminiChunk(chunk map[string]any, state *StreamState) []string {
-	return ProcessChunk(chunk, state)
-}
-
-// NewGeminiStreamState is the legacy name; new code should use NewStreamState.
-func NewGeminiStreamState() *StreamState {
-	return NewStreamState()
 }

@@ -7,8 +7,7 @@ import (
 )
 
 func TestRecorderRecordAndSnapshot(t *testing.T) {
-	r := NewRecorder(func() map[string]any { return nil })
-	r.SetModelsFunc(func() []domain.Model { return nil })
+	r := NewRecorderWithDeps(Deps{Metrics: func() map[string]any { return nil }, Models: func() []domain.Model { return nil }})
 
 	for i := 0; i < 5; i++ {
 		r.RecordRequestLog(domain.RequestLogEntry{
@@ -23,7 +22,7 @@ func TestRecorderRecordAndSnapshot(t *testing.T) {
 }
 
 func TestRecorderOverflow(t *testing.T) {
-	r := NewRecorder(func() map[string]any { return nil })
+	r := NewRecorderWithDeps(Deps{Metrics: func() map[string]any { return nil }})
 	for i := 0; i < 150; i++ {
 		r.RecordRequestLog(domain.RequestLogEntry{Model: "m"})
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 func TestProcessChunkBasic(t *testing.T) {
@@ -353,42 +355,9 @@ func TestMapFinishReason(t *testing.T) {
 	}
 }
 
-func TestSSEBuffer(t *testing.T) {
-	sb := &sseBuffer{}
-	lines := sb.Feed([]byte("data: hello\n\n"))
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-	if lines[0] != "data: hello" {
-		t.Errorf("unexpected content: %s", lines[0])
-	}
-}
-
-func TestSSEBufferPartial(t *testing.T) {
-	sb := &sseBuffer{}
-	// Feed incomplete message
-	lines := sb.Feed([]byte("data: "))
-	if len(lines) != 0 {
-		t.Errorf("expected 0 lines for partial, got %d", len(lines))
-	}
-	// Complete it
-	lines = sb.Feed([]byte("hello\n\n"))
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-}
-
-func TestSSEBufferMultiple(t *testing.T) {
-	sb := &sseBuffer{}
-	lines := sb.Feed([]byte("data: a\n\ndata: b\n\n"))
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d", len(lines))
-	}
-}
-
 func TestRandID(t *testing.T) {
-	id1 := randID(8)
-	id2 := randID(8)
+	id1 := helpers.RandomID(8)
+	id2 := helpers.RandomID(8)
 	if len(id1) != 8 {
 		t.Errorf("expected length 8, got %d", len(id1))
 	}
@@ -537,7 +506,7 @@ func BenchmarkProcessChunk(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ProcessChunk(chunk, state)
 	}
 }

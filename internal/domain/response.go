@@ -101,3 +101,17 @@ func hasFreeTierMarker(peek []byte) bool {
 	}
 	return probe.Type == "FreeTierError" || (probe.Error != nil && probe.Error.Type == "FreeTierError")
 }
+
+// IsRetryableStatus reports whether a response warrants failover to the next
+// upstream candidate: transport-level retryables (429/5xx) plus free-tier
+// access rejections, which are scoped to a specific upstream rather than the
+// request as a whole. Nil-safe: a nil response counts as retryable.
+func IsRetryableStatus(rsp *UpstreamResponse) bool {
+	if rsp == nil {
+		return true
+	}
+	if rsp.StatusCode == http.StatusTooManyRequests || rsp.StatusCode >= 500 {
+		return true
+	}
+	return rsp.StatusCode >= 400 && IsFreeTierRejection(rsp)
+}

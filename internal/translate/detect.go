@@ -120,32 +120,6 @@ func hasClaudeContentTypes(msgs []any) bool {
 	return false
 }
 
-// IsStreaming returns true if the body indicates streaming mode.
-func IsStreaming(body []byte, format Format) bool {
-	if len(body) == 0 {
-		return false
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return false
-	}
-	switch format {
-	case FormatOpenAI, FormatOpenAIResponses:
-		if s, ok := raw["stream"].(bool); ok {
-			return s
-		}
-	case FormatClaude:
-		if s, ok := raw["stream"].(bool); ok {
-			return s
-		}
-		// Non-streaming default for Claude
-		return false
-	case FormatGemini:
-		return false
-	}
-	return false
-}
-
 // ExtractModelID extracts the "model" field from a body (works for OpenAI and Claude).
 // Returns empty string if not found.
 func ExtractModelID(body []byte) string {
@@ -160,15 +134,4 @@ func ExtractModelID(body []byte) string {
 		return m
 	}
 	return ""
-}
-
-// SSE helper: isLineData returns true if line is an SSE data line.
-func isLineData(line string) bool {
-	return strings.HasPrefix(line, "data: ")
-}
-
-// SSE helper: extractData trims the "data: " prefix and trailing newlines.
-func extractData(line string) string {
-	s := strings.TrimPrefix(line, "data: ")
-	return strings.TrimRight(s, "\r\n")
 }

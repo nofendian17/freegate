@@ -57,31 +57,7 @@ type Server struct {
 	wg          sync.WaitGroup // tracks background workers
 }
 
-// vpnUI adapts the VPN provider for the dashboard: it wraps the Provider
-// (ListServers/ConnectTo/ForceNewIP/Status/Ping/CurrentIP) and adds the live
-// direct/tunnel switch backed by the shared upstream dialer.
-type vpnUI struct {
-	provider vpn.Provider
-	dialer   *upstream.Dialer
-}
-
-func (v *vpnUI) ListServers() ([]vpn.ServerInfo, error)    { return v.provider.ListServers() }
-func (v *vpnUI) RefreshServers() ([]vpn.ServerInfo, error) { return v.provider.RefreshServers() }
-func (v *vpnUI) ConnectTo(hostname string) error           { return v.provider.ConnectTo(hostname) }
-func (v *vpnUI) ForceNewIP() error                         { return v.provider.Rotate() }
-func (v *vpnUI) Status() (vpn.StatusInfo, error)           { return v.provider.Status() }
-func (v *vpnUI) Ping() (vpn.PingResult, error)             { return v.provider.Ping() }
-func (v *vpnUI) CurrentIP() string                         { return v.provider.CurrentIP() }
-func (v *vpnUI) InstallHint() string                       { return v.provider.InstallHint() }
-
-func (v *vpnUI) SetDirect(direct bool) error {
-	v.dialer.SetDirect(direct)
-	return nil
-}
-
-func (v *vpnUI) Direct() bool {
-	return v.dialer.IsDirect()
-}
+// upstreamToDomain flattens custom providers into the domain upstream list.
 
 func upstreamToDomain(all []*upstream.CustomUpstream) []domain.Upstream {
 	out := make([]domain.Upstream, 0, len(all))
@@ -101,11 +77,7 @@ func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
 	}
 	out := make([]upstream.ComboTierRow, 0, len(rows))
 	for _, c := range rows {
-		var ts []upstream.ComboTierInput
-		for _, tr := range c.Tiers {
-			ts = append(ts, upstream.ComboTierInput{Provider: tr.Provider, Model: tr.Model})
-		}
-		out = append(out, upstream.ComboTierRow{Name: c.Name, Tiers: ts})
+		out = append(out, upstream.ComboTierRow{Name: c.Name, Tiers: c.Tiers})
 	}
 	return out, nil
 }
@@ -219,7 +191,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.NewHandler(rec, &vpnUI{provider: vpnProvider, dialer: dialer}, tpl, web.Static(), cfg.AdminToken)
+	uiHandler := ui.New(rec, vpnProvider, dialer, tpl, web.Static(), cfg.AdminToken)
 	// Direct config for Responses models (e.g. muse-spark) and Messages
 	// models (e.g. union-alpha via /zen/v1/messages per 9router PR #4111).
 	handler.SetResponseModels(cfg.ResponseModels)

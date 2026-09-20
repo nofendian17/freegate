@@ -1,12 +1,12 @@
 package gemini
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // JSONToOpenAI converts a non-streaming Gemini-format response body to
@@ -29,7 +29,7 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("gemini: invalid JSONToOpenAI body: %w", err)
 	}
 
-	id := "chatcmpl-" + randomID(12)
+	id := "chatcmpl-" + helpers.RandomID(12)
 	created := time.Now().Unix()
 
 	choices := []any{}
@@ -100,7 +100,7 @@ func extractContentFromParts(parts []any) (string, []any) {
 			}
 			argsBytes, _ := json.Marshal(args)
 			toolCalls = append(toolCalls, map[string]any{
-				"id":    "call_gemini_" + name + "_" + randomID(6),
+				"id":    "call_gemini_" + name + "_" + helpers.RandomID(6),
 				"type":  "function",
 				"index": len(toolCalls),
 				"function": map[string]any{
@@ -116,16 +116,16 @@ func extractContentFromParts(parts []any) (string, []any) {
 func buildUsageOpenAI(um map[string]any) map[string]any {
 	out := map[string]any{}
 	var prompt, candidates, thoughts, cached int64
-	if v, ok := asInt64(um["promptTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["promptTokenCount"]); ok {
 		prompt = v
 	}
-	if v, ok := asInt64(um["candidatesTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["candidatesTokenCount"]); ok {
 		candidates = v
 	}
-	if v, ok := asInt64(um["thoughtsTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["thoughtsTokenCount"]); ok {
 		thoughts = v
 	}
-	if v, ok := asInt64(um["cachedContentTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["cachedContentTokenCount"]); ok {
 		cached = v
 	}
 	completion := candidates + thoughts
@@ -156,26 +156,4 @@ func mapFinishReasonOpenAI(reason string) string {
 	default:
 		return "stop"
 	}
-}
-
-func asInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return int64(n), true
-	case int:
-		return int64(n), true
-	case int64:
-		return n, true
-	}
-	return 0, false
-}
-
-func randomID(n int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		b[i] = chars[idx.Int64()]
-	}
-	return string(b)
 }

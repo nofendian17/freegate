@@ -200,18 +200,27 @@ func (r *serverRegistry) freshCache() ([]vpn.Server, bool) {
 // in-flight fetch, bounding how many such goroutines can pile up per key.
 func fetchServerList(refresh bool) (*[]vpn.Server, error) {
 	type result struct {
-		servers *[]vpn.Server
+		servers []vpn.Server
 		err     error
 	}
 	ch := make(chan result, 1)
 	go func() {
 		list, err := vpn.GetListWithOptions("", "", vpn.ListOptions{Refresh: refresh})
-		ch <- result{servers: list, err: err}
+		var servers []vpn.Server
+		if list != nil {
+			servers = *list
+		}
+		ch <- result{servers: servers, err: err}
 	}()
+	timer := time.NewTimer(listFetchTimeout)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
-		return r.servers, r.err
-	case <-time.After(listFetchTimeout):
+		if r.err != nil {
+			return nil, r.err
+		}
+		return &r.servers, nil
+	case <-timer.C:
 		return nil, fmt.Errorf("server list fetch timed out after %s", listFetchTimeout)
 	}
 }

@@ -156,5 +156,5 @@ func (u *CustomUpstream) Start(ctx context.Context, refreshInterval time.Duratio
 	NewRefresher("custom:"+u.name, func(ctx context.Context) error {
 		_, err := u.ListModels(ctx)
 		return err
-	}, refreshInterval).Run(ctx)
+	}, refreshInterval).WithOnFailure(u.client.CloseIdleConnections).Run(ctx)
 }

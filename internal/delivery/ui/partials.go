@@ -256,7 +256,7 @@ func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
 		HasModels:  len(models) > 0,
 		ModelCount: len(models),
 		VPNIP:      h.data.VPNIP(),
-		VPNDirect:  h.vpn.Direct(),
+		VPNDirect:  h.direct.IsDirect(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

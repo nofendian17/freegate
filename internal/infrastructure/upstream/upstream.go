@@ -12,8 +12,6 @@ const (
 	MaxBackoff           = 5 * time.Minute
 )
 
-type Upstream = domain.Upstream
-
 type Router struct {
 	upstreams       []domain.Upstream
 	defaultUpstream domain.Upstream

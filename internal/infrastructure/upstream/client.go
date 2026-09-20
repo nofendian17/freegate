@@ -66,12 +66,25 @@ func NewTransport(d *Dialer) *http.Transport {
 		// (fresh tunnel handshakes intermittently die with EOF/TLS
 		// timeouts). All upstreams negotiate h2 (verified live); others
 		// fall back to HTTP/1.1 automatically.
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 300 * time.Second,
+		ForceAttemptHTTP2:   true,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// Fail fast on stalled upstreams so the same-tier retry and combo
+		// failover can try the next candidate: a healthy upstream sends
+		// response headers within seconds (streaming) and transient tunnel
+		// stalls resolve in ~10s, so 30s is ample headroom without parking
+		// a request for a minute on a dead tier.
+		ResponseHeaderTimeout: 30 * time.Second,
 		MaxIdleConns:          50,
 		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       60 * time.Second,
+		// Must stay below the model refresh cadence (60s): a pooled
+		// connection blackholed by a VPN rotation (e.g. an h2 session with
+		// a stream in flight during OnConnect flush, so CloseIdleConnections
+		// misses it) would otherwise be reused by every refresh, and each
+		// failed reuse resets the idle clock — pinning the refresher on the
+		// dead session forever. At 30s the poisoned session ages out between
+		// refreshes and the next attempt redials. Chat traffic is unaffected
+		// (it reuses connections within seconds).
+		IdleConnTimeout: 30 * time.Second,
 	}
 	if d != nil {
 		tr.DialContext = d.DialContext
@@ -79,12 +92,15 @@ func NewTransport(d *Dialer) *http.Transport {
 	return tr
 }
 
-func NewHTTPClient(baseURL string, apiKeys []string, d *Dialer, headers map[string]string) *HTTPClient {
-	return NewHTTPClientWithTransport(baseURL, apiKeys, headers, NewTransport(d))
-}
-
-// NewHTTPClientWithTransport is like NewHTTPClient but reuses a shared Transport.
+// NewHTTPClientWithTransport builds an HTTPClient reusing a shared Transport.
 func NewHTTPClientWithTransport(baseURL string, apiKeys []string, headers map[string]string, tr *http.Transport) *HTTPClient {
+	if tr == nil {
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			tr = dt
+		} else {
+			tr = NewTransport(nil)
+		}
+	}
 	hc := &http.Client{Timeout: 0, Transport: tr}
 	if headers == nil {
 		headers = make(map[string]string)
@@ -198,6 +214,19 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
+}
+
+// CloseIdleConnections drops pooled idle connections so the next request
+// redials. Used as a Refresher on-failure hook: a refresh that fails on a
+// blackholed pooled session (e.g. VPN rotation killed the TCP mid-flight)
+// must not let the next retry reuse the same dead session.
+func (c *HTTPClient) CloseIdleConnections() {
+	if c == nil || c.client == nil {
+		return
+	}
+	if tr, ok := c.client.Transport.(interface{ CloseIdleConnections() }); ok && tr != nil {
+		tr.CloseIdleConnections()
+	}
 }
 
 // currentKey returns the API key used for this request. With multiple keys

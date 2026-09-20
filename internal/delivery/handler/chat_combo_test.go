@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"freegate/internal/application"
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/providers"
 	"freegate/internal/infrastructure/upstream"
 )
 
@@ -65,11 +67,11 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 			if raw.Model != "union-alpha" {
 				t.Errorf("messages: model=%q", raw.Model)
 			}
-		if len(raw.Tools) != 17 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
-			t.Errorf("messages: tools must carry name/input_schema plus 16 merged gate stubs, got %s", body)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+			if len(raw.Tools) != 17 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+				t.Errorf("messages: tools must carry name/input_schema plus 16 merged gate stubs, got %s", body)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			if _, ok := raw.Tools[0].InputSchema["properties"]; !ok {
 				t.Errorf("messages: input_schema lost properties, got %s", body)
 				w.WriteHeader(http.StatusBadRequest)
@@ -109,11 +111,11 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-		if len(raw.Tools) != 17 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
-			t.Errorf("chat: openai tools shape broken (want caller + 16 merged gate stubs), got %s", body)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+			if len(raw.Tools) != 17 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
+				t.Errorf("chat: openai tools shape broken (want caller + 16 merged gate stubs), got %s", body)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"`+raw.Model+`","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":5,"total_tokens":13}}`)
 		default:
@@ -122,11 +124,11 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 	}
 }
 
-func comboTestHandler(t *testing.T, z *zenWire, tiers []upstream.ComboTierInput) *Handler {
+func comboTestHandler(t *testing.T, z *zenWire, tiers []providers.ComboTier) *Handler {
 	t.Helper()
 	srv := httptest.NewServer(z.serve(t))
 	t.Cleanup(srv.Close)
-	oc := upstream.NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	oc := upstream.NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, nil)
 	cr := upstream.NewComboRouter(upstream.NewRouter(oc))
 	cr.RebuildCombos([]upstream.ComboTierRow{{Name: "assistant", Tiers: tiers}}, func(name string) domain.Upstream {
 		return oc
@@ -136,7 +138,7 @@ func comboTestHandler(t *testing.T, z *zenWire, tiers []upstream.ComboTierInput)
 
 func openAIToolsBody(model, path string, stream bool) string {
 	var buf bytes.Buffer
-	buf.WriteString(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`)
+	buf.WriteString(fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`, model))
 	if stream {
 		buf.WriteString(`,"stream":true`)
 	}
@@ -147,7 +149,7 @@ func openAIToolsBody(model, path string, stream bool) string {
 
 func TestChat_ComboMessagesTier_OpenAIClient(t *testing.T) {
 	z := &zenWire{}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{{Provider: "opencode", Model: "union-alpha"}})
+	h := comboTestHandler(t, z, []providers.ComboTier{{Provider: "opencode", Model: "union-alpha"}})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(openAIToolsBody("assistant", "", false)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -177,7 +179,7 @@ func TestChat_ComboMessagesTier_OpenAIClient(t *testing.T) {
 
 func TestChat_ComboMessagesTier_ClaudeClient(t *testing.T) {
 	z := &zenWire{}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{{Provider: "opencode", Model: "union-alpha"}})
+	h := comboTestHandler(t, z, []providers.ComboTier{{Provider: "opencode", Model: "union-alpha"}})
 	body := `{"model":"assistant","max_tokens":64,"messages":[{"role":"user","content":"hi"}],"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}]}`
 	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -208,7 +210,7 @@ func TestChat_ComboMessagesTier_ClaudeClient(t *testing.T) {
 
 func TestChat_ComboMessagesTier_Streaming(t *testing.T) {
 	z := &zenWire{}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{{Provider: "opencode", Model: "union-alpha"}})
+	h := comboTestHandler(t, z, []providers.ComboTier{{Provider: "opencode", Model: "union-alpha"}})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(openAIToolsBody("assistant", "", true)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -227,7 +229,7 @@ func TestChat_ComboMessagesTier_Streaming(t *testing.T) {
 
 func TestChat_ComboMessagesTier_FailoverToOpenAI(t *testing.T) {
 	z := &zenWire{failMsg: true}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{
+	h := comboTestHandler(t, z, []providers.ComboTier{
 		{Provider: "opencode", Model: "union-alpha"},
 		{Provider: "opencode", Model: "gpt-plain"},
 	})
@@ -258,7 +260,7 @@ func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
 	// Downstream Zen identity headers must NOT reach the upstream:
 	// freegate always mints fresh canonical identity instead.
 	z := &zenWire{}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{{Provider: "opencode", Model: "union-alpha"}})
+	h := comboTestHandler(t, z, []providers.ComboTier{{Provider: "opencode", Model: "union-alpha"}})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(openAIToolsBody("assistant", "", false)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "opencode/1.18.31")
@@ -305,7 +307,7 @@ func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
 
 func TestChat_ComboMessagesTier_FreeTierRejectionFailsOver(t *testing.T) {
 	z := &zenWire{fail403: true}
-	h := comboTestHandler(t, z, []upstream.ComboTierInput{
+	h := comboTestHandler(t, z, []providers.ComboTier{
 		{Provider: "opencode", Model: "union-alpha"},
 		{Provider: "opencode", Model: "gpt-plain"},
 	})

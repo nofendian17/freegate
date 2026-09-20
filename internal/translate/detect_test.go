@@ -119,42 +119,6 @@ func TestExtractModelID(t *testing.T) {
 	}
 }
 
-func TestIsStreaming(t *testing.T) {
-	tests := []struct {
-		body   string
-		format Format
-		want   bool
-	}{
-		{`{"stream":true}`, FormatOpenAI, true},
-		{`{"stream":false}`, FormatOpenAI, false},
-		{`{}`, FormatOpenAI, false},
-		{`{"stream":true}`, FormatClaude, true},
-	}
-	for _, tt := range tests {
-		got := IsStreaming([]byte(tt.body), tt.format)
-		if got != tt.want {
-			t.Errorf("IsStreaming(%q, %s) = %v, want %v", tt.body, tt.format, got, tt.want)
-		}
-	}
-}
-
-func TestIsLineData(t *testing.T) {
-	if !isLineData("data: hello") {
-		t.Error("expected true for 'data: hello'")
-	}
-	if isLineData("event: message") {
-		t.Error("expected false for 'event: message'")
-	}
-}
-
-func TestExtractData(t *testing.T) {
-	got := extractData("data: {\"key\":\"val\"}\n")
-	want := `{"key":"val"}`
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
 func TestDetect_Responses_Basic(t *testing.T) {
 	body := []byte(`{"model":"muse-spark-1.2-contributor-free","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
 	if f := Detect(body); f != Format("openai-responses") {

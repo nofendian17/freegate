@@ -3,6 +3,8 @@ package responses
 import (
 	"encoding/json"
 	"fmt"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // JSONToOpenAI translates a Responses API JSON response to OpenAI Chat Completion.
@@ -147,13 +149,13 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 
 	// Usage mapping
 	if u, ok := raw["usage"].(map[string]any); ok {
-		inputTokens := intVal(u["input_tokens"])
+		inputTokens := helpers.AsInt(u["input_tokens"])
 		if inputTokens == 0 {
-			inputTokens = intVal(u["prompt_tokens"])
+			inputTokens = helpers.AsInt(u["prompt_tokens"])
 		}
-		outputTokens := intVal(u["output_tokens"])
+		outputTokens := helpers.AsInt(u["output_tokens"])
 		if outputTokens == 0 {
-			outputTokens = intVal(u["completion_tokens"])
+			outputTokens = helpers.AsInt(u["completion_tokens"])
 		}
 		out["usage"] = map[string]any{
 			"prompt_tokens":     inputTokens,
@@ -269,8 +271,8 @@ func JSONToResponses(body []byte) ([]byte, error) {
 
 	out["output"] = output
 	if u, ok := raw["usage"].(map[string]any); ok {
-		prompt := intVal(u["prompt_tokens"])
-		comp := intVal(u["completion_tokens"])
+		prompt := helpers.AsInt(u["prompt_tokens"])
+		comp := helpers.AsInt(u["completion_tokens"])
 		out["usage"] = map[string]any{
 			"input_tokens":  prompt,
 			"output_tokens": comp,
@@ -282,19 +284,6 @@ func JSONToResponses(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("responses: marshal responses: %w", err)
 	}
 	return b, nil
-}
-
-func intVal(v any) int {
-	switch x := v.(type) {
-	case float64:
-		return int(x)
-	case int:
-		return x
-	case int64:
-		return int(x)
-	default:
-		return 0
-	}
 }
 
 func joinStrings(parts []string) string {

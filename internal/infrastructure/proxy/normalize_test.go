@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"freegate/internal/domain"
@@ -68,53 +69,10 @@ func TestSyncReasoning_Neither(t *testing.T) {
 	}
 }
 
-func TestNormalizeSSELine_NormalData(t *testing.T) {
-	line := `data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n"
-	result := normalizeSSELine(line)
-	if !strings.HasPrefix(result, "data: ") {
-		t.Error("expected line to start with 'data: '")
-	}
-	if !strings.Contains(result, `"content":"hi"`) {
-		t.Error("expected content to be preserved")
-	}
-}
-
-func TestNormalizeSSELine_Done(t *testing.T) {
-	line := "data: [DONE]\n"
-	result := normalizeSSELine(line)
-	if result != line {
-		t.Errorf("expected [DONE] to pass through unchanged, got %v", result)
-	}
-}
-
-func TestNormalizeSSELine_MalformedJSON(t *testing.T) {
-	line := "data: {invalid json}\n"
-	result := normalizeSSELine(line)
-	if result != line {
-		t.Error("expected malformed JSON to pass through unchanged")
-	}
-}
-
-func TestNormalizeSSELine_NonDataLine(t *testing.T) {
-	line := "event: message\n"
-	result := normalizeSSELine(line)
-	if result != line {
-		t.Error("expected non-data line to pass through unchanged")
-	}
-}
-
-func TestNormalizeSSELine_EmptyData(t *testing.T) {
-	line := "data: \n"
-	result := normalizeSSELine(line)
-	if result != line {
-		t.Error("expected empty data to pass through unchanged")
-	}
-}
-
 func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning":"thinking"`) {
@@ -128,7 +86,7 @@ func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	input := `{"choices":[{"message":{"reasoning_content":"analysis"}}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning":"analysis"`) {
@@ -144,7 +102,7 @@ func TestNormalizeJSON_EmptyContentAssignedNull(t *testing.T) {
 	// and finish_reason null. Strict OpenAI clients reject the missing field.
 	input := `{"choices":[{"index":0,"message":{"role":"assistant"},"finish_reason":null}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"content":null`) {
@@ -158,7 +116,7 @@ func TestNormalizeJSON_EmptyContentAssignedNull(t *testing.T) {
 func TestNormalizeJSON_EmptyContentWithToolCalls_Untouched(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]}}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	// tool_calls choices may omit content per the OpenAI spec; the fix must
@@ -174,7 +132,7 @@ func TestNormalizeJSON_EmptyContentWithToolCalls_Untouched(t *testing.T) {
 func TestNormalizeJSON_ExistingContentUnchanged(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"content":"hi"`) {
@@ -188,7 +146,7 @@ func TestNormalizeJSON_ExistingContentUnchanged(t *testing.T) {
 func TestNormalizeJSON_InvalidJSON(t *testing.T) {
 	input := "not json at all"
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if output != input {
@@ -213,12 +171,12 @@ func (m *mockResponseWriter) WriteHeader(code int)        { m.code = code }
 
 func TestCopyNormalized_Streaming(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought\"}}]}\ndata: [DONE]\n"
-	src := &http.Response{
+	src := &domain.UpstreamResponse{
 		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:   io.NopCloser(strings.NewReader(input)),
 	}
 	w := newMockResponseWriter()
-	_, _ = copyNormalized(w, src)
+	_, _ = copyNormalizedDomainWithContext(context.Background(), w, src)
 	output := w.buf.String()
 
 	if !strings.Contains(output, `"reasoning":"thought"`) {
@@ -232,12 +190,12 @@ func TestCopyNormalized_Streaming(t *testing.T) {
 
 func TestCopyNormalized_JSON(t *testing.T) {
 	input := `{"choices":[{"message":{"reasoning":"thought"}}]}`
-	src := &http.Response{
+	src := &domain.UpstreamResponse{
 		Header: http.Header{"Content-Type": []string{"application/json"}},
 		Body:   io.NopCloser(strings.NewReader(input)),
 	}
 	w := newMockResponseWriter()
-	_, _ = copyNormalized(w, src)
+	_, _ = copyNormalizedDomainWithContext(context.Background(), w, src)
 	output := w.buf.String()
 
 	if !strings.Contains(output, `"reasoning":"thought"`) {
@@ -256,7 +214,7 @@ func TestCopyNormalized_JSON(t *testing.T) {
 func TestNormalizeStream_DeepSeekDoubleResponse(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"step\",\"reasoning_content\":\"step\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning_content":"step"`) {
@@ -272,7 +230,7 @@ func TestNormalizeStream_DeepSeekDoubleResponse(t *testing.T) {
 func TestNormalizeJSON_DeepSeekDoubleResponse(t *testing.T) {
 	input := `{"choices":[{"message":{"reasoning":"step","reasoning_content":"step"}}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"reasoning_content":"step"`) {
@@ -315,7 +273,7 @@ func TestNormalizeStream_RepairsToolArgs(t *testing.T) {
 		"data: [DONE]\n"
 
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	// The incremental fragments must NOT be emitted verbatim — exactly one
@@ -354,7 +312,7 @@ func TestNormalizeJSON_RepairsToolArgs(t *testing.T) {
 	}
 	b, _ := json.Marshal(resp)
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(string(b)))
+	normalizeJSONWithMeta(&buf, strings.NewReader(string(b)), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"arguments":"{\"cmd\":\"echo hello\"}"`) {
@@ -394,13 +352,13 @@ func TestExtractErrorMessage_EmptyAndLarge(t *testing.T) {
 }
 
 func TestPassThroughError_CapturesAndForwards(t *testing.T) {
-	resp := &http.Response{
+	resp := &domain.UpstreamResponse{
 		StatusCode: http.StatusTooManyRequests,
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"slow down"}}`)),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 	}
 	rec := httptest.NewRecorder()
-	msg := PassThroughError(rec, resp)
+	msg := PassThroughDomainError(rec, resp)
 
 	if msg != "slow down" {
 		t.Errorf("captured msg = %q, want %q", msg, "slow down")
@@ -423,7 +381,7 @@ func TestPassThroughError_CapturesAndForwards(t *testing.T) {
 func TestNormalizeJSON_StripsDeepSeekScaffolding(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"fix done\n<system-reminder>prior session</reminder>\n\\ No newline at end of file\n<feature-flag><feature-flag-name>x</feature-flag-name></feature-flag>"},"finish_reason":"stop"}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	for _, leak := range []string{"system-reminder", "feature-flag", "No newline", "</reminder>"} {
@@ -442,7 +400,7 @@ func TestNormalizeJSON_StripsDeepSeekScaffolding(t *testing.T) {
 func TestNormalizeStream_StripsDeepSeekScaffolding(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"content\":\"hi <system-reminder>leak</system-reminder> bye\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	if strings.Contains(output, "system-reminder") || strings.Contains(output, "leak") {
@@ -461,7 +419,7 @@ func TestNormalizeJSON_TruncatesDsmlInToolArgs(t *testing.T) {
 	args := `{"alpha":"first</` + d + `>\n<` + d + "parameter name=\\\"beta\\\" string=\\\"true\\\">second\"}"
 	input := `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":` + strconv.Quote(args) + `}}]},"finish_reason":"tool_calls"}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if strings.Contains(output, "DSML") {
@@ -478,7 +436,7 @@ func TestNormalizeJSON_TruncatesDsmlInToolArgs(t *testing.T) {
 func TestNormalizeJSON_UnwrapsDataEnvelope(t *testing.T) {
 	input := `{"data":{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`
 	var buf bytes.Buffer
-	usage := normalizeJSON(&buf, strings.NewReader(input))
+	usage := normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	var out map[string]any
@@ -503,7 +461,7 @@ func TestNormalizeJSON_UnwrapsDataEnvelope(t *testing.T) {
 func TestNormalizeJSON_TrailingDataRecovery(t *testing.T) {
 	input := "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n{\"usage\":{\"total_tokens\":9}}"
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	var out map[string]any
@@ -523,7 +481,7 @@ func TestNormalizeJSON_TrailingDataRecovery(t *testing.T) {
 func TestNormalizeJSON_NullFinishReasonSynthesized(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"stop"`) {
@@ -534,7 +492,7 @@ func TestNormalizeJSON_NullFinishReasonSynthesized(t *testing.T) {
 func TestNormalizeJSON_EmptyStringFinishReasonSynthesized(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":""}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"stop"`) {
@@ -545,7 +503,7 @@ func TestNormalizeJSON_EmptyStringFinishReasonSynthesized(t *testing.T) {
 func TestNormalizeJSON_ToolCallsFinishReasonSynthesized(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
@@ -556,7 +514,7 @@ func TestNormalizeJSON_ToolCallsFinishReasonSynthesized(t *testing.T) {
 func TestNormalizeJSON_RealFinishReasonPreserved(t *testing.T) {
 	input := `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"length"}]}`
 	var buf bytes.Buffer
-	normalizeJSON(&buf, strings.NewReader(input))
+	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"length"`) {
@@ -572,7 +530,7 @@ func TestNormalizeStream_SynthesizesFinishChunk(t *testing.T) {
 	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n" +
 		"data: [DONE]\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"stop"`) {
@@ -601,7 +559,7 @@ func TestNormalizeStream_TencentHy3_TriggersFinishChunk(t *testing.T) {
 	}) + "data: [DONE]\n"
 
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	if !strings.Contains(output, `"finish_reason":"tool_calls"`) {
@@ -617,7 +575,7 @@ func TestNormalizeStream_TencentHy3_TriggersFinishChunk(t *testing.T) {
 func TestNormalizeStream_MissingFinishReasonEOF(t *testing.T) {
 	input := "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
 	var lastChunk map[string]any
@@ -653,7 +611,7 @@ func TestNormalizeStream_MissingFinishReasonEOF(t *testing.T) {
 func TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream(t *testing.T) {
 	input := "data: {\"id\":\"c1\",\"model\":\"muse-spark\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n"
 	var buf bytes.Buffer
-	normalizeOpenAIStream(&buf, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 
 	state := claude.NewStreamState()
 	var events []string
@@ -725,12 +683,12 @@ func TestNormalizeClaudeStream_DropsPostStopReplay(t *testing.T) {
 		``,
 	}, "\n") + "\n"
 
-	src := &http.Response{
+	src := &domain.UpstreamResponse{
 		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:   io.NopCloser(strings.NewReader(input)),
 	}
 	w := newMockResponseWriter()
-	_, _ = copyNormalized(w, src)
+	_, _ = copyNormalizedDomainWithContext(context.Background(), w, src)
 	output := w.buf.String()
 
 	// The tool call must appear exactly once: a single arguments delta

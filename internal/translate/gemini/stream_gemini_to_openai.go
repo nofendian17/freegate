@@ -3,8 +3,9 @@ package gemini
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 	"time"
+
+	"freegate/internal/translate/internal/helpers"
 )
 
 // GeminiToOpenAIState tracks per-stream state for the Gemini → OpenAI
@@ -42,7 +43,7 @@ type g2oUsage struct {
 // and a creation timestamp.
 func NewGeminiToOpenAIState() *GeminiToOpenAIState {
 	return &GeminiToOpenAIState{
-		messageID: randomID(12),
+		messageID: helpers.RandomID(12),
 		created:   time.Now().Unix(),
 		toolCalls: make(map[int]*g2oToolCall),
 	}
@@ -52,18 +53,9 @@ func NewGeminiToOpenAIState() *GeminiToOpenAIState {
 // lines. Partial trailing data is retained for the next call.
 func (s *GeminiToOpenAIState) Feed(p []byte) []string {
 	s.sseBuf.Write(p)
-	data := s.sseBuf.String()
-	var lines []string
-	for {
-		idx := strings.IndexByte(data, '\n')
-		if idx < 0 {
-			break
-		}
-		lines = append(lines, data[:idx])
-		data = data[idx+1:]
-	}
+	lines, rest := helpers.SplitSSE(s.sseBuf.String(), "\n")
 	s.sseBuf.Reset()
-	s.sseBuf.WriteString(data)
+	s.sseBuf.WriteString(rest)
 	return lines
 }
 
@@ -156,7 +148,7 @@ func (s *GeminiToOpenAIState) ProcessChunk(chunk map[string]any) []string {
 				args = map[string]any{}
 			}
 			argsBytes, _ := json.Marshal(args)
-			tc := &g2oToolCall{Index: s.toolCallIndex, ID: "call_gemini_" + name + "_" + randomID(6), Name: name}
+			tc := &g2oToolCall{Index: s.toolCallIndex, ID: "call_gemini_" + name + "_" + helpers.RandomID(6), Name: name}
 			s.toolCalls[i] = tc
 			s.toolCallIndex++
 			results = append(results, s.chunkLine(map[string]any{
@@ -250,16 +242,16 @@ func (s *GeminiToOpenAIState) finalChunk() string {
 // internal g2oUsage form.
 func parseGeminiUsage(um map[string]any) *g2oUsage {
 	out := &g2oUsage{}
-	if v, ok := asInt64(um["promptTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["promptTokenCount"]); ok {
 		out.PromptTokens = v
 	}
-	if v, ok := asInt64(um["candidatesTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["candidatesTokenCount"]); ok {
 		out.CandidatesTokens = v
 	}
-	if v, ok := asInt64(um["thoughtsTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["thoughtsTokenCount"]); ok {
 		out.ThoughtsTokens = v
 	}
-	if v, ok := asInt64(um["cachedContentTokenCount"]); ok {
+	if v, ok := helpers.AsInt64(um["cachedContentTokenCount"]); ok {
 		out.CachedTokens = v
 	}
 	return out

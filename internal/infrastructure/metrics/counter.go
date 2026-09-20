@@ -25,12 +25,16 @@ func New() *Metrics {
 }
 
 // IncrUpstream increments the counter for the given upstream name.
+// Safe on a zero-value Metrics (the per-upstream map is created on demand).
 func (m *Metrics) IncrUpstream(name string) {
 	m.mu.RLock()
 	counter, ok := m.perUp[name]
 	m.mu.RUnlock()
 	if !ok {
 		m.mu.Lock()
+		if m.perUp == nil {
+			m.perUp = make(map[string]*atomic.Int64)
+		}
 		counter, ok = m.perUp[name]
 		if !ok {
 			counter = &atomic.Int64{}

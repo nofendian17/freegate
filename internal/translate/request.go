@@ -104,49 +104,12 @@ func Request(body []byte, source, target Format) ([]byte, error) {
 	return out, nil
 }
 
-// NormalizeRoles converts OpenAI "developer" role messages to "system"
-// for upstream compatibility. Providers like DeepSeek do not support the
-// "developer" role (introduced by OpenAI for o-series models). Since
-// "developer" is semantically equivalent to "system", normalizing it
-// before forwarding ensures broad compatibility.
-//
-// Uses a cheap byte scan to avoid JSON parsing when no "developer"
-// substring exists in the body.
-func NormalizeRoles(body []byte) ([]byte, error) {
-	return prepost.NormalizeRoles(body)
-}
-
-// NormalizeRequestReasoning copies "reasoning" to "reasoning_content" for
-// assistant messages where the former is present but the latter is absent.
-// DeepSeek thinking mode requires reasoning_content in conversation history;
-// some clients only pass back the proxy-normalized "reasoning" field.
-func NormalizeRequestReasoning(body []byte) ([]byte, error) {
-	return prepost.NormalizeRequestReasoning(body)
-}
-
-// EnsureStreamOptions adds stream_options: {"include_usage": true} to requests
-// that have stream: true but no stream_options field. Some providers (e.g.
-// DeepSeek) require stream_options to be explicitly set alongside stream = true
-// and return a 400 error otherwise. This is a no-op when stream is false,
-// missing, or stream_options is already present.
-func EnsureStreamOptions(body []byte) ([]byte, error) {
-	return prepost.EnsureStreamOptions(body)
-}
-
-// PrepareForUpstream is the one-pass equivalent of NormalizeRoles +
-// NormalizeRequestReasoning + EnsureStreamOptions. It performs a single
-// JSON unmarshal/marshal instead of three, reducing allocs on the hot path.
-//
-// The returned tokens name each normalization that fired (see the
-// prepost.Applied* constants) for the X-Fg-Normalized response header.
-func PrepareForUpstream(body []byte) ([]byte, []string, error) {
-	return prepost.PrepareUpstream(body)
-}
-
-// PrepareForUpstreamWithModel is PrepareForUpstream plus DeepSeek
-// model-aware normalization: every assistant message gets reasoning_content
-// ("" when absent) and flash models without top_p get 0.95. It mirrors
-// opencode's deepseek/deepseek-v4-flash handling in
+// PrepareForUpstreamWithModel applies request normalization for
+// upstream-bound bodies in a single JSON pass: developer→system roles,
+// reasoning→reasoning_content, and stream_options for streams, plus
+// DeepSeek model-aware normalization: every assistant message gets
+// reasoning_content ("" when absent) and flash models without top_p get
+// 0.95. It mirrors opencode's deepseek/deepseek-v4-flash handling in
 // packages/opencode/src/provider/transform.ts (normalizeMessages,
 // topP) translated to OpenAI-compatible bodies.
 func PrepareForUpstreamWithModel(body []byte, modelID string) ([]byte, []string, error) {

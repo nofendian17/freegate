@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,7 +15,7 @@ import (
 func reproDump(t *testing.T, name string, input string) string {
 	t.Helper()
 	var out bytes.Buffer
-	normalizeOpenAIStream(&out, bufio.NewReader(strings.NewReader(input)))
+	normalizeOpenAIStreamWithMeta(context.Background(), &out, bufio.NewReader(strings.NewReader(input)), "", "")
 	fmt.Printf("===== SCENARIO: %s =====\n", name)
 	fmt.Printf("--- OUTPUT ---\n%s--- END OUTPUT ---\n", out.String())
 	return out.String()

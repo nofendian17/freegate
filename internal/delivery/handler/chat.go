@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"freegate/internal/delivery/respond"
@@ -19,45 +18,15 @@ var responseModels atomic.Value // stores []string, set once at startup
 var messageModels atomic.Value  // stores []string, set once at startup
 
 func init() {
-	// Direct config via env RESPONSE_MODELS (comma-separated substrings)
-	var models []string
-	if v := os.Getenv("RESPONSE_MODELS"); v != "" {
-		for _, s := range strings.Split(v, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				models = append(models, strings.ToLower(s))
-			}
-		}
-	} else {
-		// default direct config for muse family
-		models = []string{"muse-spark", "muse_spark"}
-	}
-	responseModels.Store(models)
-	messageModels.Store(loadMessageModels())
+	// Test-safe defaults. Runtime values come from Config via
+	// SetResponseModels/SetMessageModels in server wiring; config is the
+	// single source of truth (these mirror config.go defaults).
+	responseModels.Store([]string{"muse-spark", "muse_spark"})
+	messageModels.Store([]string{"union-alpha"})
 }
-
-func loadMessageModels() []string {
-	// Direct config via env MESSAGE_MODELS (comma-separated substrings).
-	// Default covers Union Alpha, served by /zen/v1/messages per 9router PR #4111.
-	if v := os.Getenv("MESSAGE_MODELS"); v != "" {
-		var out []string
-		for _, s := range strings.Split(v, ",") {
-			s = strings.TrimSpace(strings.ToLower(s))
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		if len(out) > 0 {
-			return out
-		}
-	}
-	return []string{"union-alpha"}
-}
-
-var responseModelsOnce sync.Once
-var messageModelsOnce sync.Once
 
 // SetResponseModels overrides the direct config (called from server wiring).
+// Last non-empty call wins.
 func SetResponseModels(models []string) {
 	if len(models) == 0 {
 		return
@@ -72,12 +41,11 @@ func SetResponseModels(models []string) {
 	if len(lower) == 0 {
 		return
 	}
-	responseModelsOnce.Do(func() {
-		responseModels.Store(lower)
-	})
+	responseModels.Store(lower)
 }
 
 // SetMessageModels overrides the messages direct config (called from server wiring).
+// Last non-empty call wins.
 func SetMessageModels(models []string) {
 	if len(models) == 0 {
 		return
@@ -92,9 +60,7 @@ func SetMessageModels(models []string) {
 	if len(lower) == 0 {
 		return
 	}
-	messageModelsOnce.Do(func() {
-		messageModels.Store(lower)
-	})
+	messageModels.Store(lower)
 }
 
 func getResponseModels() []string {

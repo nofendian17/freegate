@@ -24,12 +24,6 @@ type Recorder struct {
 	startedAt  time.Time
 }
 
-// NewRecorder creates a Recorder bound to a metrics-snapshot function.
-// Deprecated: use NewRecorderWithDeps for explicit wiring.
-func NewRecorder(metricsFn func() map[string]any) *Recorder {
-	return NewRecorderWithDeps(Deps{Metrics: metricsFn})
-}
-
 // Deps groups Recorder dependencies for constructor injection.
 type Deps struct {
 	Metrics func() map[string]any
@@ -81,16 +75,6 @@ func (r *Recorder) UptimeSeconds() int64 {
 // StartedAtUnix returns the unix timestamp of recorder start.
 func (r *Recorder) StartedAtUnix() int64 {
 	return r.startedAt.Unix()
-}
-
-// SetModelsFunc wires a callback that returns the current model list.
-func (r *Recorder) SetModelsFunc(fn func() []domain.Model) {
-	r.modelsFn = fn
-}
-
-// SetVPNIPFunc wires a callback that returns the current VPN tunnel IP.
-func (r *Recorder) SetVPNIPFunc(fn func() string) {
-	r.vpnIPFn = fn
 }
 
 // Models returns the current model list, or empty if no callback is set.
