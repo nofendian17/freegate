@@ -188,12 +188,16 @@
       <div class="modal-body">
         <div id="pool-form-err" class="prov-err" role="alert" style="display:none"></div>
         <div id="pool-deploy-out" class="prov-ok" style="display:none"></div>
+        <div id="pf-explainer" class="prov-warn" style="display:none">// deploys an edge relay function to Vercel — all AI provider requests forward through Vercel's edge network, masking your IP behind Vercel's dynamic edge IPs (100GB/mo, 500K invocations free; deploy on multiple accounts for more diversity)</div>
         <form id="pool-form">
           <input type="hidden" id="pf-id">
           <div class="prov-grid">
             <div class="prov-field">
               <label class="prov-label" for="pf-name">name</label>
               <input id="pf-name" class="prov-input" required placeholder="relay-1">
+            </div>
+            <div class="prov-field" id="pf-name-hint" style="display:none">
+              <span class="dim">// unique Vercel project name — leave empty for auto-generated</span>
             </div>
             <div class="prov-field">
               <label class="prov-label" for="pf-proxy-url">proxy_url</label>
@@ -207,7 +211,7 @@
               <label class="prov-check"><input id="pf-enabled" type="checkbox" checked> enabled</label>
             </div>
             <div class="prov-field full" id="pf-token-wrap" style="display:none">
-              <label class="prov-label" for="pf-token">vercel token (deploy only — never stored)</label>
+              <label class="prov-label" for="pf-token">vercel token (used once for deployment, never stored) — <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">get token</a></label>
               <input id="pf-token" class="prov-input" type="password" placeholder="paste Vercel API token" autocomplete="off">
             </div>
           </div>
@@ -519,6 +523,8 @@
     document.getElementById('pf-token').value = '';
     document.getElementById('pf-token-wrap').style.display = deployMode ? '' : 'none';
     document.getElementById('pf-proxy-url').closest('.prov-field').style.display = deployMode ? 'none' : '';
+    document.getElementById('pf-name-hint').style.display = deployMode ? '' : 'none';
+    document.getElementById('pf-explainer').style.display = deployMode ? '' : 'none';
     document.getElementById('pool-deploy-go').style.display = deployMode ? '' : 'none';
     document.getElementById('pool-save').style.display = deployMode ? 'none' : '';
     document.getElementById('pool-delete').style.display = p.id && !deployMode ? '' : 'none';
