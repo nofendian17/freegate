@@ -20,6 +20,7 @@
       .prov-grid { grid-template-columns: 1fr; }
       .combo-row select, .combo-row .prov-input { max-width: 100%; flex: 1 1 140px; }
     }
+    .pool-modal-panel { max-width: 520px; }
   </style>
 </head>
 <body>
@@ -180,7 +181,7 @@
   </div>
 
   <div id="pool-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="pool-modal-title">
-    <div class="modal-panel" style="max-width:520px">
+    <div class="modal-panel pool-modal-panel">
       <div class="modal-header">
         <span class="modal-title" id="pool-modal-title">// pool</span>
         <span class="modal-close" id="pool-modal-close" role="button" tabindex="0" aria-label="Close pool modal">x</span>
@@ -194,28 +195,28 @@
           <div class="prov-grid">
             <div class="prov-field">
               <label class="prov-label" for="pf-name">Name</label>
-              <input id="pf-name" class="prov-input" required placeholder="Office Proxy">
-              <span class="dim">// spaces/uppercase auto-converted to lowercase-dashes</span>
+              <input id="pf-name" class="prov-input" required placeholder="Office Proxy" aria-describedby="pf-name-help">
+              <span class="dim" id="pf-name-help">// spaces/uppercase auto-converted to lowercase-dashes</span>
             </div>
             <div class="prov-field" id="pf-name-hint" style="display:none">
               <span class="dim">// deploy mode: unique Vercel project name — leave empty for auto-generated</span>
             </div>
             <div class="prov-field">
               <label class="prov-label" for="pf-proxy-url">Proxy URL</label>
-              <input id="pf-proxy-url" class="prov-input" required placeholder="http://127.0.0.1:7897">
+              <input id="pf-proxy-url" class="prov-input" required placeholder="http://127.0.0.1:7897" inputmode="url">
             </div>
             <div class="prov-field full">
               <label class="prov-label" for="pf-no-proxy">No Proxy</label>
-              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,127.0.0.1,.internal">
-              <span class="dim">// comma-separated hosts/domains to bypass proxy</span>
+              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,127.0.0.1,.internal" aria-describedby="pf-no-proxy-help">
+              <span class="dim" id="pf-no-proxy-help">// comma-separated hosts/domains to bypass proxy</span>
             </div>
             <div class="prov-field full">
-              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked> Active</label>
-              <span class="dim">// inactive pools are ignored by runtime resolution</span>
+              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help"> Active</label>
+              <span class="dim" id="pf-enabled-help">// inactive pools are ignored by runtime resolution</span>
             </div>
             <div class="prov-field full">
-              <label class="prov-check"><input id="pf-strict" type="checkbox"> Strict Proxy</label>
-              <span class="dim">// fail request if proxy is unreachable instead of falling back to direct</span>
+              <label class="prov-check"><input id="pf-strict" type="checkbox" aria-describedby="pf-strict-help"> Strict Proxy</label>
+              <span class="dim" id="pf-strict-help">// fail request if proxy is unreachable instead of falling back to direct</span>
             </div>
             <div class="prov-field full" id="pf-token-wrap" style="display:none">
               <label class="prov-label" for="pf-token">vercel token (used once for deployment, never stored) — <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">get token</a></label>
@@ -519,9 +520,13 @@
   var poolModal = document.getElementById('pool-modal');
   var poolFormErr = document.getElementById('pool-form-err');
   var poolDeployOut = document.getElementById('pool-deploy-out');
+  var poolLastTrigger = null;
 
   function openPoolModal(p, deployMode) {
     p = p || {};
+    if (poolModal.style.display !== 'flex') {
+      poolLastTrigger = document.activeElement;
+    }
     document.getElementById('pf-id').value = p.id || '';
     document.getElementById('pf-name').value = p.name || '';
     document.getElementById('pf-proxy-url').value = p.proxy_url || '';
@@ -542,16 +547,40 @@
     show(poolFormErr, ''); show(poolDeployOut, '');
     poolModal.style.display = 'flex';
     document.body.classList.add('modal-open');
-    document.getElementById(deployMode ? 'pf-name' : 'pf-name').focus();
+    document.getElementById('pool-modal-close').focus();
   }
   function closePoolModal() {
     poolModal.style.display = 'none';
     document.body.classList.remove('modal-open');
+    if (poolLastTrigger && typeof poolLastTrigger.focus === 'function') {
+      poolLastTrigger.focus();
+    }
+    poolLastTrigger = null;
   }
 
-  document.getElementById('pool-modal-close').addEventListener('click', closePoolModal);
+  // Focus trap: keep Tab cycling inside the open pool modal (mirrors the
+  // provider modal). Hidden controls are skipped via offsetParent.
+  poolModal.addEventListener('keydown', function(e) {
+    if (e.key !== 'Tab' || poolModal.style.display !== 'flex') return;
+    var items = Array.prototype.filter.call(
+      poolModal.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      function(el) { return !el.disabled && el.type !== 'hidden' && el.offsetParent !== null; }
+    );
+    if (!items.length) return;
+    var first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  document.getElementById('pool-modal-close').addEventListener('click', function() { closePoolModal(); });
   poolModal.addEventListener('click', function(e) { if (e.target === poolModal) closePoolModal(); });
-  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && poolModal.style.display === 'flex') closePoolModal(); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && poolModal.style.display === 'flex') closePoolModal();
+    if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.id === 'pool-modal-close') {
+      e.preventDefault();
+      closePoolModal();
+    }
+  });
 
   document.getElementById('pool-new').addEventListener('click', function() { openPoolModal({}, false); });
   document.getElementById('pool-deploy').addEventListener('click', function() { openPoolModal({}, true); });

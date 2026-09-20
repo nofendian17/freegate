@@ -131,6 +131,38 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	}
 }
 
+// TestProvidersPage_PoolModalA11y pins the pool modal's accessible behavior
+// so future template edits cannot silently drop it: focus trap, focus
+// restore, keyboard close, and help-text associations.
+func TestProvidersPage_PoolModalA11y(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="pool-modal"`,                       // modal exists
+		`aria-labelledby="pool-modal-title"`,    // titled dialog
+		`for="pf-name"`,                         // labeled inputs
+		`for="pf-proxy-url"`,
+		`for="pf-no-proxy"`,
+		`for="pf-token"`,
+		`aria-describedby="pf-name-help"`,       // help-text associations
+		`aria-describedby="pf-no-proxy-help"`,
+		`aria-describedby="pf-enabled-help"`,
+		`aria-describedby="pf-strict-help"`,
+		`poolLastTrigger`,                       // focus restore
+		`poolModal.addEventListener('keydown'`,  // focus trap + keyboard close
+		`id === 'pool-modal-close'`,             // Enter/Space on close button
+		`no proxy pools yet`,                    // actionable empty state
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pool modal missing accessible behavior %q", want)
+		}
+	}
+}
+
 // TestAppCSS_Slice1Palette pins the slice-1 token swap so a stray hardcoded
 // neon value cannot sneak back into the palette.
 func TestAppCSS_Slice1Palette(t *testing.T) {
