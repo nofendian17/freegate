@@ -73,7 +73,7 @@ func TestProvidersPage_RendersPoolSection(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"pool-table", "/api/pools", "Proxy Pools"} {
+	for _, want := range []string{"pool-table", "/api/pools", "Proxy Pools", "pool-deploy", "pool-modal", "vercel-deploy"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}

@@ -72,6 +72,7 @@
     <div class="card section-block section-gap">
       <div class="card-header">
         <span class="card-title"># Proxy Pools</span>
+        <button id="pool-deploy" class="btn-primary" type="button">> deploy to vercel</button>
         <button id="pool-new" class="btn-secondary" type="button">> new pool</button>
       </div>
       <p class="subtitle">// vercel edge relays — round-robin via x-relay-target / x-relay-path</p>
@@ -172,6 +173,48 @@
             <button id="provider-save" type="submit" class="btn-primary">> save</button>
             <button id="provider-test" type="button" class="btn-secondary">> test</button>
             <button id="provider-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="pool-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="pool-modal-title">
+    <div class="modal-panel" style="max-width:520px">
+      <div class="modal-header">
+        <span class="modal-title" id="pool-modal-title">// pool</span>
+        <span class="modal-close" id="pool-modal-close" role="button" tabindex="0" aria-label="Close pool modal">x</span>
+      </div>
+      <div class="modal-body">
+        <div id="pool-form-err" class="prov-err" role="alert" style="display:none"></div>
+        <div id="pool-deploy-out" class="prov-ok" style="display:none"></div>
+        <form id="pool-form">
+          <input type="hidden" id="pf-id">
+          <div class="prov-grid">
+            <div class="prov-field">
+              <label class="prov-label" for="pf-name">name</label>
+              <input id="pf-name" class="prov-input" required placeholder="relay-1">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="pf-proxy-url">proxy_url</label>
+              <input id="pf-proxy-url" class="prov-input" required placeholder="https://relay-1.vercel.app">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label" for="pf-no-proxy">no_proxy (comma list, optional)</label>
+              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,*.internal">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked> enabled</label>
+            </div>
+            <div class="prov-field full" id="pf-token-wrap" style="display:none">
+              <label class="prov-label" for="pf-token">vercel token (deploy only — never stored)</label>
+              <input id="pf-token" class="prov-input" type="password" placeholder="paste Vercel API token" autocomplete="off">
+            </div>
+          </div>
+          <div class="prov-actions">
+            <button id="pool-save" type="submit" class="btn-primary">> save</button>
+            <button id="pool-deploy-go" type="button" class="btn-secondary" style="display:none">> deploy</button>
+            <button id="pool-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
           </div>
         </form>
       </div>
@@ -458,34 +501,94 @@
     var url = id ? '/api/pools/' + id : '/api/pools';
     withBusy(btn, '> saving…', function() {
       return getJSON(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
-        .then(function() { loadPools(); });
-    }).catch(function(e) { show(poolErr, '! save pool: ' + e.message); });
+        .then(function() { closePoolModal(); loadPools(); });
+    }).catch(function(e) { show(document.getElementById('pool-form-err'), '! save pool: ' + e.message); });
   }
 
-  document.getElementById('pool-new').addEventListener('click', function() {
+  var poolModal = document.getElementById('pool-modal');
+  var poolFormErr = document.getElementById('pool-form-err');
+  var poolDeployOut = document.getElementById('pool-deploy-out');
+
+  function openPoolModal(p, deployMode) {
+    p = p || {};
+    document.getElementById('pf-id').value = p.id || '';
+    document.getElementById('pf-name').value = p.name || '';
+    document.getElementById('pf-proxy-url').value = p.proxy_url || '';
+    document.getElementById('pf-no-proxy').value = p.no_proxy || '';
+    document.getElementById('pf-enabled').checked = p.enabled !== false;
+    document.getElementById('pf-token').value = '';
+    document.getElementById('pf-token-wrap').style.display = deployMode ? '' : 'none';
+    document.getElementById('pf-proxy-url').closest('.prov-field').style.display = deployMode ? 'none' : '';
+    document.getElementById('pool-deploy-go').style.display = deployMode ? '' : 'none';
+    document.getElementById('pool-save').style.display = deployMode ? 'none' : '';
+    document.getElementById('pool-delete').style.display = p.id && !deployMode ? '' : 'none';
+    document.getElementById('pool-modal-title').textContent = deployMode ? '// deploy relay to vercel' : (p.id ? '// edit pool' : '// new pool');
+    show(poolFormErr, ''); show(poolDeployOut, '');
+    poolModal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.getElementById(deployMode ? 'pf-name' : 'pf-name').focus();
+  }
+  function closePoolModal() {
+    poolModal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+  }
+
+  document.getElementById('pool-modal-close').addEventListener('click', closePoolModal);
+  poolModal.addEventListener('click', function(e) { if (e.target === poolModal) closePoolModal(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && poolModal.style.display === 'flex') closePoolModal(); });
+
+  document.getElementById('pool-new').addEventListener('click', function() { openPoolModal({}, false); });
+  document.getElementById('pool-deploy').addEventListener('click', function() { openPoolModal({}, true); });
+
+  document.getElementById('pool-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var id = document.getElementById('pf-id').value;
+    savePool(id, {
+      name: document.getElementById('pf-name').value.trim(),
+      proxy_url: document.getElementById('pf-proxy-url').value.trim(),
+      no_proxy: document.getElementById('pf-no-proxy').value.trim(),
+      enabled: document.getElementById('pf-enabled').checked
+    }, document.getElementById('pool-save'));
+  });
+
+  document.getElementById('pool-deploy-go').addEventListener('click', function() {
     var btn = this;
-    var name = prompt('pool name (a-z0-9-):', 'relay-1');
-    if (name == null) return;
-    var proxyUrl = prompt('proxy_url (vercel relay https://…):', 'https://');
-    if (proxyUrl == null) return;
-    var noProxy = prompt('no_proxy (comma list, optional):', '');
-    if (noProxy == null) return;
-    savePool('', {name: name.trim(), proxy_url: proxyUrl.trim(), no_proxy: (noProxy || '').trim(), enabled: true}, btn);
+    var token = document.getElementById('pf-token').value.trim();
+    var name = document.getElementById('pf-name').value.trim();
+    if (!token) { show(poolFormErr, '! deploy: vercel token is required'); return; }
+    if (!name) { show(poolFormErr, '! deploy: project name is required'); return; }
+    show(poolFormErr, ''); show(poolDeployOut, '// deploying to vercel… (up to ~2 min)', true);
+    withBusy(btn, '> deploying…', function() {
+      return getJSON('/api/pools/vercel-deploy', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({vercel_token: token, project_name: name})})
+        .then(function(b) {
+          document.getElementById('pf-token').value = '';
+          var url = (b && (b.deploy_url || (b.pool && b.pool.proxy_url))) || '';
+          show(poolDeployOut, '// deployed: ' + url, true);
+          loadPools();
+        });
+    }).catch(function(e) { show(poolFormErr, '! deploy: ' + e.message); });
+  });
+
+  document.getElementById('pool-delete').addEventListener('click', function() {
+    var id = document.getElementById('pf-id').value;
+    if (!id) return;
+    if (!confirm('delete pool ' + id + '?')) return;
+    withBusy(this, '> deleting…', function() {
+      return getJSON('/api/pools/' + id, {method: 'DELETE'}).then(function() {
+        closePoolModal(); loadPools();
+      });
+    }).catch(function(e) { show(poolFormErr, '! delete pool: ' + e.message); });
   });
 
   poolTable.addEventListener('click', function(e) {
     var edt = e.target.closest('.pool-edit');
     var del = e.target.closest('.pool-delete');
     if (edt) {
-      var row = edt.closest('tr');
-      var cells = row.querySelectorAll('td');
-      var name = cells[0].textContent.trim();
-      var proxyUrl = prompt('proxy_url for "' + name + '":', cells[1].textContent.trim());
-      if (proxyUrl == null) return;
-      var noProxy = prompt('no_proxy (comma list, optional):', '');
-      if (noProxy == null) return;
-      var enabled = confirm('enable pool "' + name + '"? (cancel = disable)');
-      savePool(edt.dataset.id, {name: name, proxy_url: proxyUrl.trim(), no_proxy: (noProxy || '').trim(), enabled: enabled}, edt);
+      withBusy(edt, '> loading…', function() {
+        return getJSON('/api/pools/' + edt.dataset.id).then(function(body) {
+          openPoolModal(body.data || body, false);
+        });
+      }).catch(function(e2) { show(poolErr, '! load pool: ' + e2.message); });
     } else if (del) {
       if (!confirm('delete pool ' + del.dataset.id + '?')) return;
       withBusy(del, '> deleting…', function() {

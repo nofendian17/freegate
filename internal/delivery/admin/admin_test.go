@@ -144,6 +144,23 @@ func TestAdmin_PoolLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	for _, body := range []string{`{}`, `{"project_name":"relay-1"}`, `{"vercel_token":"","project_name":"relay-1"}`} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("POST", "/api/pools/vercel-deploy", bytes.NewBufferString(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status=%d, want 400 (%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 	s, _ := providers.Open("file:admin-keepkeys?mode=memory&cache=shared")
 	row, err := s.CreateProvider(providers.Provider{Name: "keepme", BaseURL: "https://api.keep.test/v1", APIKeys: []string{"sk-live-abc"}, RefreshSec: 60, Enabled: true})
