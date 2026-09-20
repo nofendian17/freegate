@@ -22,8 +22,8 @@ func newTestLLM7(t *testing.T, body string) *LLM7Upstream {
 	}))
 	t.Cleanup(srv.Close)
 
-	u := NewLLM7Upstream(srv.URL, nil)
-	u.client = NewHTTPClient(srv.URL, []string{"unused"}, nil, nil)
+	u := NewLLM7UpstreamWithTransport(srv.URL, nil)
+	u.client = NewHTTPClientWithTransport(srv.URL, []string{"unused"}, nil, nil)
 	return u
 }
 
@@ -146,7 +146,7 @@ func TestLLM7_ListModels_IgnoresExtraFields(t *testing.T) {
 }
 
 func TestLLM7_Match_ByCache(t *testing.T) {
-	u := NewLLM7Upstream("", nil)
+	u := NewLLM7UpstreamWithTransport("", nil)
 	u.cache.Set([]domain.Model{
 		{ID: "model-a", Provider: "llm7"},
 		{ID: "model-b", Provider: "llm7"},
@@ -170,7 +170,7 @@ func TestLLM7_Match_ByCache(t *testing.T) {
 }
 
 func TestLLM7_Match_EmptyCache(t *testing.T) {
-	u := NewLLM7Upstream("", nil)
+	u := NewLLM7UpstreamWithTransport("", nil)
 
 	if u.Match("model-a") {
 		t.Error("expected no match when cache is empty")
@@ -181,7 +181,7 @@ func TestLLM7_Match_EmptyCache(t *testing.T) {
 }
 
 func TestLLM7_Name(t *testing.T) {
-	u := NewLLM7Upstream("", nil)
+	u := NewLLM7UpstreamWithTransport("", nil)
 	if got := u.Name(); got != "llm7" {
 		t.Errorf("Name() = %q, want %q", got, "llm7")
 	}

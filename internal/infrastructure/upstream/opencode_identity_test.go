@@ -63,7 +63,7 @@ func TestGenSessionID_UniqueAndOrdered(t *testing.T) {
 	if a == b {
 		t.Fatal("duplicate session ids")
 	}
-	if !openCodeRequestRE.MatchString(genOpencodeID("msg")) {
+	if !openCodeRequestRE.MatchString(genOpencodeIDWithClock("msg", false)) {
 		t.Fatal("request id not canonical")
 	}
 }

@@ -16,10 +16,6 @@ type KiloUpstream struct {
 	cache  *ModelCache
 }
 
-func NewKiloUpstream(baseURL, apiKey string, d *Dialer) *KiloUpstream {
-	return NewKiloUpstreamWithTransport(baseURL, apiKey, NewTransport(d))
-}
-
 func NewKiloUpstreamWithTransport(baseURL, apiKey string, tr *http.Transport) *KiloUpstream {
 	return &KiloUpstream{
 		client: NewHTTPClientWithTransport(baseURL, []string{apiKey}, nil, tr),

@@ -26,7 +26,7 @@ func TestPostSetsAcceptHeaderForStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":true}`))
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestPostOmitsAcceptForNonStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"stream":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestPostOmitsAcceptWhenStreamFieldMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"foo"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestPostRotatesApiKeyAcrossRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	for i := 0; i < 4; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -111,7 +111,7 @@ func TestPostUsesSingleKeyWhenOneConfigured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a"}, nil, nil)
 	for i := 0; i < 3; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -140,7 +140,7 @@ func TestPostRetriesWithNextKeyOn429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestPostReturns429WhenAllKeysLimited(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestPostSkipsLimitedKeyOnSubsequentRequests(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a", "key-b"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a", "key-b"}, nil, nil)
 	for i := 0; i < 3; i++ {
 		resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 		if err != nil {
@@ -225,7 +225,7 @@ func TestPostDoesNotRetry429WithSingleKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"key-a"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key-a"}, nil, nil)
 	resp, err := client.Post(context.Background(), "/chat", []byte(`{"model":"x"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestPostWithHeaders_SyncsXApiKeyWithBearer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"custom-key"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"custom-key"}, nil, nil)
 	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
 		map[string]string{"x-api-key": "public"})
 	if err != nil {
@@ -276,7 +276,7 @@ func TestPostWithHeaders_PreservesExplicitXApiKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"custom-key"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"custom-key"}, nil, nil)
 	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
 		map[string]string{"x-api-key": "explicit"})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestPostWithHeaders_StripsPublicXApiKey(t *testing.T) {
 	defer srv.Close()
 
 	for _, keys := range [][]string{{"public"}, nil} {
-		client := NewHTTPClient(srv.URL, keys, nil, nil)
+		client := NewHTTPClientWithTransport(srv.URL, keys, nil, nil)
 		resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
 			map[string]string{"x-api-key": "public", "Content-Type": "application/json"})
 		if err != nil {
@@ -336,7 +336,7 @@ func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) 
 	}))
 	defer srv.Close()
 
-	client := NewHTTPClient(srv.URL, []string{"public"}, nil, nil)
+	client := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
 	resp, err := client.PostWithHeaders(context.Background(), "/chat", []byte(`{"model":"x"}`),
 		map[string]string{"x-api-key": "explicit"})
 	if err != nil {

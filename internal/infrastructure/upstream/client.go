@@ -66,9 +66,14 @@ func NewTransport(d *Dialer) *http.Transport {
 		// (fresh tunnel handshakes intermittently die with EOF/TLS
 		// timeouts). All upstreams negotiate h2 (verified live); others
 		// fall back to HTTP/1.1 automatically.
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 300 * time.Second,
+		ForceAttemptHTTP2:   true,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// Fail fast on stalled upstreams so the same-tier retry and combo
+		// failover can try the next candidate: a healthy upstream sends
+		// response headers within seconds (streaming) and transient tunnel
+		// stalls resolve in ~10s, so 30s is ample headroom without parking
+		// a request for a minute on a dead tier.
+		ResponseHeaderTimeout: 30 * time.Second,
 		MaxIdleConns:          50,
 		MaxIdleConnsPerHost:   20,
 		IdleConnTimeout:       60 * time.Second,
@@ -79,12 +84,15 @@ func NewTransport(d *Dialer) *http.Transport {
 	return tr
 }
 
-func NewHTTPClient(baseURL string, apiKeys []string, d *Dialer, headers map[string]string) *HTTPClient {
-	return NewHTTPClientWithTransport(baseURL, apiKeys, headers, NewTransport(d))
-}
-
-// NewHTTPClientWithTransport is like NewHTTPClient but reuses a shared Transport.
+// NewHTTPClientWithTransport builds an HTTPClient reusing a shared Transport.
 func NewHTTPClientWithTransport(baseURL string, apiKeys []string, headers map[string]string, tr *http.Transport) *HTTPClient {
+	if tr == nil {
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			tr = dt
+		} else {
+			tr = NewTransport(nil)
+		}
+	}
 	hc := &http.Client{Timeout: 0, Transport: tr}
 	if headers == nil {
 		headers = make(map[string]string)

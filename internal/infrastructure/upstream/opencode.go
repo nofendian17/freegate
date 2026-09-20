@@ -40,10 +40,6 @@ type OpenCodeUpstream struct {
 	messageModels  []string
 }
 
-func NewOpenCodeUpstream(baseURL string, apiKeys []string, d *Dialer, freeAllowlist []string) *OpenCodeUpstream {
-	return NewOpenCodeUpstreamWithTransport(baseURL, apiKeys, NewTransport(d), freeAllowlist)
-}
-
 func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http.Transport, freeAllowlist []string) *OpenCodeUpstream {
 	// Static headers for catalog fetches (/models). Chat requests build
 	// compliant per-request Zen headers in ChatCompletion (see buildOpencodeHeaders),
@@ -507,10 +503,6 @@ var (
 )
 
 const opencodeIDChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-func genOpencodeID(prefix string) string {
-	return genOpencodeIDWithClock(prefix, false)
-}
 
 func genOpencodeIDWithClock(prefix string, complement bool) string {
 	now := time.Now().UnixMilli()

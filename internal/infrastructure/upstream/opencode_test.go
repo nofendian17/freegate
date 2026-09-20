@@ -24,8 +24,8 @@ func newTestOpenCode(t *testing.T, body string) *OpenCodeUpstream {
 	}))
 	t.Cleanup(srv.Close)
 
-	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, []string{"big-pickle"})
-	u.client = NewHTTPClient(srv.URL, []string{"public"}, nil, map[string]string{"x-opencode-client": "desktop"})
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, []string{"big-pickle"})
+	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "desktop"}, nil)
 	return u
 }
 
@@ -133,13 +133,13 @@ func newTestOpenCodeWithAllowlist(t *testing.T, body string, allowlist []string)
 	}))
 	t.Cleanup(srv.Close)
 
-	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, allowlist)
-	u.client = NewHTTPClient(srv.URL, []string{"public"}, nil, map[string]string{"x-opencode-client": "desktop"})
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, allowlist)
+	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "desktop"}, nil)
 	return u
 }
 
 func TestOpenCode_BuildURL_Routing(t *testing.T) {
-	o := NewOpenCodeUpstream("http://example.com", []string{"public"}, nil, nil)
+	o := NewOpenCodeUpstreamWithTransport("http://example.com", []string{"public"}, nil, nil)
 	cases := []struct {
 		name  string
 		model string
@@ -163,7 +163,7 @@ func TestOpenCode_BuildURL_Routing(t *testing.T) {
 }
 
 func TestOpenCode_BuildURL_HonorsCustomConfig(t *testing.T) {
-	o := NewOpenCodeUpstream("http://example.com", []string{"public"}, nil, nil)
+	o := NewOpenCodeUpstreamWithTransport("http://example.com", []string{"public"}, nil, nil)
 	o.SetResponseModels([]string{"my-resp"})
 	o.SetMessageModels([]string{"my-claude-model"})
 	if got := o.buildURL("my-resp-1", []byte(`{"model":"my-resp-1"}`)); got != "/responses" {
@@ -261,7 +261,7 @@ func TestOpenCode_AnonymousNonStreamUpgradedToStream(t *testing.T) {
 		_, _ = io.WriteString(w, assembleChatSSE)
 	}))
 	defer srv.Close()
-	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, nil)
 	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -308,7 +308,7 @@ func TestOpenCode_MixedKeysNeverUpgrade(t *testing.T) {
 	defer srv.Close()
 	// Mixed public/real keys: the upgrade decision must be deterministic
 	// and must not consume rotation slots, so it never upgrades.
-	u := NewOpenCodeUpstream(srv.URL, []string{"public", "sk-real"}, nil, nil)
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public", "sk-real"}, nil, nil)
 	for range 4 {
 		resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[]}`))
 		if err != nil {
@@ -331,7 +331,7 @@ func TestOpenCode_StreamOptionsOnlyOnChat(t *testing.T) {
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer srv.Close()
-	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, nil)
 	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"union-alpha","messages":[]}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -355,7 +355,7 @@ func TestOpenCode_KeyedNonStreamPassesThrough(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`)
 	}))
 	defer srv.Close()
-	u := NewOpenCodeUpstream(srv.URL, []string{"sk-real"}, nil, nil)
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"sk-real"}, nil, nil)
 	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -376,7 +376,7 @@ func TestOpenCode_UpgradeNonSSEErrorPassesThrough(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"slow"}`)
 	}))
 	defer srv.Close()
-	u := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, nil)
 	resp, err := u.ChatCompletion(context.Background(), []byte(`{"model":"gpt-plain","messages":[]}`))
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -389,7 +389,7 @@ func TestOpenCode_UpgradeNonSSEErrorPassesThrough(t *testing.T) {
 
 func TestOpenCode_GenID_Format(t *testing.T) {
 	for _, p := range []string{"ses", "msg"} {
-		id := genOpencodeID(p)
+		id := genOpencodeIDWithClock(p, false)
 		if len(id) != len(p)+1+12+14 {
 			t.Errorf("%s: unexpected length %d for %q", p, len(id), id)
 		}
@@ -415,7 +415,7 @@ func TestOpenCode_AnonymousInjectsNoopTools_KeyedDoesNot(t *testing.T) {
 	// Streaming body so the request passes straight through (no SSE assembly).
 	in := []byte(`{"model":"gpt-plain","messages":[{"role":"user","content":"hi"}],"stream":true}`)
 
-	anon := NewOpenCodeUpstream(srv.URL, []string{"public"}, nil, nil)
+	anon := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, nil)
 	resp, err := anon.ChatCompletion(context.Background(), in)
 	if err != nil {
 		t.Fatalf("anon chat: %v", err)
@@ -431,7 +431,7 @@ func TestOpenCode_AnonymousInjectsNoopTools_KeyedDoesNot(t *testing.T) {
 	}
 	expectGateNames(t, tools)
 
-	keyed := NewOpenCodeUpstream(srv.URL, []string{"sk-real"}, nil, nil)
+	keyed := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"sk-real"}, nil, nil)
 	resp, err = keyed.ChatCompletion(context.Background(), in)
 	if err != nil {
 		t.Fatalf("keyed chat: %v", err)

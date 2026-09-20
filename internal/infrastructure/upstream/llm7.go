@@ -20,10 +20,6 @@ type LLM7Upstream struct {
 	cache  *ModelCache
 }
 
-func NewLLM7Upstream(baseURL string, d *Dialer) *LLM7Upstream {
-	return NewLLM7UpstreamWithTransport(baseURL, NewTransport(d))
-}
-
 func NewLLM7UpstreamWithTransport(baseURL string, tr *http.Transport) *LLM7Upstream {
 	return &LLM7Upstream{
 		client: NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr),
