@@ -501,6 +501,7 @@
             '<td class="dim">' + esc(p.proxy_url) + '</td>' +
             '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
             '<td><button class="btn-tertiary pool-edit" type="button" data-id="' + p.id + '">> edit</button> ' +
+            '<button class="btn-tertiary pool-test" type="button" data-id="' + p.id + '">> test</button> ' +
             '<button class="btn-tertiary pool-delete" type="button" data-id="' + p.id + '" style="color:var(--error)">x</button></td>' +
             '</tr>';
         }).join('');
@@ -631,6 +632,7 @@
 
   poolTable.addEventListener('click', function(e) {
     var edt = e.target.closest('.pool-edit');
+    var tst = e.target.closest('.pool-test');
     var del = e.target.closest('.pool-delete');
     if (edt) {
       withBusy(edt, '> loading…', function() {
@@ -638,6 +640,14 @@
           openPoolModal(body.data || body, false);
         });
       }).catch(function(e2) { show(poolErr, '! load pool: ' + e2.message); });
+    } else if (tst) {
+      withBusy(tst, '> testing…', function() {
+        return getJSON('/api/pools/' + tst.dataset.id + '/test', {method: 'POST'})
+          .then(function(b) {
+            show(poolErr, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok);
+            loadPools();
+          });
+      }).catch(function(e2) { show(poolErr, '! test pool: ' + e2.message); });
     } else if (del) {
       if (!confirm('delete pool ' + del.dataset.id + '?')) return;
       withBusy(del, '> deleting…', function() {
