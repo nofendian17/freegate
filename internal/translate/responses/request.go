@@ -215,7 +215,7 @@ func ToOpenAI(body []byte) ([]byte, error) {
 			} else {
 				switch v := item["arguments"].(type) {
 				case string:
-					argsStr = v
+					argsStr = sanitizeArgs(v)
 				default:
 					if b, err := json.Marshal(v); err == nil {
 						argsStr = string(b)
@@ -502,9 +502,7 @@ func FromOpenAI(body []byte) ([]byte, error) {
 						name = "_unknown"
 					}
 					args, _ := fn["arguments"].(string)
-					if args == "" {
-						args = "{}"
-					}
+					args = sanitizeArgs(args)
 					input = append(input, map[string]any{"type": "function_call", "call_id": clampCallID(id), "name": name, "arguments": args})
 				}
 			}
@@ -622,6 +620,30 @@ func clampCallID(id string) string {
 		return id[:64]
 	}
 	return id
+}
+
+// sanitizeArgs ensures a function_call arguments string is valid JSON for
+// the upstream (Console rejects with "`arguments` must be valid JSON").
+// Empty → "{}". Valid JSON passes through. Concatenated objects from the
+// pre-fix parallel-merge bug (`{"cmd":"a"}{"cmd":"b"}`) salvage the first
+// object so stuck sessions recover instead of hard-400ing; anything else
+// → "{}" so the tool fails gracefully instead of the whole request.
+func sanitizeArgs(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "{}"
+	}
+	if json.Valid([]byte(s)) {
+		return s
+	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return "{}"
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return "{}"
 }
 
 func strOr(v any, def string) string {

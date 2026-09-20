@@ -42,6 +42,13 @@ type StreamState struct {
 	toolCallIndex     int
 	currentToolCallID string
 	finishSent        bool
+	// Parallel function_call fan-out (muse-spark emits output_index
+	// 2,3,4,5 interleaved: added/delta without done in between). Map
+	// each upstream item to a stable OpenAI tool index so deltas don't
+	// concatenate into one invalid `arguments` blob.
+	respIdxByOutput map[int]int
+	respIdxByItem   map[string]int
+	respIdxByCall   map[string]int
 
 	sseBuf bytes.Buffer
 }
@@ -60,6 +67,9 @@ func NewStreamState() *StreamState {
 		funcItemAdded:   make(map[int]bool),
 		funcArgsDone:    make(map[int]bool),
 		funcItemDone:    make(map[int]bool),
+		respIdxByOutput: make(map[int]int),
+		respIdxByItem:   make(map[string]int),
+		respIdxByCall:   make(map[string]int),
 	}
 }
 
@@ -435,13 +445,16 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		typ, _ := item["type"].(string)
 		if typ == "function_call" || typ == "custom_tool_call" {
 			callID, _ := item["call_id"].(string)
+			itemID, _ := item["id"].(string)
+			outputIdx, hasOutputIdx := responseOutputIndex(data)
+			idx := s.respToolIndex(outputIdx, hasOutputIdx, itemID, callID, true)
 			if callID == "" {
-				callID = fmt.Sprintf("call_%d", s.toolCallIndex)
+				callID = fmt.Sprintf("call_%d", idx)
 			}
 			s.currentToolCallID = callID
 			name, _ := item["name"].(string)
 			return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{
-				"tool_calls": []any{map[string]any{"index": s.toolCallIndex, "id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}},
+				"tool_calls": []any{map[string]any{"index": idx, "id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}},
 			}, "")}
 		}
 	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -449,14 +462,30 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		if delta == "" {
 			return nil
 		}
+		itemID, _ := data["item_id"].(string)
+		outputIdx, hasOutputIdx := responseOutputIndex(data)
+		idx := s.respToolIndex(outputIdx, hasOutputIdx, itemID, "", true)
 		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{
-			"tool_calls": []any{map[string]any{"index": s.toolCallIndex, "function": map[string]any{"arguments": delta}}},
+			"tool_calls": []any{map[string]any{"index": idx, "function": map[string]any{"arguments": delta}}},
 		}, "")}
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
+		// Deltas already streamed with the mapped index; just ensure the
+		// mapping exists so a done-without-delta still reserves an index.
+		itemID, _ := data["item_id"].(string)
+		outputIdx, hasOutputIdx := responseOutputIndex(data)
+		callID := ""
+		if name, _ := data["name"].(string); name != "" {
+			_ = name
+		}
+		s.respToolIndex(outputIdx, hasOutputIdx, itemID, callID, true)
 	case "response.output_item.done":
 		item, _ := data["item"].(map[string]any)
 		if item != nil {
 			if typ, _ := item["type"].(string); typ == "function_call" || typ == "custom_tool_call" {
-				s.toolCallIndex++
+				callID, _ := item["call_id"].(string)
+				itemID, _ := item["id"].(string)
+				outputIdx, hasOutputIdx := responseOutputIndex(data)
+				s.respToolIndex(outputIdx, hasOutputIdx, itemID, callID, true)
 			}
 		}
 	case "response.completed", "response.done":
@@ -528,4 +557,81 @@ func parseIdx(k string) int {
 	var i int
 	_, _ = fmt.Sscanf(k, "%d", &i)
 	return i
+}
+
+// responseOutputIndex extracts the Responses output_index as an int.
+// ok=false when absent or non-numeric (legacy single-call streams).
+func responseOutputIndex(data map[string]any) (idx int, ok bool) {
+	switch v := data["output_index"].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n), true
+		}
+	}
+	return 0, false
+}
+
+// respToolIndex returns the stable OpenAI tool index for one upstream
+// function_call, creating the mapping on first sight. Lookup order:
+// item_id (delta/done) → output_index → call_id, so interleaved parallel
+// calls (added,added,delta,delta) keep separate indexes instead of all
+// collapsing onto toolCallIndex.
+func (s *StreamState) respToolIndex(outputIdx int, hasOutputIdx bool, itemID, callID string, create bool) int {
+	if s.respIdxByItem == nil {
+		s.respIdxByItem = make(map[string]int)
+	}
+	if s.respIdxByOutput == nil {
+		s.respIdxByOutput = make(map[int]int)
+	}
+	if s.respIdxByCall == nil {
+		s.respIdxByCall = make(map[string]int)
+	}
+	if itemID != "" {
+		if idx, ok := s.respIdxByItem[itemID]; ok {
+			return idx
+		}
+	}
+	if hasOutputIdx {
+		if idx, ok := s.respIdxByOutput[outputIdx]; ok {
+			if itemID != "" {
+				s.respIdxByItem[itemID] = idx
+			}
+			if callID != "" {
+				s.respIdxByCall[callID] = idx
+			}
+			return idx
+		}
+	}
+	if callID != "" {
+		if idx, ok := s.respIdxByCall[callID]; ok {
+			if itemID != "" {
+				s.respIdxByItem[itemID] = idx
+			}
+			if hasOutputIdx {
+				s.respIdxByOutput[outputIdx] = idx
+			}
+			return idx
+		}
+	}
+	if !create {
+		return s.toolCallIndex
+	}
+	idx := s.toolCallIndex
+	s.toolCallIndex++
+	if itemID != "" {
+		s.respIdxByItem[itemID] = idx
+	}
+	if hasOutputIdx {
+		s.respIdxByOutput[outputIdx] = idx
+	}
+	if callID != "" {
+		s.respIdxByCall[callID] = idx
+	}
+	return idx
 }
