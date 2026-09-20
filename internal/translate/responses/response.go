@@ -218,12 +218,25 @@ func JSONToResponses(body []byte) ([]byte, error) {
 
 	var output []any
 
-	// reasoning -> reasoning item
+	// reasoning -> reasoning item, preserving any encrypted blob so the
+	// client can send it back for continuity (xAI-style encrypted
+	// reasoning: only returned when requested, must round-trip verbatim).
 	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
-		output = append(output, map[string]any{
+		item := map[string]any{
 			"type":    "reasoning",
 			"id":      "rs_0",
 			"summary": []any{map[string]any{"type": "summary_text", "text": rc}},
+		}
+		if enc, ok := msg["encrypted_content"].(string); ok && enc != "" {
+			item["encrypted_content"] = enc
+		}
+		output = append(output, item)
+	} else if enc, ok := msg["encrypted_content"].(string); ok && enc != "" {
+		output = append(output, map[string]any{
+			"type":              "reasoning",
+			"id":                "rs_0",
+			"summary":           []any{},
+			"encrypted_content": enc,
 		})
 	}
 
