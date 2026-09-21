@@ -8,8 +8,8 @@ import (
 )
 
 // buildSharedTransport creates a single tuned transport shared by all upstreams.
-func buildSharedTransport(dialer *upstream.Dialer) *http.Transport {
-	return upstream.NewTransport(dialer)
+func buildSharedTransport() *http.Transport {
+	return upstream.NewTransport()
 }
 
 // buildUpstreams creates the three upstream clients sharing the same transport.

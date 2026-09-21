@@ -243,8 +243,6 @@ type healthResp struct {
 	StartedAt  string `json:"started_at"`
 	HasModels  bool   `json:"has_models"`
 	ModelCount int    `json:"model_count"`
-	VPNIP      string `json:"vpn_ip"`
-	VPNDirect  bool   `json:"vpn_direct"`
 }
 
 func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
@@ -255,8 +253,6 @@ func (h *Handler) apiHealth(w http.ResponseWriter, r *http.Request) {
 		StartedAt:  fmt.Sprintf("%d", h.data.StartedAtUnix()),
 		HasModels:  len(models) > 0,
 		ModelCount: len(models),
-		VPNIP:      h.data.VPNIP(),
-		VPNDirect:  h.direct.IsDirect(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

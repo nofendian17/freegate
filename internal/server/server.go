@@ -27,7 +27,6 @@ import (
 	"freegate/internal/infrastructure/providers"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/upstream"
-	"freegate/internal/infrastructure/vpn"
 	"freegate/web"
 )
 
@@ -45,7 +44,6 @@ type Server struct {
 	httpSrv     *http.Server
 	Handler     http.Handler
 	logger      *slog.Logger
-	vpnProvider vpn.Provider
 	opencode    *upstream.OpenCodeUpstream
 	kilo        *upstream.KiloUpstream
 	llm7        *upstream.LLM7Upstream
@@ -82,8 +80,25 @@ func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
 	return out, nil
 }
 
+// syncRelayPools loads enabled proxy pools into the shared edge-relay
+// selector so upstream requests route via the Vercel relay.
+func syncRelayPools(pstore *providers.Store) {
+	pools, err := pstore.ListPools()
+	if err != nil {
+		return
+	}
+	rp := make([]upstream.RelayPool, 0, len(pools))
+	for _, p := range pools {
+		if !p.Enabled {
+			continue
+		}
+		rp = append(rp, upstream.RelayPool{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy})
+	}
+	upstream.SharedRelay.SetPools(rp)
+}
+
 // New constructs a Server from configuration. It wires all
-// dependencies (VPN, upstreams, application services, recorder, UI,
+// dependencies (upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
 // Use Run for that.
 func New(cfg *config.Config) (*Server, error) {
@@ -96,38 +111,10 @@ func New(cfg *config.Config) (*Server, error) {
 	// explicitly deployed behind a trusted reverse proxy.
 	httputil.SetTrustProxyHeaders(cfg.TrustProxyHeaders)
 
-	// One shared dialer + transport routes all upstreams; direct vs tunnel
-	// is switched live from the dashboard. Sharing the Transport pools idle
-	// connections once instead of per-upstream.
-	dialer := upstream.NewDialer(cfg.SOCKSAddr)
-	sharedTr := buildSharedTransport(dialer)
-	dialer.SetOnFlush(sharedTr.CloseIdleConnections)
+	// One shared transport routes all upstreams. Sharing the Transport
+	// pools idle connections once instead of per-upstream.
+	sharedTr := buildSharedTransport()
 
-	var vpnProvider vpn.Provider
-	// Single binary: the tunnel always runs in-process via the embedded
-	// supervisor (the container carries openvpn + NET_ADMIN).
-	vpnProvider, err := vpn.NewProvider(vpn.ProviderConfig{
-		Enabled:    cfg.VPNEnabled,
-		Provider:   cfg.VPNProvider,
-		SocksAddr:  cfg.SOCKSAddr,
-		Country:    cfg.VPNGateCountry,
-		MinScore:   cfg.VPNGateMinScore,
-		MaxPing:    cfg.VPNGateMaxPing,
-		RefreshInt: time.Duration(cfg.VPNGateRefreshSeconds) * time.Second,
-		OnConnect:  dialer.Flush,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create vpn provider: %w", err)
-	}
-	// Single source for direct mode: Config.IsDirect().
-	if cfg.IsDirect() {
-		dialer.SetDirect(true)
-	}
-	// Safety fallback for openvpn-missing case where provider is direct
-	// but cfg still carried SOCKSAddr.
-	if vpnProvider.CurrentIP() == "direct" && !dialer.IsDirect() {
-		dialer.SetDirect(true)
-	}
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
 	pstore, err := providers.Open(cfg.ProvidersDBPath)
@@ -138,6 +125,7 @@ func New(cfg *config.Config) (*Server, error) {
 	if err := mgr.Rebuild(); err != nil {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
+	syncRelayPools(pstore)
 	combo := upstream.NewComboRouter(infraRouter)
 	lookup := func(name string) domain.Upstream {
 		switch name {
@@ -171,12 +159,6 @@ func New(cfg *config.Config) (*Server, error) {
 	rec := recorder.NewRecorderWithDeps(recorder.Deps{
 		Metrics: m.Snapshot,
 		Models:  ms.AllModels,
-		VPNIP: func() string {
-			if dialer.IsDirect() {
-				return "direct"
-			}
-			return vpnProvider.CurrentIP()
-		},
 	})
 	cs := application.NewChatService(combo, m)
 	cs.WithRequestLogger(rec.RecordRequestLog)
@@ -191,7 +173,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("load UI templates: %w", err)
 	}
 
-	uiHandler := ui.New(rec, vpnProvider, dialer, tpl, web.Static(), cfg.AdminToken)
+	uiHandler := ui.New(rec, tpl, web.Static(), cfg.AdminToken)
 	// Direct config for Responses models (e.g. muse-spark) and Messages
 	// models (e.g. union-alpha via /zen/v1/messages per 9router PR #4111).
 	handler.SetResponseModels(cfg.ResponseModels)
@@ -221,6 +203,7 @@ func New(cfg *config.Config) (*Server, error) {
 		if err := mgr.Rebuild(); err != nil {
 			return err
 		}
+		syncRelayPools(pstore)
 		rows, err := comboRows(pstore)
 		if err != nil {
 			return err
@@ -262,7 +245,6 @@ func New(cfg *config.Config) (*Server, error) {
 		httpSrv:     httpSrv,
 		Handler:     r,
 		logger:      logger,
-		vpnProvider: vpnProvider,
 		opencode:    opencode,
 		kilo:        kilo,
 		llm7:        llm7,
@@ -274,8 +256,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}, nil
 }
 
-// Run starts background workers (upstream refreshers, VPN IP monitor,
-// recorder sampler) and ListenAndServe. It blocks until ctx is canceled,
+// Run starts background workers (upstream refreshers, recorder sampler)
+// and ListenAndServe. It blocks until ctx is canceled,
 // then performs a graceful shutdown.
 func (s *Server) Run(ctx context.Context) error {
 	bgCtx, cancelBG := context.WithCancel(context.Background())
@@ -301,15 +283,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	s.manager.Start(bgCtx)
 
-	// VPN provider runs the tunnel in-process.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		if err := s.vpnProvider.Start(bgCtx); err != nil {
-			s.logger.Error("vpn provider failed", "error", err)
-		}
-	}()
-
 	s.logger.Info("starting server", "addr", s.httpSrv.Addr)
 	errCh := make(chan error, 1)
 	go func() {
@@ -328,7 +301,6 @@ func (s *Server) Run(ctx context.Context) error {
 			s.manager.Stop()
 			_ = s.pstore.Close()
 			s.wg.Wait()
-			_ = s.vpnProvider.Close()
 			s.rateLimit.Stop()
 			return fmt.Errorf("server failed: %w", err)
 		}
@@ -346,7 +318,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
 		_ = s.pstore.Close()
-		_ = s.vpnProvider.Close()
 		s.rateLimit.Stop()
 		return err
 	}
@@ -355,7 +326,6 @@ func (s *Server) Run(ctx context.Context) error {
 	s.wg.Wait()
 
 	_ = s.pstore.Close()
-	_ = s.vpnProvider.Close()
 	s.rateLimit.Stop()
 
 	s.logger.Info("server stopped gracefully")

@@ -73,23 +73,12 @@ release:
   footer: |
     ## Single binary (no Docker)
 
-    freegate is now a single binary with embedded VPNGate per OS
-    (linux/darwin/windows). No `vpn` sidecar is required. The binary
-    auto-detects `runtime.GOOS` and probes for `openvpn` (`openvpn.exe` on
-    Windows). If `openvpn` is missing or `tun` permission fails, it falls
-    back to direct mode automatically.
+    freegate is a single binary per OS (linux/darwin/windows).
 
     ```bash
-    # single binary (embedded VPN, requires sudo/Admin for tun)
-    sudo ./freegate --port 1234
-    sudo ./freegate --vpn=false --port 1234   # direct, no VPN
-
-    # env alternative
-    VPN_ENABLED=false ./freegate
-    VPN_PROVIDER=direct ./freegate
+    ./freegate --port 1234
     ```
 
     ## Docker
 
-    `docker-compose.yml` runs the same single binary containerized (with
-    `openvpn` baked in, `NET_ADMIN` + `/dev/net/tun` for the tunnel).
+    `docker-compose.yml` runs the same single binary containerized.

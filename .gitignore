@@ -15,7 +15,6 @@
 # Claude
 .claude/dist/
 .claude/settings.local.json
-/vpngate-supervisor
 docs/superpowers/
 
 # Runtime SQLite state (providers/combos DB)

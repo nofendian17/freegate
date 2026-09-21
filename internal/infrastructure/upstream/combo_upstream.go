@@ -152,8 +152,8 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			return nil, fmt.Errorf("combo %q: %w", u.name, err)
 		}
 		// One same-tier retry on transport errors (err or nil response
-		// only — retryable statuses still fail over immediately). Tunnel
-		// dials die transiently (EOF, TLS handshake timeouts) while a
+		// only — retryable statuses still fail over immediately).
+		// Transient dials die (EOF, TLS handshake timeouts) while a
 		// fresh dial usually succeeds; retrying preserves the requested
 		// model instead of serving another tier's model after a ~30s stall.
 		var resp *domain.UpstreamResponse

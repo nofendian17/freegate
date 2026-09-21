@@ -20,7 +20,6 @@ type pageData struct {
 	Models       template.HTML
 	Providers    []string
 	Upstream     []upstreamStat
-	VPNIP        string
 }
 
 // dashboard renders the main dashboard page with initial data inline.
@@ -53,7 +52,6 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		Requests:     h.renderToString("partials/requests.html", h.buildRequestRows()),
 		Models:       h.renderToString("partials/models.html", h.buildModelRows("")),
 		Upstream:     statsData.Upstream,
-		VPNIP:        h.data.VPNIP(),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

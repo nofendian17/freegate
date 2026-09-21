@@ -7,9 +7,9 @@ Operational reference for deploying, monitoring, and recovering freegate.
 ### Local (development)
 
 ```bash
-make run                  # run server against a local VPNGate supervisor
+make run                  # run server locally
 # or, for the full stack:
-make up                   # docker compose up -d (proxy + vpn)
+make up                   # docker compose up -d
 ```
 
 ### Production / remote
@@ -20,8 +20,6 @@ docker compose build
 
 # 2. Configure (.env at repo root or in the shell)
 cat > .env <<EOF
-VPNGATE_COUNTRY=
-VPNGATE_MIN_SCORE=0
 ADMIN_TOKEN=$(openssl rand -hex 32)
 API_KEY=$(openssl rand -hex 32),$(openssl rand -hex 32)
 LOG_LEVEL=info
@@ -43,18 +41,16 @@ The compose file is the deployment contract. It pins:
 
 | Service | Image | Port binding | Resources | Depends on |
 |---------|-------|--------------|-----------|------------|
-| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 + openvpn runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | — |
+| `proxy` | `Dockerfile` (Go 1.26 build → alpine:3.20 runtime) | `127.0.0.1:1234:1234` | 512 MB / 1.0 CPU | — |
 
 The service is `restart: unless-stopped`.
-
-The `proxy` service needs a Linux host with `/dev/net/tun` (it runs OpenVPN in-process): the compose file passes the device through and grants `NET_ADMIN` / `NET_RAW`. Docker Desktop (macOS/Windows) does not support TUN/TAP.
 
 **Architecture post-optimization (2026-08-23):**
 - **Upstream routing O(1):** `cache.go` maintains `index map` + `Has()`, `kilo`/`llm7` `Match` no longer `O(n)` `Get()` copy; `opencode` remains `true` fallback.
 - **Shared transport:** `upstream/client.go:NewTransport` single tuned `http.Transport` (50/20 idle, 60 s, HTTP/2) shared by all upstreams via `server/server.go:buildSharedTransport` — avoids per-upstream dial handshake blow-up.
 - **One-pass request prep:** `translate/internal/prepost/prepare_upstream.go:PrepareUpstream` merges `NormalizeRoles`+`Reasoning`+`stream_options` in one `Unmarshal/Marshal` (was 3).
 - **Domain decoupling:** `domain.UpstreamResponse{StatusCode,Header,Body}` (`domain/response.go`), `Upstream.ChatCompletion` no longer leaks `*http.Response`; `proxy.NormalizeDomainResponseWithContext` respects `ctx` cancellation (stream loops check `ctx.Done()`).
-- **Sharded limiter & registry:** `RateLimiter` 32 shards, `vpn/registry.go` isolates server list cache (`getServers`/`pickWeighted`/`matchCountry`) from `provider.go` tunnel lifecycle (`tunnel.go`).
+- **Sharded limiter:** `RateLimiter` 32 shards.
 
 ### Exposing beyond `127.0.0.1`
 
@@ -66,12 +62,12 @@ The default port binding is local-only. To expose:
 
 ## Health checks
 
-Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/ready` public — no token, Docker HEALTHCHECK target; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/vpn/*` require `AdminAuth` cookie/header; `/v1/*` requires `ApiAuth` API key list or `ADMIN_TOKEN` superset):
+Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/ready` public — no token, Docker HEALTHCHECK target; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/pools` require `AdminAuth` cookie/header; `/v1/*` requires `ApiAuth` API key list or `ADMIN_TOKEN` superset):
 
 | Endpoint | Used by | Returns |
 |----------|---------|---------|
 | `GET /ready` | Docker `HEALTHCHECK` in `Dockerfile`, ops probes | `200 {"status":"ok"}` once models are loaded; `503 {"status":"not ready"}` otherwise |
-| `GET /api/health` | Dashboard health badge (refreshed every 3 s) | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
+| `GET /api/health` | Dashboard health badge (refreshed every 3 s) | JSON: `{ok, uptime, started_at, has_models, model_count}` |
 | `GET /api/timeseries` | Dashboard chart (refreshed every 10 s) | Array of `{ts, total_requests, errors, per_upstream}` (1 h rolling, 10 s samples) |
 
 Docker healthchecks:
@@ -126,12 +122,10 @@ make logs svc=proxy          # check for "kilo: fetch models" or "opencode: pars
 curl -s http://localhost:1234/v1/models | head
 ```
 
-If the upstreams are unreachable through the VPN (rare — both have stable public endpoints), check the tunnel:
+If the upstreams are unreachable (rare — all have stable public endpoints), check egress from the container:
 
 ```bash
 docker exec fg-proxy wget -q -O /dev/null https://api.ipify.org && echo ipify-ok
-# tunnel state + exit IP (needs ADMIN_TOKEN):
-curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:1234/api/health | jq '{vpn_ip, vpn_direct}'
 ```
 
 ### `429 Too Many Requests` on the proxy
@@ -141,7 +135,7 @@ The rate limiter is per-IP, sharded 32-way (`middleware.RateLimiter` 32 `shard{m
 The rate limiter is **in-memory only**; restarting the proxy clears all counters.
 
 ### Upstream returns 429 → pass-through or tier failover
-Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client. There is no automatic IP rotation. To change the exit IP, open the dashboard and pick a different relay server (or use the rotate-random button).
+Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client. There is no automatic IP rotation. To change the exit IP, add another relay to the proxy pools (`/providers` → Proxy Pools).
 
 ### Client sees empty replies / tool-call parameter errors
 
@@ -171,27 +165,12 @@ Diagnosis workflow:
 
    An explicit `model_unavailable` error, or another empty completion, confirms the problem is upstream — nothing to fix in freegate. Non-streaming emptiness on this model is permanent upstream behavior; prefer streaming clients or another model from `/v1/models`.
 
-### Switch between VPN and direct
-
-The dashboard's VPN Server card offers "direct (no VPN)" as the first option: selecting it routes all upstream traffic straight from the proxy container (no tunnel), while picking any relay (or rotate-random) routes back through the tunnel. This is a live runtime switch (backed by `upstream.Dialer`); there is no static `BYPASS_PROXY` env var anymore.
-
 ### `502 Bad Gateway` with "select upstream" error
 
 Routing could not find a free upstream for the model. Verify:
 
 1. The model is in `GET /v1/models` — built-ins must be free upstream; custom models come from custom providers; combos appear as their own entries (`provider: combo:<name>`)
 2. `UPSTREAM_DEFAULT` is set to a reachable upstream (`opencode`, `kilo`, or `llm7`)
-3. The `vpn` container is healthy
-
-### Dashboard shows `vpn ip: —`
-
-The VPN IP monitor (`internal/infrastructure/vpn/provider.go::ipRefresher` + `tunnel.go::fetchPublicIP`, server list via `registry.go::getServers`/`pickWeighted`) is unable to reach `https://api.ipify.org?format=json` through the SOCKS5 proxy. Common causes:
-
-- `vpn` container not healthy (check `make logs svc=vpn`) or embedded `openvpn` missing (check `InstallHint()` / `provider.CurrentIP()=="direct"`)
-- SOCKS5 port mismatch (verify `VPNGATE_SOCKS_PORT`; `Config.IsDirect()` is single source, `Dialer.IsDirect()`)
-- Shared `http.Transport` pool exhausted (check `upstream.NewTransport` 50/20 idle settings)
-
-The monitor refreshes IP every 15 s (`ipRefresher`) and logs. The dashboard polls `/api/health` every 3 s.
 
 ### `panic recovered` in logs
 
@@ -252,21 +231,19 @@ Or bind-mount: `./data:/app/data`. Back up with `docker cp fg-proxy:/app/data/pr
 
 ## Configuration changes without restart
 
-Provider/combo/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/config/*` rebuild live — no restart. Everything else requires one:
+Provider/combo/pool/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/pools`, `/api/config/*` rebuild live — no restart. Everything else requires one:
 
 ## Configuration changes without restart
 
-Provider/combo/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/config/*` rebuild live — no restart. Env-only settings (PORT, VPN, rate limit, log level) still need one:
+Provider/combo/pool/auth/upstream changes via the dashboard (`/providers`, Settings) or `/api/providers`, `/api/combos`, `/api/pools`, `/api/config/*` rebuild live — no restart. Env-only settings (PORT, rate limit, log level) still need one:
 
 ```bash
 # 1. Edit .env
-# 2. Restart just the proxy (vpn does not need to restart)
+# 2. Restart just the proxy
 docker compose up -d proxy
 # or
 make restart svc=proxy
 ```
-
-The proxy reads its server-selection filters (`VPNGATE_COUNTRY`, `VPNGATE_MIN_SCORE`, `VPNGATE_MAX_PING`) and `VPNGATE_REFRESH_SECONDS` from env. Changing them requires restarting the `proxy` service (and rebuilding if the env var is baked into the image).
 
 ## Alerts / escalation
 
@@ -274,7 +251,6 @@ There is no built-in alerting. Recommended external probes:
 
 - **`/ready` (200)** — proxy is serving
 - **`/api/health.has_models` (true)** — catalog is loaded
-- **`/api/health.vpn_ip` (non-empty, non-`unknown`)** — VPN is routing
 
 Wire these into your existing monitor (Uptime Kuma, Healthchecks.io, Datadog HTTP check, etc.) with a 1–5 minute interval. Paging thresholds:
 
@@ -282,7 +258,6 @@ Wire these into your existing monitor (Uptime Kuma, Healthchecks.io, Datadog HTT
 |--------|---------|
 | `/ready` non-200 for > 2 min | Proxy down or models not loading |
 | `upstream_errors / total_requests > 0.5` over 5 min | Upstream is degraded or auth keys expired |
-| `vpn_ip` empty / `unknown` for > 10 min | `vpn` container is down or the tunnel is broken |
 
 ## Disaster recovery
 
@@ -306,9 +281,7 @@ docker compose up -d
 
 - [ ] `ADMIN_TOKEN` is set (required, >=6 chars, user-defined password, e.g. `openssl rand -hex 32`) — dashboard (`/`, `/partials/*`, `/api/*`) is admin-only via `AdminAuth` (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`)
 - [ ] `API_KEY` is comma-separated high-entropy values (e.g. `key1,key2`) for external clients — leaving it empty keeps `/v1/*` admin-gated (login cookie or `ADMIN_TOKEN` header only, no open API); do not log tokens or cookie values
-- [ ] `VPNGATE_MIN_SCORE` is set high enough to prefer reputable relays
 - [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS (cookie `Secure` when TLS, `HttpOnly`, `SameSite=Lax`)
-- [ ] `vpn` container is on an internal network (`fg-net`); SOCKS port is not exposed to the host
 - [ ] `LOG_LEVEL` is `info` (not `debug`) in production
 - [ ] Docker socket is not mounted into either container
 - [ ] `.env` is in `.gitignore` and stored only in a secret manager

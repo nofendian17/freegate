@@ -69,7 +69,7 @@ func TestChatServiceProxyChatSuccess(t *testing.T) {
 
 // TestChatServiceProxyChatPassesThrough429 verifies that a 429 from the
 // upstream is forwarded to the client unchanged (no automatic retry or IP
-// rotation — the user picks the VPN server manually).
+// rotation — upstream requests route through proxy pools).
 func TestChatServiceProxyChatPassesThrough429(t *testing.T) {
 	body := `{"error":{"message":"Rate limit exceeded. Please try again later."}}`
 	resp := &domain.UpstreamResponse{

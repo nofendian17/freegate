@@ -193,7 +193,7 @@ Model discovery is off by default (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`)
 `openai_base_url` changes where requests go but does not auto-discover models. Set `model` explicitly in config or use `-m`.
 
 **Rate limited (429)**
-freegate's default rate limit is 60 req/min per IP. Check `RATE_LIMIT` env var. Upstream 429s are passed through to the client unchanged — there is no automatic retry or IP rotation. To change the exit IP, pick a different relay server manually from the dashboard (or rotate to a random one).
+freegate's default rate limit is 60 req/min per IP. Check `RATE_LIMIT` env var. Upstream 429s are passed through to the client unchanged — there is no automatic retry or IP rotation. To change the exit IP, add another relay to the proxy pools (`/providers` → Proxy Pools).
 
 **Tool call fails with "The required parameter X is missing" / "input JSON failed to parse"**
 
@@ -204,4 +204,4 @@ freegate buffers upstream tool-call arguments and repairs them (concatenated obj
 Known upstream limitation, not a proxy bug: that model only produces output in streaming mode. Non-streaming requests get HTTP 200 with an empty assistant message from the provider itself; freegate logs `WARN msg="upstream empty completion"` when it happens. Prefer streaming clients, or pick a different model from `/v1/models`.
 
 **Slow first request**
-VPN tunnel establishment adds latency on the first request. Subsequent requests reuse the tunnel.
+The first request warms the upstream connection pool; subsequent requests reuse pooled connections.

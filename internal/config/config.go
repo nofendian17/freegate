@@ -20,29 +20,6 @@ type Config struct {
 	// they are client-controlled and spoofable.
 	TrustProxyHeaders bool
 
-	// VPN controls the embedded VPNGate provider (single-binary mode).
-	// When enabled, freegate starts an in-process OpenVPN tunnel + SOCKS5
-	// per-OS (linux/darwin/windows) and routes upstreams via 127.0.0.1:9050.
-	// When disabled, upstreams go direct (Dialer.IsDirect).
-	VPNEnabled  bool
-	VPNProvider string // auto|vpngate|direct
-
-	// VPNGate keeps an OpenVPN tunnel to a VPNGate relay server via the
-	// in-process supervisor, exposing SOCKS5 through it for all upstream
-	// traffic.
-	VPNGateSocksPort      int // SOCKS5 port used for all upstream traffic
-	// VPNGateCountry filters the relay list by country: a country name
-	// substring ("Japan") or ISO code ("JP"), prefix with "!" to exclude
-	// ("!US"). Empty = all countries.
-	VPNGateCountry string
-	// VPNGateMinScore / VPNGateMaxPing filter the relay list by server
-	// score and ping (ms). Zero disables the filter.
-	VPNGateMinScore int
-	VPNGateMaxPing  int
-	// VPNGateRefreshSeconds bounds how often the VPNGate server list is
-	// re-fetched (default 300).
-	VPNGateRefreshSeconds int
-
 	UpstreamURLOpenCode           string
 	UpstreamKeyOpenCode           []string
 	UpstreamOpenCodeFreeAllowlist []string
@@ -73,13 +50,8 @@ type Config struct {
 	// PR #4111). Substrings matched case-insensitively. Defaults to union-alpha.
 	MessageModels []string
 
-	SOCKSAddr string
-
 	ProvidersDBPath string
 }
-
-// IsDirect reports whether upstreams should bypass the VPN tunnel.
-func (c *Config) IsDirect() bool { return c.SOCKSAddr == "" }
 
 func Load() *Config {
 	cfg := &Config{
@@ -90,15 +62,6 @@ func Load() *Config {
 		RateLimit:  envInt("RATE_LIMIT", 60),
 
 		TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
-
-		VPNEnabled:  envBool("VPN_ENABLED", true),
-		VPNProvider: envStr("VPN_PROVIDER", "auto"),
-
-		VPNGateSocksPort:      envInt("VPNGATE_SOCKS_PORT", 9050),
-		VPNGateCountry:        envStr("VPNGATE_COUNTRY", ""),
-		VPNGateMinScore:       envInt("VPNGATE_MIN_SCORE", 0),
-		VPNGateMaxPing:        envInt("VPNGATE_MAX_PING", 0),
-		VPNGateRefreshSeconds: envInt("VPNGATE_REFRESH_SECONDS", 300),
 
 		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
 		UpstreamKeyOpenCode:           envSlice("UPSTREAM_KEY_OPENCODE", "public"),
@@ -123,12 +86,6 @@ func Load() *Config {
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
 
-	// In-process SOCKS on 127.0.0.1:9050 when VPN enabled, direct otherwise.
-	if !cfg.VPNEnabled || cfg.VPNProvider == "direct" {
-		cfg.SOCKSAddr = ""
-	} else {
-		cfg.SOCKSAddr = "127.0.0.1:" + strconv.Itoa(cfg.VPNGateSocksPort)
-	}
 	return cfg
 }
 
@@ -156,20 +113,8 @@ func (c *Config) Validate() error {
 	if c.UpstreamURLLLM7 == "" {
 		errs = append(errs, "UPSTREAM_URL_LLM7 is required")
 	}
-	if c.VPNEnabled && c.SOCKSAddr == "" && c.VPNProvider != "direct" {
-		errs = append(errs, "SOCKSAddr must be set when VPN_ENABLED is true")
-	}
-	if c.VPNProvider != "auto" && c.VPNProvider != "vpngate" && c.VPNProvider != "direct" {
-		errs = append(errs, fmt.Sprintf("VPN_PROVIDER must be auto, vpngate or direct, got %q", c.VPNProvider))
-	}
 	if c.Port <= 0 || c.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("PORT must be between 1 and 65535, got %d", c.Port))
-	}
-	// VPN ports — only validate when VPN is enabled.
-	if c.VPNEnabled {
-		if c.VPNGateSocksPort <= 0 || c.VPNGateSocksPort > 65535 {
-			errs = append(errs, fmt.Sprintf("VPNGATE_SOCKS_PORT must be between 1 and 65535, got %d", c.VPNGateSocksPort))
-		}
 	}
 	if c.RateLimit <= 0 {
 		errs = append(errs, "RATE_LIMIT must be positive")

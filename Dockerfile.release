@@ -1,5 +1,5 @@
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates openvpn iproute2
+RUN apk add --no-cache ca-certificates
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/freegate /usr/local/bin/freegate
 EXPOSE 1234

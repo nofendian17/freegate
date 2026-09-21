@@ -1,20 +1,18 @@
 # freegate
 
-Multi-upstream OpenAI-compatible API proxy for free AI models, routed through a rotating VPNGate tunnel.
+Multi-upstream OpenAI-compatible API proxy for free AI models, routed through Vercel edge-relay proxy pools.
 
-freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), `/v1/responses` (OpenAI Responses API), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **api.llm7.io** (keyless gateway), routing each request to the upstream that serves the requested model. All upstream traffic goes through a VPNGate/OpenVPN tunnel (SOCKS5 proxy) to rotate the exit IP and dodge rate limits. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
+freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), `/v1/responses` (OpenAI Responses API), and `/v1/models` requests to **opencode.ai**, **kilo.ai** (OpenRouter), and **api.llm7.io** (keyless gateway), routing each request to the upstream that serves the requested model. Upstream traffic goes through enabled proxy pools (Vercel edge relays, round-robin via `x-relay-target` / `x-relay-path` headers) or direct when no pool is enabled. Only free models are served. Streaming responses normalize the upstream's `reasoning_content` field (used by OpenCode/DeepSeek) into the standard `reasoning` field so clients see a single reasoning field.
 
 ## Features
 
 - **Multi-upstream routing** — a model is served by Kilo or LLM7 iff it appears in that upstream's free catalog (`isFree == true` for Kilo; not usage-based / `turbo` tier for LLM7, both from the upstream's `/models` response); everything else falls through to OpenCode
 - **Free only** — automatically filters out paid models (`isFree == true` for Kilo, `-free` suffix for OpenCode — same convention opencode uses in its own catalog); merged & deduped on `/v1/models`
-- **VPN by default** — all upstream traffic through a VPNGate/OpenVPN tunnel (SOCKS5 `:9050`); pick any relay server from the dashboard (or rotate to a random one), or switch to **direct** (no tunnel) with one click — no automatic IP rotation on 429
+- **Proxy pools** — upstream traffic routes through enabled Vercel edge-relay pools (round-robin, `x-relay-target` / `x-relay-path`); direct when no pool is enabled — no automatic IP rotation on 429
 - **Reasoning normalization** — collapses upstream `reasoning_content` (OpenCode/DeepSeek) into a single `reasoning` field, preventing the double-response seen on DeepSeek when both fields are present
 - **DeepSeek DSML handling** — recovers orphaned DSML tool-call blocks into real tool calls, strips leaked DSML scaffolding from text, and stops DeepSeek tool requests at the tool_calls closer instead of letting the model re-emit blocks to `max_tokens`
 - **Format translation** — accepts OpenAI, Claude (`/v1/messages`), and Gemini request formats, plus the Responses API (`/v1/responses`); detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
-- **VPN IP monitoring** — current tunnel exit IP shown in dashboard header, refreshed every 3s
-- **Manual server picker** — dashboard card lists every relay (country/score/ping) with one-click connect to any server, plus a rotate-random button and a **direct** (no-VPN) option
 - **Rate limiting** — per-IP rate limiter, configurable via env
 - **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
 - **Custom providers** — any OpenAI-compatible base URL + keys in SQLite (`PROVIDERS_DB_PATH`), managed at `/providers` or `/api/providers` (keys masked, test probe, live rebuild, no restart)
@@ -22,19 +20,13 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), `/v1
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
 - **Chat playground** — in-dashboard chat UI with model picker, system prompt, and persistent thread; opens from the nav and posts to the same `/v1/chat/completions` proxy, with SSE streaming (default), a stop button, and one-shot non-streaming mode
 - **Mobile responsive** — dashboard adapts to small screens with a compact grid layout
-- **Docker Compose** — single command to start the proxy with the tunnel in-process (requires a Linux host with `/dev/net/tun`)
-- **Single binary** — `freegate` per OS (linux/darwin/windows) with embedded VPNGate + in-process SOCKS, auto-detects `runtime.GOOS`, falls back to direct if `openvpn` missing
+- **Docker Compose** — single command to start the proxy
+- **Single binary** — `freegate` per OS (linux/darwin/windows)
 
 ## Quick Start
 
-**Single binary (no Docker):**
 ```bash
-# linux / macOS (embedded VPN, needs sudo for tun)
-sudo ./freegate --port 1234
-# direct without VPN
-./freegate --vpn=false --port 1234
-# windows (Admin PowerShell)
-.\freegate.exe --port 1234
+./freegate --port 1234
 ```
 
 **Docker:**
@@ -44,19 +36,11 @@ docker compose up -d
 
 The proxy will be available at `http://localhost:1234`.
 
-### Prerequisites for VPN mode (single binary)
+## Proxy Pools
 
-Direct binary embeds VPNGate per OS (`runtime.GOOS` → `openvpn` probe) and falls back to `direct` if dependency missing. Dashboard `/api/vpn/status` returns `install_hint` when binary not found.
+Upstream requests route through enabled proxy pools in round-robin order. Each pool is a Vercel edge relay (`proxy_url` = `https://<relay>`); freegate rewrites the request to the relay and injects `x-relay-target` (upstream scheme+host) and `x-relay-path` (upstream path+query). Requests matching a pool's `no_proxy` list bypass the relay. With no enabled pool, traffic goes direct.
 
-| OS | Dependency | Install | Notes |
-|----|------------|---------|-------|
-| **linux** | `openvpn` | `sudo apt install openvpn` <br> `sudo yum install openvpn` <br> `sudo pacman -S openvpn` | Needs `CAP_NET_ADMIN` / `sudo` for `tun0` — run `sudo ./freegate` |
-| **darwin** | `openvpn` via Homebrew | `brew install openvpn` | Probes `openvpn`, `/opt/homebrew/bin/openvpn`, `/usr/local/bin/openvpn`; needs `sudo` for `utun` |
-| **windows** | `OpenVPN` + TAP-Windows6 | `winget install OpenVPNTechnologies.OpenVPN` <br> `choco install openvpn` | Run `.\freegate.exe` as **Administrator** for TAP |
-
-If `openvpn` missing, server logs `WARN vpn: openvpn not found, falling back to direct mode` + `hint`, and `GET /api/vpn/status` → `{"direct":true,"install_hint":"..."}`. Dashboard `# VPN Server` then shows `direct — openvpn not found: <hint>` and still serves free models via direct.
-
-To force direct without VPN: `./freegate --vpn=false` or `VPN_ENABLED=false`.
+Manage pools at `/providers` (# Proxy Pools) or via `/api/pools` (CRUD, admin-only). Pool changes rebuild live — no restart.
 
 A read-only terminal-style dashboard is served at **`http://localhost:1234/`** — see [Dashboard](#dashboard) below.
 
@@ -110,14 +94,6 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `1234` | Server port |
-| `VPN_ENABLED` | `true` | Enable embedded VPN. `false` = direct connections. Also `--vpn=false` flag. |
-| `VPN_PROVIDER` | `auto` | `auto` (GOOS-aware), `vpngate`, or `direct` |
-| `VPNGATE_SOCKS_PORT` | `9050` | In-process SOCKS5 port (`127.0.0.1:9050` when `VPN_ENABLED=true`) |
-| `VPNGATE_COUNTRY` | (empty) | Relay country filter: name substring or ISO code (`Japan`, `JP`); prefix `!` to exclude (`!US`). Empty = all countries. |
-| `VPNGATE_MIN_SCORE` | `0` | Minimum relay server score (`0` = disabled) |
-| `VPNGATE_MAX_PING` | `0` | Maximum relay ping in ms (`0` = disabled) |
-| `VPNGATE_REFRESH_SECONDS` | `300` | How often the VPNGate server list is re-fetched |
-| — | — | Direct-vs-tunnel is switched **live from the dashboard** (VPN Server card → "direct (no VPN)"); or via `VPN_ENABLED=false` / `--vpn=false` |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `ADMIN_TOKEN` | — | **Required** (>=6 chars). Admin password: gates the dashboard (login form at `/login`, cookie `fg_admin` or `X-Admin-Token`/`Bearer` header) and also works as a superset key for `/v1/*`. Generate: `openssl rand -hex 32` |
 | `API_KEY` | (empty) | Comma-separated keys for `/v1/*` (`X-API-Key` / Bearer); any entry valid, admin token is superset. **Empty = `/v1/*` stays admin-gated** (login cookie or admin token header only — no open API) |
@@ -138,7 +114,7 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `UPSTREAM_CAPTURE` | `false` | Log raw upstream request/response lines via slog (debug only — contains full conversation content) |
 | `PROVIDERS_DB_PATH` | `./data/providers.db` | SQLite file for custom providers, tiered combos, and seeded auth + upstream settings. Auto-created; mount a volume over `./data` in docker. |
 
-Custom providers, combos, and seeded auth/upstream settings live in SQLite and are managed at `/providers` or via `/api/providers`, `/api/combos` (no restart needed).
+Custom providers, combos, pools, and seeded auth/upstream settings live in SQLite and are managed at `/providers` or via `/api/providers`, `/api/combos`, `/api/pools` (no restart needed).
 
 ## API Endpoints
 
@@ -154,6 +130,7 @@ Custom providers, combos, and seeded auth/upstream settings live in SQLite and a
 | `GET` | `/providers` | Custom providers + tiered combos management UI (admin-only) |
 | `GET/POST` | `/api/providers`, `/api/providers/{id}`, `/api/providers/{id}/test` | Custom provider CRUD + live `/models` probe (admin-only, keys masked) |
 | `GET/POST` | `/api/combos`, `/api/combos/{id}`, `/api/combos/{id}/test` | Tiered combo CRUD + per-tier probe (admin-only) |
+| `GET/POST` | `/api/pools`, `/api/pools/{id}` | Proxy pool CRUD (admin-only, rebuilds live) |
 
 ### Format Translation
 
@@ -214,7 +191,6 @@ The dashboard follows the **TerminalUI** design system:
 - **Upstream split** — per-upstream counts with proportional bars
 - **Free Models table** — filter by provider, auto-refresh 10s
 - **Recent Requests** — last 100 proxied requests (timestamp, model, upstream, status, duration, tokens, IP, error), auto-refresh 5s
-- **VPN exit IP** — current tunnel IP displayed in header, refreshed every 3s
 - **API Endpoints card** — quick reference for available REST endpoints
 - **Health badge** — green square dot when models are loaded, amber when empty
 - **Mobile responsive** — adapts layout for small screens (compact nav grid, 2-col metrics, tighter spacing)
@@ -228,13 +204,13 @@ The dashboard follows the **TerminalUI** design system:
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
 | `GET /partials/models` | HTMX partial: free-models table with provider filter |
 | `GET /api/timeseries` | JSON: `[{ts, total_requests, errors, per_upstream}]` |
-| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count, vpn_ip}` |
+| `GET /api/health` | JSON: `{ok, uptime, started_at, has_models, model_count}` |
 | `GET /static/*` | Self-hosted static assets (CSS, HTMX, Chart.js, JetBrains Mono, favicon) |
 | `GET /index.html` | Redirects to `/` |
 
 ### Notes
 
-- **Admin login required.** The dashboard (and VPN switching) is behind `ADMIN_TOKEN` (`/login`). The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default; `GET /ready` stays public for health probes.
+- **Admin login required.** The dashboard is behind `ADMIN_TOKEN` (`/login`). The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default; `GET /ready` stays public for health probes.
 - **In-memory only (metrics).** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
 - **SQLite persistence (config).** Custom providers, tiered combos, and seeded auth + upstream settings persist in `PROVIDERS_DB_PATH` (default `./data/providers.db`). Mount a volume over `./data` in docker or the file is lost with the container.
 
@@ -248,7 +224,7 @@ The dashboard includes an embedded **chat playground** — a modal chat UI serve
 - **Multi-turn thread** — keep the conversation going; full history is sent with each request
 - **Persistence** — the thread survives page reloads via `localStorage` (key: `freegate.playground.v1`); "clear" wipes it
 - **Shortcuts** — `Enter` sends, `Shift+Enter` inserts a newline
-- **Admin-only dashboard** — the dashboard (and VPN switching) requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use any `API_KEY` entry or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
+- **Admin-only dashboard** — the dashboard requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use any `API_KEY` entry or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
 
 Internally the playground is HTMX-driven for chrome (modal open/close, model picker loads via `hx-get="/partials/playground/models"`), while the send path uses **fetch directly**: streaming mode consumes the OpenAI SSE response with a ReadableStream reader and appends delta text incrementally, with automatic fallback to buffered rendering when SSE or streams are unavailable; non-streaming mode waits for the full JSON. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the option-list partial in `web/templates/partials/playground_models.html`, the server route at `internal/delivery/ui/handler.go` (`/partials/playground/models`), and the shim in `web/static/js/playground.js`.
 
@@ -268,9 +244,9 @@ flowchart TB
         Recorder["Recorder<br/>· ring buffers (100 reqs, 360 ts)<br/>· timeseries sampler (10s)"]
     end
 
-    subgraph VPN["VPNGate (in-process: SOCKS5 127.0.0.1:9050)"]
-        S1["OpenVPN relay A"]
-        S2["OpenVPN relay B"]
+    subgraph Pools["Proxy Pools (Vercel edge relays)"]
+        P1["relay A"]
+        P2["relay B"]
     end
 
     subgraph Upstreams["Upstreams"]
@@ -281,11 +257,11 @@ flowchart TB
 
     CLI --> Router
     Router --> Proxy
-    Proxy --> S1
-    Proxy --> S2
-    S1 --> OC
-    S2 --> Kilo
-    S1 --> LLM7
+    Proxy --> P1
+    Proxy --> P2
+    P1 --> OC
+    P2 --> Kilo
+    P1 --> LLM7
     Proxy -.->|"log entry"| Recorder
     Recorder -.->|"reads"| Dashboard
     Browser --> Dashboard
@@ -312,8 +288,7 @@ freegate
 │   │   ├── proxy/            # Upstream-agnostic normalization helpers
 │   │   ├── recorder/         # Request log + timeseries sampler
 │   │   ├── ringbuffer/       # Generic typed ring buffer
-│   │   ├── vpn/              # Embedded VPN (provider + supervisor + in-process SOCKS)
-│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo, llm7)
+│   │   └── upstream/         # Upstream interface + Router + implementations (opencode, kilo, llm7) + edge-relay pools
 │   ├── server/               # HTTP server bootstrap (wiring + lifecycle)
 │   └── translate/            # Format translation: detect + Claude/Gemini/Responses convert, DeepSeek normalize, DSML sanitize
 ├── web/                      # Embedded assets (templates, CSS, JS, fonts)
@@ -326,8 +301,8 @@ freegate
 │   │   ├── fonts/            # Self-hosted JetBrains Mono (Latin, 4 weights)
 │   │   └── favicon.svg       # Terminal-style favicon
 │   └── embed.go              # go:embed directives
-├── docker-compose.yml        # Single proxy container (openvpn baked in, NET_ADMIN + /dev/net/tun)
-├── Dockerfile                # Multi-stage Go build (proxy + openvpn runtime)
+├── docker-compose.yml        # Single proxy container
+├── Dockerfile                # Multi-stage Go build
 ├── Makefile                  # test, build, docker compose targets
 └── .env.example              # Environment variable reference
 ```
@@ -380,7 +355,7 @@ docker compose build
 
 - **Go 1.26+** — core proxy server
 - **[chi](https://github.com/go-chi/chi/v5)** — HTTP router
-- **[VPNGate](https://www.vpngate.net/)** + OpenVPN — tunnel + SOCKS5 proxy + manual server selection
+- **Vercel edge relays** — proxy pools (`x-relay-target` / `x-relay-path`)
 - **Docker Compose** — orchestration
 - **HTMX 2.x + Chart.js 4** — embedded dashboard (no JS framework, no SPA)
 - **JetBrains Mono** — terminal-inspired monospace typeface (self-hosted WOFF2)

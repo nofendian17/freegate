@@ -1,6 +1,6 @@
 # Environment Variables
 
-freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime, derived (e.g. `SOCKSAddr` = `127.0.0.1:VPNGATE_SOCKS_PORT`), or simply unset.
+freegate is configured entirely through environment variables. Defaults are shown in the **Default** column; an empty `Default` means the variable has no built-in default and the value is either required at runtime or simply unset.
 
 The authoritative list lives in `internal/config/config.go::Load`; this file is generated from it and `.env.example`. If you change one, change the other.
 
@@ -12,29 +12,14 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 |----------|----------|---------|-------------|
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
-| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`, `/api/vpn/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
+| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. |
 | `API_KEY` | No | (empty) | Comma-separated list, e.g. `key1,key2`. Any entry valid for `/v1/*`, `/v1/messages`, `/v1/metrics` via `ApiAuth` (`X-API-Key` or `Authorization: Bearer`). `ADMIN_TOKEN` is also valid there (superset). **Empty = `/v1/*` is admin-gated**: only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants access (no open API). Entries are trimmed; empty entries dropped. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 | `TRUST_PROXY_HEADERS` | No | `false` | Honor `X-Forwarded-For` / `X-Real-IP` when deriving the client IP (rate limit buckets, logs, request history). Leave `false` when exposed directly — forwarded headers are client-controlled and spoofable. Set `true` only behind a reverse proxy that overwrites these headers. |
 
-## VPN (single-binary per-OS)
+## Proxy pools (SQLite)
 
-freegate now runs as a **single binary** with embedded VPNGate per OS (linux/darwin/windows). The binary auto-detects `runtime.GOOS`, probes for `openvpn` (`openvpn.exe` on Windows, `/opt/homebrew/bin/openvpn` on macOS) and starts an in-process OpenVPN tunnel + SOCKS5 on `127.0.0.1:9050`. If `openvpn` is missing or `tun` permission fails, it falls back to **direct** automatically. Toggle live from the dashboard or via `VPN_ENABLED=false` / `--vpn=false`.
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `VPN_ENABLED` | No | `true` | Enable embedded VPN. `false` = direct connections, no tunnel. Also overridable via `--vpn=false` flag. |
-| `VPN_PROVIDER` | No | `auto` | VPN provider: `auto` (GOOS-aware), `vpngate`, or `direct`. |
-| `VPNGATE_SOCKS_PORT` | No | `9050` | SOCKS5 port for in-process tunnel (127.0.0.1:9050) |
-| `VPNGATE_MIN_SCORE` | No | `0` | Minimum relay server score (0 = disabled) |
-| `VPNGATE_MAX_PING` | No | `0` | Maximum relay ping in ms (0 = disabled) |
-| `VPNGATE_REFRESH_SECONDS` | No | `300` | How often the VPNGate server list is re-fetched |
-
-The internal `SOCKSAddr` field is derived as `127.0.0.1:VPNGATE_SOCKS_PORT` when `VPN_ENABLED=true`; empty when direct (`Config.IsDirect()` is the single source).
-
-`VPNGATE_COUNTRY` / `VPNGATE_MIN_SCORE` / `VPNGATE_MAX_PING` filters are applied in-process by the Provider (`vpn/registry.go` via `matchCountry`/`pickWeighted`).
-
-`VPNGATE_COUNTRY` accepts a country name or ISO code (e.g. `Korea Republic of` or `KR`), or a `!`-prefixed exclusion (e.g. `!Japan` to use every country except Japan). Empty (the default) offers every relay in the dashboard picker, including Japan.
+Upstream requests route through enabled proxy pools (`GET/POST/PUT/DELETE /api/pools`, managed at `/providers`): each pool is a Vercel edge relay URL, applied round-robin with `x-relay-target` / `x-relay-path` headers; `no_proxy` bypasses per-pool. Pool changes rebuild live — no restart, no env vars.
 
 ## Upstreams
 
@@ -94,9 +79,7 @@ Related (no env needed): degenerate upstream responses — HTTP 200 with no cont
 - Empty or `<6 chars` `ADMIN_TOKEN` (`ADMIN_TOKEN is required`, `ADMIN_TOKEN must be at least 6 characters`)
 - `API_KEY` entries that are empty/whitespace after comma-split (`API_KEY entries must be non-empty`)
 - Empty `UPSTREAM_URL_OPENCODE`, `UPSTREAM_URL_KILO`, or `UPSTREAM_URL_LLM7`
-- Empty `SOCKSAddr` when `VPN_ENABLED=true` and `VPN_PROVIDER != "direct"` (helper `IsDirect()` is single source)
-- Invalid `VPN_PROVIDER` (must be `auto`, `vpngate`, or `direct`)
-- `PORT` outside `1–65535`; `VPNGATE_SOCKS_PORT` outside `1–65535` only when `VPN_ENABLED=true`; `RATE_LIMIT` non-positive always
+- `PORT` outside `1–65535`; `RATE_LIMIT` non-positive always
 
 A failure prints a multi-line error and exits 1.
 
@@ -104,14 +87,13 @@ Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, 
 
 ## Source-of-truth files
 
-- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`, helper `IsDirect()`
-- `internal/infrastructure/vpn/` — `provider.go` + `registry.go` (server list cache) + `tunnel.go` (OpenVPN lifecycle) + `socks.go` per-OS
-- `internal/infrastructure/upstream/` — `client.go` (`NewTransport` shared, `NewHTTPClientWithTransport`), `cache.go` (O(1) `Has`), `upstream.go` (`Upstream = domain.Upstream`)
+- `internal/config/config.go` — `Config` struct, `Load()`, `Validate()`
+- `internal/infrastructure/upstream/` — `client.go` (`NewTransport` shared, `NewHTTPClientWithTransport`), `relay.go` (edge-relay `SharedRelay`, `x-relay-target` / `x-relay-path`), `cache.go` (O(1) `Has`), `upstream.go` (`Upstream = domain.Upstream`)
 - `internal/domain/` — `upstream.go` + `response.go` (`UpstreamResponse` decouples `net/http`), `model.go` canonical
 - `internal/translate/internal/prepost/prepare_upstream.go` — one-pass `PrepareUpstream` (roles+reasoning+stream_options)
 - `internal/infrastructure/proxy/normalize.go` — `NormalizeDomainResponseWithContext` (ctx-aware streaming), `RateLimiter` sharded 32-way in `internal/delivery/middleware`
 - `internal/application/rawupstream.go` — `rawLineLogger` (opt-in per-line raw upstream log, `UPSTREAM_CAPTURE=true`)
 - `.env.example` — annotated example
-- `docker-compose.yml` — single proxy container (openvpn baked in, `NET_ADMIN` + `/dev/net/tun`)
+- `docker-compose.yml` — single proxy container
 
 <!-- /AUTO-GENERATED -->

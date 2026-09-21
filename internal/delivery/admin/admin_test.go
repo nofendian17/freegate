@@ -106,6 +106,95 @@ func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 	var _ domain.Upstream
 }
 
+func TestAdmin_PoolLifecycle(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	rebuilt := 0
+	h := New(s, func() error { rebuilt++; return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/pools", `{"name":"relay-1","proxy_url":"https://relay-1.example.com"}`, http.StatusCreated)
+	var created providers.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatalf("create pool: %v %s", err, w.Body.String())
+	}
+	request("POST", "/api/pools", `{"name":"bad","proxy_url":"not-a-url"}`, http.StatusBadRequest)
+	path := "/api/pools/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("GET", path, "", http.StatusOK)
+	request("PUT", path, `{"name":"relay-1","proxy_url":"https://relay-2.example.com","no_proxy":"example.com"}`, http.StatusOK)
+	got, err := s.GetPool(created.ID)
+	if err != nil || got.ProxyURL != "https://relay-2.example.com" || got.NoProxy != "example.com" {
+		t.Fatalf("update not persisted: %v %+v", err, got)
+	}
+	request("DELETE", path, "", http.StatusNoContent)
+	request("GET", path, "", http.StatusNotFound)
+	if rebuilt != 3 {
+		t.Fatalf("rebuilds=%d, want 3", rebuilt)
+	}
+}
+
+func TestAdmin_PoolTest_DisablesDeadRelay(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	row, err := s.CreatePool(providers.ProxyPool{Name: "dead-relay", ProxyURL: "http://127.0.0.1:1", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/pools/"+strconv.FormatUint(uint64(row.ID), 10)+"/test", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.OK {
+		t.Fatalf("expected ok=false, got %v %s", out, w.Body.String())
+	}
+	got, err := s.GetPool(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled {
+		t.Error("dead relay must be disabled after failed test")
+	}
+	if got.TestStatus != "error" || got.LastError == "" {
+		t.Errorf("expected error status persisted, got %+v", got)
+	}
+}
+
+func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	for _, body := range []string{`{}`, `{"project_name":"relay-1"}`, `{"vercel_token":"","project_name":"relay-1"}`} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("POST", "/api/pools/vercel-deploy", bytes.NewBufferString(body)))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status=%d, want 400 (%s)", body, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 	s, _ := providers.Open("file:admin-keepkeys?mode=memory&cache=shared")
 	row, err := s.CreateProvider(providers.Provider{Name: "keepme", BaseURL: "https://api.keep.test/v1", APIKeys: []string{"sk-live-abc"}, RefreshSec: 60, Enabled: true})

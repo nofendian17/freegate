@@ -145,6 +145,42 @@ func TestStore_CRUD_AndMask(t *testing.T) {
 	}
 }
 
+func TestStore_PoolCRUD(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	p, err := s.CreatePool(ProxyPool{Name: "relay-1", ProxyURL: "https://relay-1.example.com", Enabled: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if p.ID == 0 {
+		t.Fatal("expected nonzero ID")
+	}
+	if _, err := s.CreatePool(ProxyPool{Name: "bad", ProxyURL: "not-a-url"}); err == nil {
+		t.Fatal("expected validation error for bad proxy_url")
+	}
+	list, err := s.ListPools()
+	if err != nil || len(list) != 1 || list[0].ProxyURL != "https://relay-1.example.com" {
+		t.Fatalf("list: %v %+v", err, list)
+	}
+	got, err := s.GetPool(p.ID)
+	if err != nil || got.Name != "relay-1" {
+		t.Fatalf("get: %v %+v", err, got)
+	}
+	upd, err := s.UpdatePool(p.ID, ProxyPool{Name: "relay-1", ProxyURL: "https://relay-2.example.com", NoProxy: "example.com", Enabled: false})
+	if err != nil || upd.ProxyURL != "https://relay-2.example.com" || upd.NoProxy != "example.com" || upd.Enabled {
+		t.Fatalf("update: %v %+v", err, upd)
+	}
+	if err := s.DeletePool(p.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if list, _ := s.ListPools(); len(list) != 0 {
+		t.Fatalf("expected empty after delete, got %+v", list)
+	}
+}
+
 func TestProvider_Validate_RejectsBadName(t *testing.T) {
 	s, err := Open("file::memory:?cache=shared")
 	if err != nil {

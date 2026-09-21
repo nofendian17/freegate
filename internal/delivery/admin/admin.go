@@ -91,6 +91,13 @@ func (h *Handler) Register(r chi.Router) {
 	r.Put("/api/combos/{id}", h.updateCombo)
 	r.Delete("/api/combos/{id}", h.deleteCombo)
 	r.Post("/api/combos/{id}/test", h.testCombo)
+	r.Get("/api/pools", h.listPools)
+	r.Post("/api/pools", h.createPool)
+	r.Post("/api/pools/vercel-deploy", h.deployPoolToVercel)
+	r.Get("/api/pools/{id}", h.getPool)
+	r.Put("/api/pools/{id}", h.updatePool)
+	r.Delete("/api/pools/{id}", h.deletePool)
+	r.Post("/api/pools/{id}/test", h.testPool)
 }
 
 type providerIn struct {

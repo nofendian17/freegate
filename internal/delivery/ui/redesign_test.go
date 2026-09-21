@@ -79,19 +79,6 @@ func TestDashboard_ModelTestParseFailureMarksError(t *testing.T) {
 	}
 }
 
-// TestDashboard_VPNRefreshChecksHTTPStatus pins the refresh-list fix: a
-// non-OK POST /api/vpn/servers/refresh must surface an http failure instead
-// of reporting "server list refreshed".
-func TestDashboard_VPNRefreshChecksHTTPStatus(t *testing.T) {
-	rr := serveViaRoutes(newTestHandler(t), "GET", "/")
-	if rr.Code != 200 {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "refresh failed: http") {
-		t.Error("VPN refresh-list handler does not check the response status")
-	}
-}
-
 // TestRequestsPartial_KiloUsesAmberTone pins tone consistency: the Go view
 // model emits tone "amber" for kilo; the partial must not recolor it purple.
 func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
@@ -106,7 +93,7 @@ func TestRequestsPartial_KiloUsesAmberTone(t *testing.T) {
 			{Ts: time.Now(), Method: "POST", Path: "/v1/chat/completions", Model: "m", Upstream: "kilo", Status: 200, DurationMs: 5, IP: "127.0.0.1"},
 		},
 		ts: nil, uptime: 1, start: time.Now().Unix(),
-	}, &fakeVPN{}, &fakeDirect{}, mustLoadTemplates(t), webStaticFS(t))
+	}, mustLoadTemplates(t), webStaticFS(t))
 
 	rr := serveViaRoutes(h, "GET", "/partials/requests")
 	if rr.Code != 200 {
@@ -140,6 +127,38 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("providers page missing slice-2 behavior %q", want)
+		}
+	}
+}
+
+// TestProvidersPage_PoolModalA11y pins the pool modal's accessible behavior
+// so future template edits cannot silently drop it: focus trap, focus
+// restore, keyboard close, and help-text associations.
+func TestProvidersPage_PoolModalA11y(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="pool-modal"`,                       // modal exists
+		`aria-labelledby="pool-modal-title"`,    // titled dialog
+		`for="pf-name"`,                         // labeled inputs
+		`for="pf-proxy-url"`,
+		`for="pf-no-proxy"`,
+		`for="pf-token"`,
+		`aria-describedby="pf-name-help"`,       // help-text associations
+		`aria-describedby="pf-no-proxy-help"`,
+		`aria-describedby="pf-enabled-help"`,
+		`aria-describedby="pf-strict-help"`,
+		`poolLastTrigger`,                       // focus restore
+		`poolModal.addEventListener('keydown'`,  // focus trap + keyboard close
+		`id === 'pool-modal-close'`,             // Enter/Space on close button
+		`no proxy pools yet`,                    // actionable empty state
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pool modal missing accessible behavior %q", want)
 		}
 	}
 }

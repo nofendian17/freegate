@@ -77,6 +77,39 @@ type RouteCombo struct {
 	Tiers []ComboTier `gorm:"serializer:json" json:"tiers"`
 }
 
+type ProxyPool struct {
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	Name        string `gorm:"uniqueIndex;not null" json:"name"`
+	ProxyURL    string `gorm:"not null" json:"proxy_url"`
+	NoProxy     string `json:"no_proxy,omitempty"`
+	StrictProxy bool   `json:"strict_proxy"`
+	Enabled     bool   `gorm:"default:true" json:"enabled"`
+	TestStatus  string `json:"test_status,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+}
+
+// MarkPoolTest records the outcome of a pool probe.
+func (s *Store) MarkPoolTest(id uint, ok bool, lastErr string) error {
+	status := "active"
+	if !ok {
+		status = "error"
+	}
+	return s.db.Model(&ProxyPool{}).Where("id = ?", id).Updates(map[string]any{
+		"test_status": status, "last_error": lastErr,
+	}).Error
+}
+
+func (p *ProxyPool) Validate() error {
+	if !nameRe.MatchString(p.Name) {
+		return fmt.Errorf("name must match ^[a-z0-9-]{1,64}$")
+	}
+	u := strings.ToLower(strings.TrimSpace(p.ProxyURL))
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return fmt.Errorf("proxy_url must be http(s) URL")
+	}
+	return nil
+}
+
 type legacyComboRow struct {
 	ID      uint
 	Tiers   []ComboTier `gorm:"serializer:json"`
@@ -155,7 +188,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}
-	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}); err != nil {
+	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}, &ProxyPool{}); err != nil {
 		return nil, fmt.Errorf("migrate providers db: %w", err)
 	}
 	s := &Store{db: db}
@@ -432,3 +465,57 @@ func (s *Store) UpdateCombo(id uint, c RouteCombo) (RouteCombo, error) {
 }
 
 func (s *Store) DeleteCombo(id uint) error { return s.db.Delete(&RouteCombo{}, id).Error }
+
+func (s *Store) CreatePool(p ProxyPool) (ProxyPool, error) {
+	if err := p.Validate(); err != nil {
+		return ProxyPool{}, err
+	}
+	p.ID = 0
+	enabled := p.Enabled
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&p).Error; err != nil {
+			return err
+		}
+		if !enabled {
+			p.Enabled = false
+			return tx.Model(&p).Update("enabled", false).Error
+		}
+		return nil
+	}); err != nil {
+		return ProxyPool{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) ListPools() ([]ProxyPool, error) {
+	var out []ProxyPool
+	if err := s.db.Order("name asc").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) GetPool(id uint) (ProxyPool, error) {
+	var p ProxyPool
+	if err := s.db.First(&p, id).Error; err != nil {
+		return ProxyPool{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) UpdatePool(id uint, p ProxyPool) (ProxyPool, error) {
+	var cur ProxyPool
+	if err := s.db.First(&cur, id).Error; err != nil {
+		return ProxyPool{}, err
+	}
+	p.ID = cur.ID
+	if err := p.Validate(); err != nil {
+		return ProxyPool{}, err
+	}
+	if err := s.db.Save(&p).Error; err != nil {
+		return ProxyPool{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) DeletePool(id uint) error { return s.db.Delete(&ProxyPool{}, id).Error }

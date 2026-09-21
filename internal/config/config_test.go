@@ -53,23 +53,6 @@ func TestValidate_NegativePort(t *testing.T) {
 	}
 }
 
-func TestValidate_VPNEnabledRequiresSocksAddr(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.VPNEnabled = true
-	cfg.SOCKSAddr = ""
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for empty SOCKSAddr when VPN_ENABLED is true")
-	}
-}
-
-func TestValidate_VPNProviderInvalid(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.VPNProvider = "invalid"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for invalid VPN_PROVIDER")
-	}
-}
-
 func TestEnvInt_Default(t *testing.T) {
 	val := envInt("NONEXISTENT_KEY", 42)
 	if val != 42 {
@@ -136,26 +119,14 @@ func TestConfig_Load_MultiAPIKey(t *testing.T) {
 	}
 }
 
-func TestConfig_Load_VPNGateCountry(t *testing.T) {
-	cfg := Load()
-	if cfg.VPNGateCountry != "" {
-		t.Fatalf("expected empty VPNGateCountry by default, got %q", cfg.VPNGateCountry)
-	}
-
-	t.Setenv("VPNGATE_COUNTRY", "!US")
-	cfg = Load()
-	if cfg.VPNGateCountry != "!US" {
-		t.Fatalf("expected VPNGateCountry=!US, got %q", cfg.VPNGateCountry)
-	}
-}
 func TestConfig_Validate_AdminRequired(t *testing.T) {
-	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN") {
 		t.Fatalf("expected ADMIN_TOKEN required error, got %v", err)
 	}
 }
 func TestConfig_Validate_AdminTokenTooShort(t *testing.T) {
-	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, VPNGateSocksPort: 9050, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at least 6") {
 		t.Fatalf("expected ADMIN_TOKEN length error, got %v", err)
 	}
@@ -182,9 +153,6 @@ func defaultConfig() *Config {
 		Port:                  1234,
 		AdminToken:            "0123456789abcdef0123456789abcdef",
 		APIKey:                []string{"test-key"},
-		VPNEnabled:            true,
-		VPNProvider:           "auto",
-		VPNGateSocksPort:      9050,
 		LogLevel:              "info",
 		RateLimit:             60,
 
@@ -198,6 +166,5 @@ func defaultConfig() *Config {
 		UpstreamURLLLM7: "https://api.llm7.io/v1",
 
 		UpstreamDefault: "opencode",
-		SOCKSAddr:       "127.0.0.1:9050",
 	}
 }
