@@ -20,8 +20,13 @@
       .prov-grid { grid-template-columns: 1fr; }
       .combo-row select, .combo-row .prov-input { max-width: 100%; flex: 1 1 140px; }
     }
-    .pool-modal-panel { max-width: 520px; }
-  </style>
+     .pool-modal-panel { max-width: 520px; }
+     .prov-editor { border-top: 1px dashed var(--border); padding-top: var(--space-4); margin-top: var(--space-4); }
+     .prov-editor[hidden] { display: none; }
+     .palette-item { display: block; width: 100%; text-align: left; margin-bottom: var(--space-1); }
+     .palette-item.is-active { background: var(--surface-hover); border-color: var(--border-hover); color: var(--text); }
+     .kbd { font-size: 11px; color: var(--text-faint); border: 1px solid var(--border); padding: 1px 5px; }
+   </style>
 </head>
 <body>
   <div class="prov-shell">
@@ -34,6 +39,7 @@
         <a href="/" class="btn-tertiary" style="text-decoration:none">&lt; dashboard</a>
       </div>
       <div class="nav-meta">
+        <button id="palette-open" class="btn-tertiary" type="button"><span class="kbd">Ctrl+K</span> palette</button>
         <form method="POST" action="/logout" class="logout-form">
           <button type="submit" class="btn-tertiary">> logout</button>
         </form>
@@ -67,6 +73,56 @@
             <tr><td colspan="6" class="dim" aria-busy="true">// loading…</td></tr>
           </tbody>
         </table>
+      </div>
+      <div id="provider-editor" class="prov-editor" hidden>
+        <div class="card-header">
+          <span class="card-title" id="provider-modal-title">// provider</span>
+          <button id="provider-modal-close" class="btn-tertiary" type="button">x cancel</button>
+        </div>
+        <div id="provider-form-err" class="prov-err" role="alert" style="display:none"></div>
+        <div id="provider-test-out" class="prov-ok" style="display:none"></div>
+        <form id="provider-form">
+          <input type="hidden" id="f-id">
+          <div class="prov-grid">
+            <div class="prov-field">
+              <label class="prov-label" for="f-name">name</label>
+              <input id="f-name" class="prov-input" required placeholder="my-provider">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-base-url">base_url</label>
+              <input id="f-base-url" class="prov-input" required placeholder="https://api.example.com/v1">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label" for="f-api-keys">api_keys (one per line — leave blank to keep existing keys)</label>
+              <textarea id="f-api-keys" class="prov-input" rows="2" placeholder="sk-..."></textarea>
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label" for="f-headers">headers (KEY=Value, one per line)</label>
+              <textarea id="f-headers" class="prov-input" rows="2" placeholder="X-Custom=1"></textarea>
+            </div>
+            <div class="prov-field full">
+              <label class="prov-label">models — only checked models are stored & routed</label>
+              <div id="f-legacy" class="prov-warn" style="display:none">// legacy row: whole catalog currently routes — klik > test lalu save untuk mengunci seleksi</div>
+              <div id="f-models" class="prov-models"><span class="dim">// klik > test untuk memuat daftar model dari upstream</span></div>
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-refresh">refresh_sec</label>
+              <input id="f-refresh" class="prov-input" type="number" min="0" value="60">
+            </div>
+            <div class="prov-field">
+              <label class="prov-label" for="f-priority">priority</label>
+              <input id="f-priority" class="prov-input" type="number" value="0">
+            </div>
+            <div class="prov-field full">
+              <label class="prov-check"><input id="f-enabled" type="checkbox" checked> enabled</label>
+            </div>
+          </div>
+          <div class="prov-actions">
+            <button id="provider-save" type="submit" class="btn-primary">> save</button>
+            <button id="provider-test" type="button" class="btn-secondary">> test</button>
+            <button id="provider-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -125,57 +181,15 @@
     <footer class="footer" style="margin-top:var(--space-7)"># freegate — TerminalUI</footer>
   </div>
 
-  <div id="provider-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
-    <div class="modal-panel" style="max-width:640px">
+  <div id="command-palette" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+    <div class="modal-panel" style="max-width:560px">
       <div class="modal-header">
-        <span class="modal-title" id="provider-modal-title">// provider</span>
-        <span class="modal-close" id="provider-modal-close" role="button" tabindex="0" aria-label="Close provider modal">x</span>
+        <span class="modal-title" id="palette-title">&gt; command palette</span>
+        <span class="modal-close" id="palette-close" role="button" tabindex="0" aria-label="Close command palette">x</span>
       </div>
-      <div class="modal-body">
-        <div id="provider-form-err" class="prov-err" role="alert" style="display:none"></div>
-        <div id="provider-test-out" class="prov-ok" style="display:none"></div>
-        <form id="provider-form">
-          <input type="hidden" id="f-id">
-          <div class="prov-grid">
-            <div class="prov-field">
-              <label class="prov-label" for="f-name">name</label>
-              <input id="f-name" class="prov-input" required placeholder="my-provider">
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-base-url">base_url</label>
-              <input id="f-base-url" class="prov-input" required placeholder="https://api.example.com/v1">
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label" for="f-api-keys">api_keys (one per line — leave blank to keep existing keys)</label>
-              <textarea id="f-api-keys" class="prov-input" rows="2" placeholder="sk-..."></textarea>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label" for="f-headers">headers (KEY=Value, one per line)</label>
-              <textarea id="f-headers" class="prov-input" rows="2" placeholder="X-Custom=1"></textarea>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label">models — only checked models are stored & routed</label>
-              <div id="f-legacy" class="prov-warn" style="display:none">// legacy row: whole catalog currently routes — klik > test lalu save untuk mengunci seleksi</div>
-              <div id="f-models" class="prov-models"><span class="dim">// klik > test untuk memuat daftar model dari upstream</span></div>
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-refresh">refresh_sec</label>
-              <input id="f-refresh" class="prov-input" type="number" min="0" value="60">
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-priority">priority</label>
-              <input id="f-priority" class="prov-input" type="number" value="0">
-            </div>
-            <div class="prov-field full">
-              <label class="prov-check"><input id="f-enabled" type="checkbox" checked> enabled</label>
-            </div>
-          </div>
-          <div class="prov-actions">
-            <button id="provider-save" type="submit" class="btn-primary">> save</button>
-            <button id="provider-test" type="button" class="btn-secondary">> test</button>
-            <button id="provider-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
-          </div>
-        </form>
+      <div class="modal-body" style="padding:var(--space-3)">
+        <input id="palette-input" class="prov-input" aria-label="Command palette search" placeholder="Type a command or provider (e.g. 'new', 'test openai', 'edit')..." autocomplete="off">
+        <div id="palette-results" style="margin-top:var(--space-3); max-height:280px; overflow-y:auto"></div>
       </div>
     </div>
   </div>
@@ -238,7 +252,6 @@
   "use strict";
   var table = document.getElementById('provider-table');
   var errBox = document.getElementById('provider-err');
-  var modal = document.getElementById('provider-modal');
   var formErr = document.getElementById('provider-form-err');
   var testOut = document.getElementById('provider-test-out');
   // Stored selection of the row being edited: null = legacy row (whole
@@ -326,10 +339,13 @@
       function(c) { return c.value; });
   }
 
+  var providersCache = [];
+
   function loadProviders() {
     getJSON('/api/providers')
       .then(function(body) {
         var rows = body.data || body || [];
+        providersCache = rows;
         if (!rows.length) {
           table.innerHTML = '<tr><td colspan="6" class="dim">// no custom providers yet — use "> new provider"</td></tr>';
           return;
@@ -358,6 +374,8 @@
     });
   }
 
+  var editor = document.getElementById('provider-editor');
+
   function openModal(p) {
     p = p || {};
     document.getElementById('f-id').value = p.id || '';
@@ -376,35 +394,18 @@
     // the form values ad-hoc so the checklist can be filled pre-save.
     document.getElementById('provider-modal-title').textContent = p.id ? '// edit provider' : '// new provider';
     show(formErr, ''); show(testOut, '');
-    modal.style.display = 'flex';
-    document.body.classList.add('modal-open');
+    editor.hidden = false;
     document.getElementById('f-name').focus();
+    editor.scrollIntoView({block: 'nearest'});
   }
   function closeModal() {
-    modal.style.display = 'none';
-    document.body.classList.remove('modal-open');
+    editor.hidden = true;
   }
-
-  // Focus trap: keep Tab cycling inside the open modal. Only rendered,
-  // enabled controls count — .focus() on a display:none element is a no-op
-  // (e.g. delete/test buttons hidden in the "new provider" modal).
-  modal.addEventListener('keydown', function(e) {
-    if (e.key !== 'Tab' || modal.style.display !== 'flex') return;
-    var items = Array.prototype.filter.call(
-      modal.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'),
-      function(el) { return !el.disabled && el.type !== 'hidden' && el.offsetParent !== null; }
-    );
-    if (!items.length) return;
-    var first = items[0], last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  });
 
   var lastTrigger = null;
   document.getElementById('provider-new').addEventListener('click', function() { lastTrigger = this; openModal(); });
   document.getElementById('provider-modal-close').addEventListener('click', function() { closeModal(); if (lastTrigger) lastTrigger.focus(); });
-  modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
-  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && modal.style.display === 'flex') closeModal(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !editor.hidden) closeModal(); });
 
   table.addEventListener('click', function(e) {
     var btn = e.target.closest('.prov-edit');
@@ -828,6 +829,160 @@
           loadCombos();
         });
       }).catch(function(e2) { show(comboErr, '! delete combo: ' + e2.message); });
+    }
+  });
+
+  var palette = document.getElementById('command-palette');
+  var paletteInput = document.getElementById('palette-input');
+  var paletteResults = document.getElementById('palette-results');
+
+  function openPalette() {
+    palette.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    paletteInput.value = '';
+    paletteInput.focus();
+    renderPaletteResults('');
+  }
+
+  function closePalette() {
+    palette.style.display = 'none';
+    document.body.classList.remove('modal-open');
+  }
+
+  function renderPaletteResults(q) {
+    var parts = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var cmd = parts[0] || '';
+    var arg = parts.slice(1).join(' ');
+
+    var items = [];
+
+    if (!cmd) {
+      items = [
+        {label: '> new provider', action: function() { closePalette(); openModal(); }},
+        {label: '> new pool', action: function() { closePalette(); openPoolModal({}, false); }},
+        {label: '> new combo', action: function() { closePalette(); resetComboForm(); comboForm.hidden = false; document.getElementById('combo-name').focus(); }},
+        {label: '> toggle [provider]', hint: 'type provider name'},
+        {label: '> test [provider]', hint: 'type provider name'},
+        {label: '> edit [provider]', hint: 'type provider name'},
+        {label: '> delete [provider]', hint: 'type provider name'}
+      ];
+    } else if (cmd === 'new') {
+      if (!arg || arg.indexOf('pool') === 0) {
+        items.push({label: '> new pool', action: function() { closePalette(); openPoolModal({}, false); }});
+      }
+      if (!arg || arg.indexOf('prov') === 0) {
+        items.push({label: '> new provider', action: function() { closePalette(); openModal(); }});
+      }
+      if (!arg || arg.indexOf('comb') === 0) {
+        items.push({label: '> new combo', action: function() { closePalette(); resetComboForm(); comboForm.hidden = false; document.getElementById('combo-name').focus(); }});
+      }
+    } else if (['toggle', 'test', 'edit', 'delete'].indexOf(cmd) >= 0) {
+      providersCache.forEach(function(p) {
+        if (!arg || p.name.toLowerCase().indexOf(arg) >= 0) {
+          var label = '>' + cmd + ' ' + p.name;
+          if (cmd === 'toggle') label += ' [' + (p.enabled ? 'on' : 'off') + ']';
+          items.push({
+            label: label,
+            action: function() {
+              closePalette();
+              if (cmd === 'toggle') {
+                toggleProvider(p.id, !p.enabled);
+              } else if (cmd === 'test') {
+                testProviderById(p.id);
+              } else if (cmd === 'edit') {
+                openModalById(p.id);
+              } else if (cmd === 'delete') {
+                deleteProviderById(p.id, p.name);
+              }
+            }
+          });
+        }
+      });
+    }
+
+    if (!items.length) {
+      paletteResults.innerHTML = '<span class="dim" style="display:block;padding:var(--space-2)">no matches</span>';
+      return;
+    }
+
+    paletteResults.innerHTML = items.slice(0, 10).map(function(item, i) {
+      return '<button class="btn-tertiary palette-item" data-idx="' + i + '" style="display:block;width:100%;text-align:left;margin-bottom:var(--space-1)">' +
+        esc(item.label) + (item.hint ? ' <span class="dim">' + esc(item.hint) + '</span>' : '') + '</button>';
+    }).join('');
+
+    paletteResults.querySelectorAll('.palette-item').forEach(function(btn, i) {
+      btn.addEventListener('click', function() { items[i].action(); });
+    });
+  }
+
+  function toggleProvider(id, enabled) {
+    getJSON('/api/providers/' + id)
+      .then(function(body) {
+        var p = body.data || body;
+        return getJSON('/api/providers/' + id, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            name: p.name,
+            base_url: p.base_url,
+            headers: p.headers || {},
+            refresh_sec: p.refresh_sec || 60,
+            priority: p.priority || 0,
+            enabled: enabled
+          })
+        });
+      })
+      .then(function() { loadProviders(); })
+      .catch(function(e) { show(errBox, '! toggle: ' + e.message); });
+  }
+
+  function testProviderById(id) {
+    show(errBox, '// testing…', true);
+    getJSON('/api/providers/' + id + '/test', {method: 'POST'})
+      .then(function(b) { show(errBox, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok); })
+      .catch(function(e) { show(errBox, '! test: ' + e.message); });
+  }
+
+  function openModalById(id) {
+    getJSON('/api/providers/' + id).then(function(body) { openModal(body.data || body); }).catch(function(e) { show(errBox, '! load: ' + e.message); });
+  }
+
+  function deleteProviderById(id, name) {
+    if (!confirm('delete provider "' + name + '"? combos using it will lose that tier.')) return;
+    getJSON('/api/providers/' + id, {method: 'DELETE'}).then(function() { loadProviders(); loadTierEditor(); }).catch(function(e) { show(errBox, '! delete: ' + e.message); });
+  }
+
+  document.getElementById('palette-open').addEventListener('click', openPalette);
+  document.getElementById('palette-close').addEventListener('click', closePalette);
+  palette.addEventListener('click', function(e) { if (e.target === palette) closePalette(); });
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      if (palette.style.display === 'flex') closePalette(); else openPalette();
+    }
+    if (e.key === 'Escape' && palette.style.display === 'flex') closePalette();
+  });
+
+  paletteInput.addEventListener('input', function() { renderPaletteResults(paletteInput.value); });
+  var paletteIdx = -1;
+  palette.addEventListener('keydown', function(e) {
+    var btns = paletteResults.querySelectorAll('.palette-item');
+    if (!btns.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      paletteIdx = Math.min(paletteIdx + 1, btns.length - 1);
+      btns.forEach(function(b, i) { b.style.background = i === paletteIdx ? 'var(--surface-hover)' : ''; });
+      btns[paletteIdx].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      paletteIdx = Math.max(paletteIdx - 1, 0);
+      btns.forEach(function(b, i) { b.style.background = i === paletteIdx ? 'var(--surface-hover)' : ''; });
+      btns[paletteIdx].focus();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      var idx = paletteIdx >= 0 ? paletteIdx : 0;
+      if (btns[idx]) btns[idx].click();
     }
   });
 
