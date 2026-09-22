@@ -67,7 +67,11 @@
             <p id="f-legacy" class="mb-2 hidden text-caption text-mid-gray">Legacy row: the whole catalog routes. Run Test, then Save to lock the selection.</p>
             <input id="f-models-filter" type="search" hidden placeholder="Filter models…" aria-label="Filter models"
                    class="mb-2 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none placeholder:text-mid-gray">
-            <div id="f-models" class="flex max-h-56 flex-wrap gap-x-6 gap-y-2 overflow-auto rounded-2xl bg-canvas p-3 text-caption text-mid-gray">
+            <div class="mb-2 flex flex-wrap gap-2">
+              <button id="f-models-select-all" type="button" class="rounded-2xl border border-hairline bg-paper px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-canvas">Select all</button>
+              <button id="f-models-deselect-all" type="button" class="rounded-2xl border border-hairline bg-paper px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-canvas">Deselect all</button>
+            </div>
+            <div id="f-models" class="flex max-h-56 flex-col gap-1 overflow-auto rounded-2xl bg-canvas p-3 text-caption text-mid-gray">
               <span>Run Test to load the model list from the upstream.</span>
             </div>
           </div>

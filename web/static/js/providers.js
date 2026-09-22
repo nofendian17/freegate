@@ -105,6 +105,17 @@
     });
   }
 
+  // Bulk-toggle the model checklist. When a filter is active, only the
+  // visible rows are affected so "filter → Select all" picks a subset.
+  function setModelsChecked(checked) {
+    var onlyVisible = !!document.getElementById('f-models-filter').value.trim();
+    document.querySelectorAll('#f-models label').forEach(function (lab) {
+      if (onlyVisible && lab.classList.contains('hidden')) return;
+      var box = lab.querySelector('input[type=checkbox]');
+      if (box) box.checked = checked;
+    });
+  }
+
   // ----- alpine store -----
   document.addEventListener('alpine:init', function () {
     Alpine.store('ui', {
@@ -194,8 +205,8 @@
     }
     document.getElementById('f-models-filter').hidden = false;
     box.innerHTML = ids.map(function (id) {
-      return '<label class="flex items-center gap-2 font-mono"><input type="checkbox" class="size-4 accent-[#0a0a0a]" value="' + esc(id) + '"' +
-        (keep[id] ? ' checked' : '') + '> ' + esc(id) + '</label>';
+      return '<label class="flex items-center gap-2 rounded-xl px-2 py-1.5 font-mono hover:bg-paper" title="' + esc(id) + '"><input type="checkbox" class="size-4 shrink-0 accent-[#0a0a0a]" value="' + esc(id) + '"' +
+        (keep[id] ? ' checked' : '') + '><span class="min-w-0 flex-1 truncate">' + esc(id) + '</span></label>';
     }).join('');
     applyModelFilter();
   }
@@ -236,6 +247,8 @@
   document.getElementById('provider-new').addEventListener('click', function () { lastTrigger = this; openProviderModal(); });
   document.getElementById('provider-modal-close').addEventListener('click', closeEditor);
   document.getElementById('f-models-filter').addEventListener('input', applyModelFilter);
+  document.getElementById('f-models-select-all').addEventListener('click', function () { setModelsChecked(true); });
+  document.getElementById('f-models-deselect-all').addEventListener('click', function () { setModelsChecked(false); });
 
   if (providerTable) {
     providerTable.addEventListener('click', function (e) {
@@ -309,8 +322,9 @@
         var fresh = editingLegacyModels === null || editingLegacyModels === undefined;
         renderModelChecks(fresh ? probed : checkedModels(), probed);
         show(providerTestOut, testSummary(b), !!(b && b.ok));
-        if (!(b && b.ok)) show(providerFormErr, testSummary(b));
-        else show(providerFormErr, '');
+        // Probe result lives only in the test-output box (ok or fail) —
+        // echoing the failure into the form-error box too showed it 2x.
+        show(providerFormErr, '');
       });
     }).catch(function (e) { show(providerTestOut, 'test: ' + e.message); });
   });

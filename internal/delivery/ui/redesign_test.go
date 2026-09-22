@@ -225,8 +225,10 @@ func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
 		`for="f-refresh"`,
 		`for="f-priority"`,
 		`for="f-enabled"`,
-		`inputmode="url"`,       // URL keyboard on mobile
-		`id="f-models-filter"`,  // model checklist filter
+		`inputmode="url"`,      // URL keyboard on mobile
+		`id="f-models-filter"`, // model checklist filter
+		`id="f-models-select-all"`,
+		`id="f-models-deselect-all"`,
 		`id="f-api-keys-label"`, // hint toggles new vs edit
 	} {
 		if !strings.Contains(body, want) {
@@ -239,6 +241,7 @@ func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
 		"restoreProviderFocus", // focus restore after save/delete
 		"testSummary",          // human-readable test output
 		"applyModelFilter",     // checklist filter behavior
+		"setModelsChecked",     // bulk select/deselect
 		"line(s) without",      // malformed header warning
 	} {
 		if !strings.Contains(js, want) {
