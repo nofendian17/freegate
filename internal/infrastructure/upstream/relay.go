@@ -1,13 +1,44 @@
 package upstream
 
 import (
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"freegate/internal/infrastructure/providers"
 )
+
+// ResolveRelayPools maps a proxy setting to a pool list for SetRelayPools:
+// nil follows the global rotation, an empty slice means direct, otherwise
+// the pinned pool. A missing or disabled pinned pool falls back to global
+// with a warning so routing never breaks on a stale reference. owner is
+// the upstream name used in the warning (e.g. "opencode", "custom:acme").
+func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (providers.ProxyPool, error)) []RelayPool {
+	switch providers.NormalizeProxyMode(mode) {
+	case providers.ProxyModeDirect:
+		return []RelayPool{}
+	case providers.ProxyModePool:
+		if poolID == nil {
+			return nil
+		}
+		pool, err := getPool(*poolID)
+		if err != nil {
+			slog.Warn("upstream pinned to missing pool, using global rotation", "upstream", owner, "pool_id", *poolID)
+			return nil
+		}
+		if !pool.Enabled {
+			slog.Warn("upstream pinned to disabled pool, using global rotation", "upstream", owner, "pool", pool.Name)
+			return nil
+		}
+		return []RelayPool{{URL: pool.ProxyURL, NoProxy: pool.NoProxy, Strict: pool.StrictProxy}}
+	default:
+		return nil
+	}
+}
 
 func ShouldBypassNoProxy(targetURL, noProxy string) bool {
 	noProxy = strings.TrimSpace(noProxy)

@@ -457,3 +457,102 @@ func TestCombo_Members_Migrated_To_Tiers(t *testing.T) {
 	}
 }
 
+// TestStore_ProviderProxyPin verifies per-provider proxy selection:
+// pinning stores mode+pool, pool mode without an id fails, a pool id on
+// other modes is cleared, and UnpinPool resets pins to global rotation.
+func TestStore_ProviderProxyPin(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	pool, err := s.CreatePool(ProxyPool{Name: "edge-1", ProxyURL: "https://relay.test", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := s.CreateProvider(Provider{Name: "pinned", BaseURL: "https://example.test/v1", APIKeys: []string{"k"}, Models: []string{"m"}, Enabled: true, ProxyMode: "pool", ProxyPoolID: &pool.ID})
+	if err != nil {
+		t.Fatalf("create pinned: %v", err)
+	}
+	if pinned.EffectiveProxyMode() != ProxyModePool || pinned.ProxyPoolID == nil || *pinned.ProxyPoolID != pool.ID {
+		t.Fatalf("pin not stored: %+v", pinned)
+	}
+	if _, err := s.CreateProvider(Provider{Name: "noid", BaseURL: "https://example.test/v1", APIKeys: []string{"k"}, Enabled: true, ProxyMode: "pool"}); err == nil {
+		t.Fatal("expected pool mode without id to fail")
+	}
+	direct, err := s.CreateProvider(Provider{Name: "direct", BaseURL: "https://example.test/v1", APIKeys: []string{"k"}, Enabled: true, ProxyMode: "direct", ProxyPoolID: &pool.ID})
+	if err != nil {
+		t.Fatalf("create direct: %v", err)
+	}
+	if direct.ProxyPoolID != nil {
+		t.Fatalf("pool id must be cleared outside pool mode: %+v", direct)
+	}
+	if err := s.UnpinPool(pool.ID); err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	raw, err := s.GetProviderRaw(pinned.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("unpin must reset to global: %+v", raw)
+	}
+}
+
+// TestStore_BuiltinProxy verifies builtin relay selection storage:
+// missing rows default to global, unknown names fail, pool pins require
+// an existing pool, and UnpinPool resets builtin pins too.
+func TestStore_BuiltinProxy(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	b, err := s.GetBuiltinProxy("opencode")
+	if err != nil || b.Name != "opencode" || NormalizeProxyMode(b.ProxyMode) != ProxyModeGlobal || b.ProxyPoolID != nil {
+		t.Fatalf("default must be global: %+v %v", b, err)
+	}
+	if _, err := s.SetBuiltinProxy("nope", "direct", nil); err == nil {
+		t.Fatal("expected unknown builtin to fail")
+	}
+	if _, err := s.SetBuiltinProxy("kilo", "pool", nil); err == nil {
+		t.Fatal("expected pool mode without id to fail")
+	}
+	bad := uint(999999)
+	if _, err := s.SetBuiltinProxy("kilo", "pool", &bad); err == nil {
+		t.Fatal("expected missing pool to fail")
+	}
+	pool, err := s.CreatePool(ProxyPool{Name: "edge-1", ProxyURL: "https://relay.test", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetBuiltinProxy("kilo", "pool", &pool.ID); err != nil {
+		t.Fatalf("set pin: %v", err)
+	}
+	b, err = s.GetBuiltinProxy("kilo")
+	if err != nil || b.ProxyMode != ProxyModePool || b.ProxyPoolID == nil || *b.ProxyPoolID != pool.ID {
+		t.Fatalf("pin not stored: %+v %v", b, err)
+	}
+	if _, err := s.SetBuiltinProxy("kilo", "direct", &pool.ID); err != nil {
+		t.Fatalf("set direct: %v", err)
+	}
+	b, err = s.GetBuiltinProxy("kilo")
+	if err != nil || b.ProxyMode != ProxyModeDirect || b.ProxyPoolID != nil {
+		t.Fatalf("direct must clear pin: %+v %v", b, err)
+	}
+	if _, err := s.SetBuiltinProxy("llm7", "pool", &pool.ID); err != nil {
+		t.Fatalf("set pin: %v", err)
+	}
+	if err := s.UnpinPool(pool.ID); err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	b, err = s.GetBuiltinProxy("llm7")
+	if err != nil || NormalizeProxyMode(b.ProxyMode) != ProxyModeGlobal || b.ProxyPoolID != nil {
+		t.Fatalf("unpin must reset builtin to global: %+v %v", b, err)
+	}
+	list, err := s.ListBuiltinProxies()
+	if err != nil || len(list) != len(KnownBuiltins) {
+		t.Fatalf("list builtin: %v %+v", err, list)
+	}
+}
+

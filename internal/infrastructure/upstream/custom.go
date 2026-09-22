@@ -112,6 +112,11 @@ func (u *CustomUpstream) RestoreKept(old []domain.Model) {
 
 func (u *CustomUpstream) Name() string { return "custom:" + u.name }
 
+// SetRelayPools overrides edge-relay behavior for this provider: nil
+// follows the global rotation, an empty slice means direct (no relay),
+// otherwise the provider is pinned to the given pools (normally one).
+func (u *CustomUpstream) SetRelayPools(pools []RelayPool) { u.client.SetRelayPools(pools) }
+
 // Match reports whether modelID routes to this provider: any model in
 // legacy mode (nil selection), otherwise only explicitly selected ones.
 // Nothing is auto-added to a curated selection.

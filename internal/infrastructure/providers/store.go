@@ -36,7 +36,38 @@ type Provider struct {
 	// solely from combo tiers.
 	Priority int  `json:"priority"`
 	Enabled  bool `gorm:"default:true" json:"enabled"`
+	// ProxyMode selects edge-relay behavior for this provider:
+	// "" (zero value) follows the global pool rotation, "direct"
+	// skips all relays, "pool" pins to ProxyPoolID. Existing rows
+	// default to global, preserving current behavior.
+	ProxyMode string `json:"proxy_mode,omitempty"`
+	// ProxyPoolID pins the provider to one pool when ProxyMode is
+	// "pool". Nil otherwise (cleared on save for other modes).
+	ProxyPoolID *uint `json:"proxy_pool_id,omitempty"`
 }
+
+// Proxy selection modes for Provider.ProxyMode.
+const (
+	ProxyModeGlobal = ""
+	ProxyModeDirect = "direct"
+	ProxyModePool   = "pool"
+)
+
+// NormalizeProxyMode trims and lowercases the mode, mapping the "global"
+// alias to the zero value so stored rows stay canonical.
+func NormalizeProxyMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ProxyModeDirect:
+		return ProxyModeDirect
+	case ProxyModePool:
+		return ProxyModePool
+	default:
+		return ProxyModeGlobal
+	}
+}
+
+// EffectiveProxyMode reports the canonical mode ("", "direct", "pool").
+func (p *Provider) EffectiveProxyMode() string { return NormalizeProxyMode(p.ProxyMode) }
 
 type ComboTier struct {
 	Provider string `json:"provider"`
@@ -86,6 +117,15 @@ type ProxyPool struct {
 	Enabled     bool   `gorm:"default:true" json:"enabled"`
 	TestStatus  string `json:"test_status,omitempty"`
 	LastError   string `json:"last_error,omitempty"`
+}
+
+// BuiltinProxy stores the edge-relay selection of a builtin upstream
+// (opencode, kilo, llm7). Absent row means global rotation. Same mode
+// semantics as Provider.ProxyMode/ProxyPoolID.
+type BuiltinProxy struct {
+	Name        string `gorm:"primaryKey" json:"name"`
+	ProxyMode   string `json:"proxy_mode,omitempty"`
+	ProxyPoolID *uint  `json:"proxy_pool_id,omitempty"`
 }
 
 // MarkPoolTest records the outcome of a pool probe.
@@ -138,6 +178,9 @@ func (p *Provider) Validate() error {
 	if p.RefreshSec < 10 || p.RefreshSec > 3600 {
 		return fmt.Errorf("refresh_sec must be 10..3600")
 	}
+	if NormalizeProxyMode(p.ProxyMode) == ProxyModePool && p.ProxyPoolID == nil {
+		return fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+	}
 	return nil
 }
 
@@ -188,7 +231,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}
-	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}, &ProxyPool{}); err != nil {
+	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}, &ProxyPool{}, &BuiltinProxy{}); err != nil {
 		return nil, fmt.Errorf("migrate providers db: %w", err)
 	}
 	s := &Store{db: db}
@@ -242,6 +285,10 @@ func (s *Store) CreateProvider(p Provider) (Provider, error) {
 		p.RefreshSec = 60
 	}
 	p.Models = NormalizeModels(p.Models)
+	p.ProxyMode = NormalizeProxyMode(p.ProxyMode)
+	if p.ProxyMode != ProxyModePool {
+		p.ProxyPoolID = nil
+	}
 	if err := p.Validate(); err != nil {
 		return Provider{}, err
 	}
@@ -334,6 +381,10 @@ func (s *Store) UpdateProvider(id uint, p Provider) (Provider, error) {
 			p.RefreshSec = 60
 		}
 		p.Models = NormalizeModels(p.Models)
+		p.ProxyMode = NormalizeProxyMode(p.ProxyMode)
+		if p.ProxyMode != ProxyModePool {
+			p.ProxyPoolID = nil
+		}
 		if err := p.Validate(); err != nil {
 			return err
 		}
@@ -519,3 +570,71 @@ func (s *Store) UpdatePool(id uint, p ProxyPool) (ProxyPool, error) {
 }
 
 func (s *Store) DeletePool(id uint) error { return s.db.Delete(&ProxyPool{}, id).Error }
+
+// UnpinPool resets providers pinned to the given pool back to the global
+// rotation, so deleting a pool never leaves a dangling reference.
+func (s *Store) UnpinPool(poolID uint) error {
+	if err := s.db.Model(&Provider{}).Where("proxy_pool_id = ?", poolID).Updates(map[string]any{
+		"proxy_mode": ProxyModeGlobal, "proxy_pool_id": nil,
+	}).Error; err != nil {
+		return err
+	}
+	return s.db.Model(&BuiltinProxy{}).Where("proxy_pool_id = ?", poolID).Updates(map[string]any{
+		"proxy_mode": ProxyModeGlobal, "proxy_pool_id": nil,
+	}).Error
+}
+
+// GetBuiltinProxy returns the stored relay selection for a builtin
+// upstream. A missing row means global rotation (zero value, nil error).
+func (s *Store) GetBuiltinProxy(name string) (BuiltinProxy, error) {
+	var b BuiltinProxy
+	if err := s.db.First(&b, "name = ?", name).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return BuiltinProxy{Name: name}, nil
+		}
+		return BuiltinProxy{}, err
+	}
+	b.ProxyMode = NormalizeProxyMode(b.ProxyMode)
+	if b.ProxyMode != ProxyModePool {
+		b.ProxyPoolID = nil
+	}
+	return b, nil
+}
+
+// ListBuiltinProxies returns the relay selection for every known builtin,
+// filling global defaults for unconfigured ones.
+func (s *Store) ListBuiltinProxies() ([]BuiltinProxy, error) {
+	out := make([]BuiltinProxy, 0, len(KnownBuiltins))
+	for _, name := range KnownBuiltins {
+		b, err := s.GetBuiltinProxy(name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// SetBuiltinProxy stores the relay selection for a builtin upstream.
+// Pool mode requires an existing pool; other modes clear the pin.
+func (s *Store) SetBuiltinProxy(name, mode string, poolID *uint) (BuiltinProxy, error) {
+	if !IsBuiltin(name) {
+		return BuiltinProxy{}, fmt.Errorf("unknown builtin provider %q", name)
+	}
+	mode = NormalizeProxyMode(mode)
+	if mode != ProxyModePool {
+		poolID = nil
+	} else {
+		if poolID == nil {
+			return BuiltinProxy{}, fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+		}
+		if _, err := s.GetPool(*poolID); err != nil {
+			return BuiltinProxy{}, fmt.Errorf("proxy pool %d not found", *poolID)
+		}
+	}
+	b := BuiltinProxy{Name: name, ProxyMode: mode, ProxyPoolID: poolID}
+	if err := s.db.Save(&b).Error; err != nil {
+		return BuiltinProxy{}, err
+	}
+	return b, nil
+}

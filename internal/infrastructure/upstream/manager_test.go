@@ -125,3 +125,73 @@ func TestManager_RebuildWidensSelection(t *testing.T) {
 		t.Fatalf("expected widened selection after refresh, got %v", got)
 	}
 }
+
+// TestManager_PinnedPoolRoutesThroughRelay is an end-to-end proof of
+// per-provider proxy selection: a pinned provider's catalog fetch travels
+// the relay (x-relay-target set) and never hits the upstream directly,
+// while a direct provider bypasses the relay entirely.
+func TestManager_PinnedPoolRoutesThroughRelay(t *testing.T) {
+	var upstreamHits, relayHits int
+	var gotTarget, gotPath string
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{
+			map[string]any{"id": "m-relay", "object": "model"},
+			map[string]any{"id": "m-direct", "object": "model"},
+		}})
+	}))
+	defer upstreamSrv.Close()
+	relaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayHits++
+		gotTarget = r.Header.Get("x-relay-target")
+		gotPath = r.Header.Get("x-relay-path")
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{
+			map[string]any{"id": "m-relay", "object": "model"},
+			map[string]any{"id": "m-direct", "object": "model"},
+		}})
+	}))
+	defer relaySrv.Close()
+	dsn := fmt.Sprintf("file:mgr-relay-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	store, err := providers.Open(dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	pool, err := store.CreatePool(providers.ProxyPool{Name: "edge-1", ProxyURL: relaySrv.URL, Enabled: true})
+	if err != nil {
+		t.Fatalf("create pool: %v", err)
+	}
+	poolID := pool.ID
+	if _, err := store.CreateProvider(providers.Provider{Name: "pinned", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-relay"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModePool, ProxyPoolID: &poolID}); err != nil {
+		t.Fatalf("create pinned: %v", err)
+	}
+	if _, err := store.CreateProvider(providers.Provider{Name: "plain", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-direct"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModeDirect}); err != nil {
+		t.Fatalf("create direct: %v", err)
+	}
+	mgr := NewProviderManager(store, upstreamSrv.Client().Transport.(*http.Transport))
+	if err := mgr.Rebuild(); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	got, err := mgr.Warm("pinned")
+	if err != nil {
+		t.Fatalf("warm pinned: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "m-relay" {
+		t.Fatalf("pinned warm: %+v", got)
+	}
+	if relayHits != 1 || upstreamHits != 0 {
+		t.Fatalf("pinned must travel relay only: relay=%d upstream=%d", relayHits, upstreamHits)
+	}
+	if gotTarget != upstreamSrv.URL || gotPath != "/models" {
+		t.Fatalf("relay headers: target=%q path=%q", gotTarget, gotPath)
+	}
+	got, err = mgr.Warm("plain")
+	if err != nil {
+		t.Fatalf("warm direct: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "m-direct" {
+		t.Fatalf("direct warm: %+v", got)
+	}
+	if relayHits != 1 || upstreamHits != 1 {
+		t.Fatalf("direct must bypass relay: relay=%d upstream=%d", relayHits, upstreamHits)
+	}
+}

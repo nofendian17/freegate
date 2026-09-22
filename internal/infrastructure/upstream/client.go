@@ -27,6 +27,35 @@ type HTTPClient struct {
 	nextKey  atomic.Uint64
 	headers  map[string]string
 	cooldown *keyCooldown
+	// relay overrides the global SharedRelay when non-nil: a selector
+	// with one pool pins this client to it, an empty selector means
+	// direct (no relay). Nil follows the global rotation. Atomic so
+	// admin rebuilds can swap it while requests are in flight.
+	relay atomic.Pointer[RelaySelector]
+}
+
+// SetRelay overrides the relay selector for this client. Nil restores the
+// global SharedRelay. Pass a selector with no pools for direct connections.
+func (c *HTTPClient) SetRelay(s *RelaySelector) { c.relay.Store(s) }
+
+// SetRelayPools overrides edge-relay behavior: nil follows the global
+// rotation, an empty slice means direct (no relay), otherwise the client
+// is pinned to the given pools (normally one).
+func (c *HTTPClient) SetRelayPools(pools []RelayPool) {
+	if pools == nil {
+		c.SetRelay(nil)
+		return
+	}
+	sel := NewRelaySelector()
+	sel.SetPools(append([]RelayPool(nil), pools...))
+	c.SetRelay(sel)
+}
+
+func (c *HTTPClient) relayOrShared() *RelaySelector {
+	if s := c.relay.Load(); s != nil {
+		return s
+	}
+	return SharedRelay
 }
 
 type keyCooldown struct {
@@ -187,7 +216,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 				req.Header.Del("x-api-key")
 			}
 		}
-		strict, applied := SharedRelay.ApplyStrict(req)
+		strict, applied := c.relayOrShared().ApplyStrict(req)
 
 		resp, err := c.client.Do(req)
 		if err != nil && applied && !strict {
