@@ -231,7 +231,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}
-	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}, &ProxyPool{}, &BuiltinProxy{}); err != nil {
+	if err := db.AutoMigrate(&Provider{}, &RouteCombo{}, &ProxyPool{}, &BuiltinProxy{}, &ClientKey{}); err != nil {
 		return nil, fmt.Errorf("migrate providers db: %w", err)
 	}
 	s := &Store{db: db}
@@ -569,10 +569,25 @@ func (s *Store) UpdatePool(id uint, p ProxyPool) (ProxyPool, error) {
 	return p, nil
 }
 
-func (s *Store) DeletePool(id uint) error { return s.db.Delete(&ProxyPool{}, id).Error }
+// DeletePool removes a pool and resets every pin on it (custom providers
+// and builtins) back to the global rotation in one transaction, so a
+// failure can never leave a half-deleted pool with dangling pins.
+func (s *Store) DeletePool(id uint) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&ProxyPool{}, id).Error; err != nil {
+			return err
+		}
+		reset := map[string]any{"proxy_mode": ProxyModeGlobal, "proxy_pool_id": nil}
+		if err := tx.Model(&Provider{}).Where("proxy_pool_id = ?", id).Updates(reset).Error; err != nil {
+			return err
+		}
+		return tx.Model(&BuiltinProxy{}).Where("proxy_pool_id = ?", id).Updates(reset).Error
+	})
+}
 
 // UnpinPool resets providers pinned to the given pool back to the global
-// rotation, so deleting a pool never leaves a dangling reference.
+// rotation. Kept for callers that reset pins without deleting the pool;
+// DeletePool covers the delete path transactionally above.
 func (s *Store) UnpinPool(poolID uint) error {
 	if err := s.db.Model(&Provider{}).Where("proxy_pool_id = ?", poolID).Updates(map[string]any{
 		"proxy_mode": ProxyModeGlobal, "proxy_pool_id": nil,

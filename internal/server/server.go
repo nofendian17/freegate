@@ -211,7 +211,7 @@ func New(cfg *config.Config) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CORS)
 
-	apiAuth := middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)
+	apiAuth := middleware.ApiAuthDB(cfg.APIKey, cfg.AdminToken, pstore)
 	adminAuth := middleware.AdminAuth(cfg.AdminToken)
 
 	// Public routes — must be before admin mount so they are not shadowed.

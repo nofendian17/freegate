@@ -678,6 +678,26 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 		t.Fatalf("direct must clear pin: %+v", raw)
 	}
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
+	// Omitted proxy fields keep the stored pin (omit-vs-explicit contract,
+	// same as models): a partial body must not reset the pin to global.
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1"}`, http.StatusOK)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModePool || raw.ProxyPoolID == nil || *raw.ProxyPoolID != pool.ID {
+		t.Fatalf("omitted proxy must keep pin: %+v", raw)
+	}
+	// Explicit "" clears the pin back to global.
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":""}`, http.StatusOK)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("explicit global must clear pin: %+v", raw)
+	}
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
 	poolPath := "/api/pools/" + strconv.FormatUint(uint64(pool.ID), 10)
 	request("DELETE", poolPath, "", http.StatusNoContent)
 	raw, err = s.GetProviderRaw(created.ID)
@@ -743,5 +763,75 @@ func TestAdmin_BuiltinProxy(t *testing.T) {
 	}
 	if rebuilt != 3 {
 		t.Fatalf("rebuilds=%d, want 3", rebuilt)
+	}
+}
+
+// TestAdmin_ClientKeys covers the client key lifecycle over the API:
+// create returns the secret, reveal returns it again later, the raw key
+// is never listed, rename/disable take effect, disabled names fail auth,
+// and delete revokes immediately.
+func TestAdmin_ClientKeys(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/api-keys", `{"name":"client-1"}`, http.StatusCreated)
+	var created struct {
+		ID     uint   `json:"id"`
+		Name   string `json:"name"`
+		Prefix string `json:"prefix"`
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.APIKey == "" {
+		t.Fatalf("create must return raw secret: %v %s", err, w.Body.String())
+	}
+	raw := created.APIKey
+	if !s.VerifyClientKey(raw) {
+		t.Fatal("created key must verify")
+	}
+	w = request("GET", "/api/api-keys", "", http.StatusOK)
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Data) != 1 {
+		t.Fatalf("list: %v %s", err, w.Body.String())
+	}
+	for k := range list.Data[0] {
+		if k == "key_hash" || k == "api_key" {
+			t.Fatalf("list must not leak secret material: %v", list.Data[0])
+		}
+	}
+	path := "/api/api-keys/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("POST", "/api/api-keys", `{"name":"bad name!"}`, http.StatusBadRequest)
+	w = request("POST", path+"/reveal", "", http.StatusOK)
+	var revealed struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &revealed); err != nil || revealed.APIKey != raw {
+		t.Fatalf("reveal must return the secret: %v %s", err, w.Body.String())
+	}
+	request("POST", "/api/api-keys/999999/reveal", "", http.StatusNotFound)
+	request("PUT", path, `{"name":"nope","enabled":true}`, http.StatusOK)
+	request("PUT", "/api/api-keys/999999", `{"name":"x","enabled":true}`, http.StatusNotFound)
+	request("PUT", path, `{"name":"client-1","enabled":false}`, http.StatusOK)
+	if s.VerifyClientKey(raw) {
+		t.Fatal("disabled key must not verify")
+	}
+	request("DELETE", "/api/api-keys/999999", "", http.StatusNotFound)
+	request("DELETE", path, "", http.StatusNoContent)
+	if s.VerifyClientKey(raw) {
+		t.Fatal("deleted key must not verify")
 	}
 }

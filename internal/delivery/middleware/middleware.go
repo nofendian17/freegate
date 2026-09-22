@@ -122,9 +122,26 @@ func HmacForToken(token string) string {
 func hmacForToken(token string) string { return HmacForToken(token) }
 
 func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handler {
+	return ApiAuthDB(apiKeys, adminToken, nil)
+}
+
+// ClientKeyChecker verifies DB-managed client keys. Implemented by the
+// providers store; kept as an interface so middleware stays decoupled.
+type ClientKeyChecker interface {
+	// VerifyClientKey reports whether raw is an enabled client key.
+	VerifyClientKey(raw string) bool
+	// TouchClientKey records one use (best-effort, never fails).
+	TouchClientKey(raw string)
+}
+
+// ApiAuthDB is ApiAuth plus DB-managed client keys: config keys and the
+// admin token keep working (superset), and a valid enabled DB key is
+// accepted with its usage recorded asynchronously so accounting adds no
+// latency to the request.
+func ApiAuthDB(apiKeys []string, adminToken string, checker ClientKeyChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if len(apiKeys) == 0 && adminToken == "" {
+			if len(apiKeys) == 0 && adminToken == "" && checker == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -141,6 +158,11 @@ func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handle
 				}
 			}
 			if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if checker != nil && key != "" && checker.VerifyClientKey(key) {
+				go checker.TouchClientKey(key)
 				next.ServeHTTP(w, r)
 				return
 			}

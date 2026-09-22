@@ -79,12 +79,9 @@ func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deletePool(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
+	// DeletePool also resets every pin on the pool in the same
+	// transaction, so no provider is left pointing at a gone pool.
 	if err := h.store.DeletePool(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
-		return
-	}
-	// Providers pinned to this pool fall back to the global rotation.
-	if err := h.store.UnpinPool(uint(id)); err != nil {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}

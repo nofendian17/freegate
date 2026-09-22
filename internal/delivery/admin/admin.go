@@ -102,6 +102,11 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/api/pools/{id}/test", h.testPool)
 	r.Get("/api/builtin-proxies", h.listBuiltinProxies)
 	r.Put("/api/builtin-proxies/{name}", h.updateBuiltinProxy)
+	r.Get("/api/api-keys", h.listClientKeys)
+	r.Post("/api/api-keys", h.createClientKey)
+	r.Put("/api/api-keys/{id}", h.updateClientKey)
+	r.Post("/api/api-keys/{id}/reveal", h.revealClientKey)
+	r.Delete("/api/api-keys/{id}", h.deleteClientKey)
 }
 
 type providerIn struct {
@@ -120,7 +125,9 @@ type providerIn struct {
 	Enabled    bool      `json:"enabled"`
 	// ProxyMode selects edge-relay behavior: "" follows the global pool
 	// rotation, "direct" skips all relays, "pool" pins to ProxyPoolID.
-	ProxyMode string `json:"proxy_mode"`
+	// Pointer so omit-vs-explicit stays distinct like Models: absent keeps
+	// the stored selection, present (even "") overwrites it.
+	ProxyMode *string `json:"proxy_mode"`
 	// ProxyPoolID pins the provider to one pool when ProxyMode is "pool".
 	ProxyPoolID *uint `json:"proxy_pool_id"`
 }
@@ -179,11 +186,15 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	if in.Models != nil {
 		models = *in.Models
 	}
-	if _, _, err := h.resolveProxy(in.ProxyMode, in.ProxyPoolID); err != nil {
+	mode := ""
+	if in.ProxyMode != nil {
+		mode = *in.ProxyMode
+	}
+	if _, _, err := h.resolveProxy(mode, in.ProxyPoolID); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
 	}
-	row, err := h.store.CreateProvider(providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: in.ProxyMode, ProxyPoolID: in.ProxyPoolID})
+	row, err := h.store.CreateProvider(providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: in.ProxyPoolID})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
@@ -227,11 +238,20 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 	if in.Models != nil {
 		models = *in.Models
 	}
-	if _, _, err := h.resolveProxy(in.ProxyMode, in.ProxyPoolID); err != nil {
+	// Absent proxy_mode keeps the stored selection (same omit-vs-explicit
+	// contract as Models): a body without the field must not silently
+	// reset a pin to global.
+	mode := cur.ProxyMode
+	poolID := cur.ProxyPoolID
+	if in.ProxyMode != nil {
+		mode = *in.ProxyMode
+		poolID = in.ProxyPoolID
+	}
+	if _, _, err := h.resolveProxy(mode, poolID); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
 	}
-	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: in.ProxyMode, ProxyPoolID: in.ProxyPoolID})
+	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: poolID})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return

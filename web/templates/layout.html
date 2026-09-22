@@ -24,6 +24,7 @@
       <div class="hidden items-center gap-1 text-body md:flex">
         <a href="/" class="rounded-2xl px-3 py-2 text-mid-gray transition-colors hover:bg-canvas hover:text-ink{{if eq $nav.Active "dashboard"}} bg-canvas text-ink{{end}}">Dashboard</a>
         <a href="/providers" class="rounded-2xl px-3 py-2 text-mid-gray transition-colors hover:bg-canvas hover:text-ink{{if eq $nav.Active "providers"}} bg-canvas text-ink{{end}}">Providers</a>
+        <a href="/settings" class="rounded-2xl px-3 py-2 text-mid-gray transition-colors hover:bg-canvas hover:text-ink{{if eq $nav.Active "settings"}} bg-canvas text-ink{{end}}">Settings</a>
       </div>
     </div>
     <div class="hidden items-center gap-6 text-caption text-mid-gray md:flex">
@@ -48,6 +49,7 @@
     <div class="flex flex-col gap-1 text-body">
       <a href="/" class="rounded-2xl px-3 py-2.5 text-mid-gray hover:bg-canvas hover:text-ink">Dashboard</a>
       <a href="/providers" class="rounded-2xl px-3 py-2.5 text-mid-gray hover:bg-canvas hover:text-ink">Providers</a>
+      <a href="/settings" class="rounded-2xl px-3 py-2.5 text-mid-gray hover:bg-canvas hover:text-ink">Settings</a>
       {{if $nav.Playground}}
       <button type="button" @click="$dispatch('open-playground'); open = false" class="mt-2 rounded-2xl bg-ink px-4 py-2.5 font-medium text-surface-alt">Playground</button>
       {{end}}

@@ -556,3 +556,106 @@ func TestStore_BuiltinProxy(t *testing.T) {
 	}
 }
 
+// TestStore_DeletePoolResetsPins verifies pool deletion resets every pin
+// on it (custom providers and builtins) in the same transaction: the pool
+// is gone and no row still references it.
+func TestStore_DeletePoolResetsPins(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	pool, err := s.CreatePool(ProxyPool{Name: "edge-1", ProxyURL: "https://relay.test", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := s.CreateProvider(Provider{Name: "pinned", BaseURL: "https://example.test/v1", APIKeys: []string{"k"}, Enabled: true, ProxyMode: "pool", ProxyPoolID: &pool.ID})
+	if err != nil {
+		t.Fatalf("create pinned: %v", err)
+	}
+	if _, err := s.SetBuiltinProxy("kilo", "pool", &pool.ID); err != nil {
+		t.Fatalf("set builtin pin: %v", err)
+	}
+	if err := s.DeletePool(pool.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetPool(pool.ID); err == nil {
+		t.Fatal("pool must be gone")
+	}
+	raw, err := s.GetProviderRaw(pinned.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("custom pin must reset to global: %+v", raw)
+	}
+	b, err := s.GetBuiltinProxy("kilo")
+	if err != nil || NormalizeProxyMode(b.ProxyMode) != ProxyModeGlobal || b.ProxyPoolID != nil {
+		t.Fatalf("builtin pin must reset to global: %+v %v", b, err)
+	}
+}
+
+// TestStore_ClientKeys verifies DB-managed API keys: create returns the
+// raw secret, reveal returns it again later, verification accepts it,
+// disabled keys fail, TouchClientKey records use, and rename/enable/delete
+// work. List/get/update responses never carry secret material.
+func TestStore_ClientKeys(t *testing.T) {
+	s, err := Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	row, raw, err := s.CreateClientKey("client-1")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(raw) < len("fg_")+8 || row.Prefix == "" || row.Prefix != raw[:len(row.Prefix)] {
+		t.Fatalf("prefix must match raw head: row=%+v raw=%q", row, raw)
+	}
+	if !s.VerifyClientKey(raw) {
+		t.Fatal("freshly created key must verify")
+	}
+	if s.VerifyClientKey("") || s.VerifyClientKey("bogus") {
+		t.Fatal("unknown key must not verify")
+	}
+	list, err := s.ListClientKeys()
+	if err != nil || len(list) != 1 || list[0].KeyHash != "" || list[0].Plaintext != "" {
+		t.Fatalf("list must hide secret material: %v %+v", err, list)
+	}
+	rev, err := s.RevealClientKey(row.ID)
+	if err != nil || rev != raw {
+		t.Fatalf("reveal must return the secret: %q %v", rev, err)
+	}
+	if _, err := s.RevealClientKey(999999); err == nil {
+		t.Fatal("reveal of missing key must fail")
+	}
+	s.TouchClientKey(raw)
+	got, err := s.GetClientKey(row.ID)
+	if err != nil || got.UseCount != 1 || got.LastUsed == nil {
+		t.Fatalf("touch must record use: %+v %v", got, err)
+	}
+	off, err := s.UpdateClientKey(row.ID, "client-1", false)
+	if err != nil || off.Enabled {
+		t.Fatalf("disable: %+v %v", off, err)
+	}
+	if s.VerifyClientKey(raw) {
+		t.Fatal("disabled key must not verify")
+	}
+	renamed, err := s.UpdateClientKey(row.ID, "client-2", true)
+	if err != nil || renamed.Name != "client-2" {
+		t.Fatalf("rename: %+v %v", renamed, err)
+	}
+	if !s.VerifyClientKey(raw) {
+		t.Fatal("re-enabled key must verify")
+	}
+	if _, _, err := s.CreateClientKey("bad name!"); err == nil {
+		t.Fatal("expected invalid name to fail")
+	}
+	if err := s.DeleteClientKey(row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if s.VerifyClientKey(raw) {
+		t.Fatal("deleted key must not verify")
+	}
+}
+

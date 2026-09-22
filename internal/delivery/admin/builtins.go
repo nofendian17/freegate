@@ -38,10 +38,8 @@ func (h *Handler) updateBuiltinProxy(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if _, _, err := h.resolveProxy(in.ProxyMode, in.ProxyPoolID); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
-		return
-	}
+	// SetBuiltinProxy validates the selection itself (single GetPool), so
+	// no pre-validation here — one query, one error path.
 	row, err := h.store.SetBuiltinProxy(name, in.ProxyMode, in.ProxyPoolID)
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())

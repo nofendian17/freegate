@@ -160,8 +160,7 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	}
 	js := readStaticFile(t, "js/providers.js")
 	for _, want := range []string{
-		"function withBusy(",      // in-flight button states
-		"function getJSON(",       // HTTP-status-checked fetch
+		"window.FG",               // shared helpers from ui.js
 		`name="tier_provider"`,    // named dynamic form fields
 		"no custom providers yet", // actionable empty state
 		"no combos yet",           // actionable empty state
@@ -170,6 +169,15 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("providers.js missing slice-2 behavior %q", want)
+		}
+	}
+	shared := readStaticFile(t, "js/ui.js")
+	for _, want := range []string{
+		"function withBusy(", // in-flight button states
+		"function getJSON(",  // HTTP-status-checked fetch
+	} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("ui.js missing shared behavior %q", want)
 		}
 	}
 }
@@ -199,6 +207,79 @@ func TestProvidersPage_PoolModalA11y(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pool modal missing accessible behavior %q", want)
+		}
+	}
+}
+
+// TestSettingsPage_ClientKeysSection pins the settings page contract:
+// API key management table, creation form, and the JS that drives them.
+// Shared fetch/DOM helpers live in ui.js; page scripts bind via window.FG.
+func TestSettingsPage_ClientKeysSection(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/settings")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="key-table"`,
+		`id="key-err"`,
+		`id="key-created"`,
+		`id="key-form"`,
+		`id="key-new"`,
+		`id="key-save"`,
+		`id="key-cancel"`,
+		`id="kf-id"`,
+		`id="kf-name"`,
+		`id="kf-enabled"`,
+		`for="kf-name"`,
+		`/api/api-keys`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings client keys missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/settings.js")
+	for _, want := range []string{
+		"window.FG", // shared helpers from ui.js
+		"loadKeys",
+		"renderKeys",
+		"keyCreated",
+		"showCreatedKey", // copyable one-time secret banner
+		"/api/api-keys/",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("settings.js missing %q", want)
+		}
+	}
+	shared := readStaticFile(t, "js/ui.js")
+	for _, want := range []string{
+		"window.FG",
+		"function esc",
+		"function show",
+		"function getJSON",
+		"function withBusy",
+	} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("ui.js missing %q", want)
+		}
+	}
+	prv := readStaticFile(t, "js/providers.js")
+	if strings.Contains(prv, "function getJSON") || strings.Contains(prv, "function withBusy") {
+		t.Errorf("providers.js must use shared ui.js helpers, not duplicate them")
+	}
+}
+
+// TestSettingsPage_Nav pins the settings nav entry (desktop + mobile).
+func TestSettingsPage_Nav(t *testing.T) {
+	h := newTestHandler(t)
+	for _, path := range []string{"/", "/providers", "/settings"} {
+		w := serveViaRoutes(h, "GET", path)
+		if w.Code != 200 {
+			t.Fatalf("%s: status = %d, want 200", path, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `href="/settings"`) {
+			t.Errorf("%s: nav missing settings entry", path)
 		}
 	}
 }
