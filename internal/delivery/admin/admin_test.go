@@ -630,3 +630,118 @@ func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
 		t.Fatalf("expected custom header forwarded, got %q", gotHeader)
 	}
 }
+
+// TestAdmin_ProviderProxyPin covers per-provider proxy selection over the
+// API: pinning stores mode+pool, unknown/missing pool ids fail with 400,
+// switching to direct clears the pin, and deleting a pool resets pinned
+// providers to the global rotation.
+func TestAdmin_ProviderProxyPin(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/pools", `{"name":"edge-1","proxy_url":"https://relay.example.com"}`, http.StatusCreated)
+	var pool providers.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &pool); err != nil || pool.ID == 0 {
+		t.Fatalf("create pool: %v %s", err, w.Body.String())
+	}
+	pin := `"proxy_mode":"pool","proxy_pool_id":` + strconv.FormatUint(uint64(pool.ID), 10)
+	w = request("POST", "/api/providers", `{"name":"pinned","base_url":"https://example.test/v1","api_keys":["k"],`+pin+`}`, http.StatusCreated)
+	var created providers.Provider
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ProxyMode != "pool" || created.ProxyPoolID == nil || *created.ProxyPoolID != pool.ID {
+		t.Fatalf("pin not stored: %+v", created)
+	}
+	request("POST", "/api/providers", `{"name":"badpool","base_url":"https://example.test/v1","api_keys":["k"],"proxy_mode":"pool","proxy_pool_id":999999}`, http.StatusBadRequest)
+	request("POST", "/api/providers", `{"name":"noid","base_url":"https://example.test/v1","api_keys":["k"],"proxy_mode":"pool"}`, http.StatusBadRequest)
+	path := "/api/providers/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":"direct"}`, http.StatusOK)
+	raw, err := s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeDirect || raw.ProxyPoolID != nil {
+		t.Fatalf("direct must clear pin: %+v", raw)
+	}
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
+	poolPath := "/api/pools/" + strconv.FormatUint(uint64(pool.ID), 10)
+	request("DELETE", poolPath, "", http.StatusNoContent)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("pool delete must reset pin to global: %+v", raw)
+	}
+}
+
+// TestAdmin_BuiltinProxy covers the builtin relay-selection API: list
+// defaults to global, PUT pins/validates, unknown builtins 404, and bad
+// pools 400.
+func TestAdmin_BuiltinProxy(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	rebuilt := 0
+	h := New(s, func() error { rebuilt++; return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("GET", "/api/builtin-proxies", "", http.StatusOK)
+	var list struct {
+		Data []providers.BuiltinProxy `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Data) != 3 {
+		t.Fatalf("list builtin: %v %s", err, w.Body.String())
+	}
+	for _, b := range list.Data {
+		if providers.NormalizeProxyMode(b.ProxyMode) != providers.ProxyModeGlobal {
+			t.Fatalf("default must be global: %+v", b)
+		}
+	}
+	w = request("POST", "/api/pools", `{"name":"edge-1","proxy_url":"https://relay.example.com"}`, http.StatusCreated)
+	var pool providers.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &pool); err != nil || pool.ID == 0 {
+		t.Fatalf("create pool: %v %s", err, w.Body.String())
+	}
+	pin := `{"proxy_mode":"pool","proxy_pool_id":` + strconv.FormatUint(uint64(pool.ID), 10) + `}`
+	w = request("PUT", "/api/builtin-proxies/kilo", pin, http.StatusOK)
+	var updated providers.BuiltinProxy
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil || updated.ProxyMode != "pool" {
+		t.Fatalf("pin builtin: %v %s", err, w.Body.String())
+	}
+	request("PUT", "/api/builtin-proxies/nope", pin, http.StatusNotFound)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool","proxy_pool_id":999999}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool"}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"direct"}`, http.StatusOK)
+	got, err := s.GetBuiltinProxy("kilo")
+	if err != nil || got.ProxyMode != "direct" || got.ProxyPoolID != nil {
+		t.Fatalf("direct not stored: %+v %v", got, err)
+	}
+	if rebuilt != 3 {
+		t.Fatalf("rebuilds=%d, want 3", rebuilt)
+	}
+}

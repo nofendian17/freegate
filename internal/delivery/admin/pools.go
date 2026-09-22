@@ -83,6 +83,11 @@ func (h *Handler) deletePool(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}
+	// Providers pinned to this pool fall back to the global rotation.
+	if err := h.store.UnpinPool(uint(id)); err != nil {
+		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
 	if err := h.rebuild(); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
 		return

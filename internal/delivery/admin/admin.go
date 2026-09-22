@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"freegate/internal/delivery/respond"
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/upstream"
 )
 
 type Handler struct {
@@ -98,6 +100,8 @@ func (h *Handler) Register(r chi.Router) {
 	r.Put("/api/pools/{id}", h.updatePool)
 	r.Delete("/api/pools/{id}", h.deletePool)
 	r.Post("/api/pools/{id}/test", h.testPool)
+	r.Get("/api/builtin-proxies", h.listBuiltinProxies)
+	r.Put("/api/builtin-proxies/{name}", h.updateBuiltinProxy)
 }
 
 type providerIn struct {
@@ -114,6 +118,35 @@ type providerIn struct {
 	RefreshSec int       `json:"refresh_sec"`
 	Priority   int       `json:"priority"`
 	Enabled    bool      `json:"enabled"`
+	// ProxyMode selects edge-relay behavior: "" follows the global pool
+	// rotation, "direct" skips all relays, "pool" pins to ProxyPoolID.
+	ProxyMode string `json:"proxy_mode"`
+	// ProxyPoolID pins the provider to one pool when ProxyMode is "pool".
+	ProxyPoolID *uint `json:"proxy_pool_id"`
+}
+
+// resolveProxy validates a provider's proxy selection and resolves it to
+// the relay pools the request should travel through: nil follows the
+// global rotation, empty means direct, otherwise the pinned pool. It also
+// returns the pinned pool row (nil unless mode is pool) so callers needing
+// pool details don't query twice.
+func (h *Handler) resolveProxy(mode string, poolID *uint) (pools []upstream.RelayPool, pool *providers.ProxyPool, err error) {
+	switch providers.NormalizeProxyMode(mode) {
+	case providers.ProxyModeDirect:
+		return []upstream.RelayPool{}, nil, nil
+	case providers.ProxyModePool:
+		if poolID == nil {
+			return nil, nil, fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+		}
+		p, err := h.store.GetPool(*poolID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("proxy pool %d not found", *poolID)
+		}
+		pool = &p
+		return []upstream.RelayPool{{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy}}, pool, nil
+	default:
+		return nil, nil, nil
+	}
 }
 
 // nonEmpty drops blank keys; an update with no keys keeps existing ones.
@@ -146,7 +179,11 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	if in.Models != nil {
 		models = *in.Models
 	}
-	row, err := h.store.CreateProvider(providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled})
+	if _, _, err := h.resolveProxy(in.ProxyMode, in.ProxyPoolID); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	row, err := h.store.CreateProvider(providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: in.ProxyMode, ProxyPoolID: in.ProxyPoolID})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
@@ -190,7 +227,11 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 	if in.Models != nil {
 		models = *in.Models
 	}
-	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled})
+	if _, _, err := h.resolveProxy(in.ProxyMode, in.ProxyPoolID); err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: in.ProxyMode, ProxyPoolID: in.ProxyPoolID})
 	if err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
@@ -223,7 +264,14 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusNotFound, "not_found", "provider not found")
 		return
 	}
-	ids, status, latencyMs, err := h.probeCatalog(r.Context(), row.BaseURL, row.APIKeys, row.Headers)
+	// Test travels the same relay path as production traffic for this
+	// provider (pinned pool, direct, or global rotation).
+	sel, err := h.selectorForTest(row.ProxyMode, row.ProxyPoolID)
+	if err != nil {
+		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	ids, status, latencyMs, err := h.probeCatalog(r.Context(), row.BaseURL, row.APIKeys, row.Headers, sel)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -243,9 +291,11 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 // before the first save.
 func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		BaseURL string            `json:"base_url"`
-		APIKeys []string          `json:"api_keys"`
-		Headers map[string]string `json:"headers"`
+		BaseURL     string            `json:"base_url"`
+		APIKeys     []string          `json:"api_keys"`
+		Headers     map[string]string `json:"headers"`
+		ProxyMode   string            `json:"proxy_mode"`
+		ProxyPoolID *uint             `json:"proxy_pool_id"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -255,7 +305,12 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": "base_url must be http(s) URL"})
 		return
 	}
-	ids, status, latencyMs, err := h.probeCatalog(r.Context(), strings.TrimSpace(in.BaseURL), nonEmpty(in.APIKeys), in.Headers)
+	sel, err := h.selectorForTest(in.ProxyMode, in.ProxyPoolID)
+	if err != nil {
+		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	ids, status, latencyMs, err := h.probeCatalog(r.Context(), strings.TrimSpace(in.BaseURL), nonEmpty(in.APIKeys), in.Headers, sel)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -263,24 +318,66 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": status < 300, "modelCount": len(ids), "models": ids, "latencyMs": latencyMs, "status": status})
 }
 
+// selectorForTest resolves a proxy selection to the relay selector a
+// probe should travel through: nil means direct. Global mode uses the
+// shared rotation (same as production traffic), pool mode pins to the
+// selected pool. A missing or disabled pinned pool is an explicit error
+// so the editor surfaces the misconfiguration instead of testing a
+// different path than production would use.
+func (h *Handler) selectorForTest(mode string, poolID *uint) (*upstream.RelaySelector, error) {
+	relays, pool, err := h.resolveProxy(mode, poolID)
+	if err != nil {
+		return nil, err
+	}
+	switch providers.NormalizeProxyMode(mode) {
+	case providers.ProxyModeDirect:
+		return nil, nil
+	case providers.ProxyModePool:
+		if pool == nil {
+			return nil, fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+		}
+		if !pool.Enabled {
+			return nil, fmt.Errorf("proxy pool %q is disabled", pool.Name)
+		}
+		sel := upstream.NewRelaySelector()
+		sel.SetPools(relays)
+		return sel, nil
+	default:
+		return upstream.SharedRelay, nil
+	}
+}
+
 // probeCatalog GETs baseURL/models and returns the deduped model IDs in
 // upstream order. Used by both the stored test and the ad-hoc probe.
 // Custom headers are sent too (some upstreams need more than a bearer
 // key); the first API key takes precedence when both are set.
-func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []string, headers map[string]string) (ids []string, status int, latencyMs int64, err error) {
+// sel carries the relay path (nil = direct); a failed non-strict relay
+// retries direct once, mirroring HTTPClient production behavior.
+func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []string, headers map[string]string, sel *upstream.RelaySelector) (ids []string, status int, latencyMs int64, err error) {
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/models", nil)
+	build := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/models", nil)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			if strings.TrimSpace(k) == "" || strings.EqualFold(k, "authorization") && len(keys) > 0 {
+				continue
+			}
+			req.Header.Set(k, v)
+		}
+		if len(keys) > 0 {
+			req.Header.Set("Authorization", "Bearer "+keys[0])
+		}
+		return req, nil
+	}
+	req, err := build()
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	for k, v := range headers {
-		if strings.TrimSpace(k) == "" || strings.EqualFold(k, "authorization") && len(keys) > 0 {
-			continue
-		}
-		req.Header.Set(k, v)
-	}
-	if len(keys) > 0 {
-		req.Header.Set("Authorization", "Bearer "+keys[0])
+	var strict, applied bool
+	if sel != nil {
+		strict, applied = sel.ApplyStrict(req)
 	}
 	tr := h.transport
 	if tr == nil {
@@ -288,6 +385,14 @@ func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []strin
 	}
 	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
+	if err != nil && applied && !strict {
+		// Non-strict relay unreachable: retry direct once.
+		req, derr := build()
+		if derr != nil {
+			return nil, 0, 0, derr
+		}
+		resp, err = client.Do(req)
+	}
 	if err != nil {
 		return nil, 0, 0, err
 	}
