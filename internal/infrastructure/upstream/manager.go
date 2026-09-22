@@ -63,17 +63,9 @@ func (m *ProviderManager) Rebuild() error {
 		if old != nil {
 			// Carry over fresh metadata for still-selected models only;
 			// deselected models must not leak back in via the old cache.
-			// The constructor already seeded bare entries for the new
-			// selection, so Match works even before the next fetch.
-			keep := make([]domain.Model, 0)
-			for _, om := range old.Models() {
-				if fresh.Match(om.ID) {
-					keep = append(keep, om)
-				}
-			}
-			if len(keep) > 0 {
-				fresh.SeedModels(keep)
-			}
+			// RestoreKept merges in stored-selection order and keeps bare
+			// seeds for newly added models so they route immediately.
+			fresh.RestoreKept(old.Models())
 		}
 		next[r.Name] = fresh
 		nextIntervals[r.Name] = refreshInterval(full.RefreshSec)

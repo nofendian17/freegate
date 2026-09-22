@@ -16,6 +16,9 @@ type CustomUpstream struct {
 	client   *HTTPClient
 	cache    *ModelCache
 	selected map[string]struct{}
+	// selectedOrder preserves the stored selection order so ListModels
+	// and Rebuild merges stay deterministic (map iteration is random).
+	selectedOrder []string
 }
 
 var _ domain.Upstream = (*CustomUpstream)(nil)
@@ -44,9 +47,11 @@ func NewCustomUpstream(name, baseURL string, keys []string, headers map[string]s
 func (u *CustomUpstream) SetSelected(models []string) {
 	if models == nil {
 		u.selected = nil
+		u.selectedOrder = nil
 		return
 	}
 	sel := make(map[string]struct{}, len(models))
+	order := make([]string, 0, len(models))
 	bare := make([]domain.Model, 0, len(models))
 	for _, m := range models {
 		if m = strings.TrimSpace(m); m == "" {
@@ -56,10 +61,53 @@ func (u *CustomUpstream) SetSelected(models []string) {
 			continue
 		}
 		sel[m] = struct{}{}
+		order = append(order, m)
 		bare = append(bare, domain.Model{ID: m, Object: "model", Provider: "custom:" + u.name})
 	}
 	u.selected = sel
+	u.selectedOrder = order
 	u.cache.Set(bare)
+}
+
+// RestoreKept overlays fresh metadata from the previous generation onto
+// the current selection, preserving bare entries for newly added models.
+// Must be called before the object is published (Rebuild); the constructor
+// already seeded bare entries for the full new selection.
+func (u *CustomUpstream) RestoreKept(old []domain.Model) {
+	if u.selected == nil {
+		return
+	}
+	byOld := make(map[string]domain.Model, len(old))
+	for _, m := range old {
+		if _, ok := u.selected[m.ID]; !ok {
+			continue
+		}
+		if _, dup := byOld[m.ID]; !dup {
+			byOld[m.ID] = m
+		}
+	}
+	bareByID := make(map[string]domain.Model, len(u.selectedOrder))
+	for _, m := range u.cache.Get() {
+		if _, ok := u.selected[m.ID]; !ok {
+			continue
+		}
+		if _, dup := bareByID[m.ID]; !dup {
+			bareByID[m.ID] = m
+		}
+	}
+	merged := make([]domain.Model, 0, len(u.selectedOrder))
+	for _, id := range u.selectedOrder {
+		if m, ok := byOld[id]; ok {
+			merged = append(merged, m)
+			continue
+		}
+		if m, ok := bareByID[id]; ok {
+			merged = append(merged, m)
+			continue
+		}
+		merged = append(merged, domain.Model{ID: id, Object: "model", Provider: "custom:" + u.name})
+	}
+	u.cache.Set(merged)
 }
 
 func (u *CustomUpstream) Name() string { return "custom:" + u.name }
@@ -112,10 +160,10 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error)
 		order = append(order, m.ID)
 	}
 	// Legacy mode (nil selection): the whole fetched catalog is served,
-	// the pre-selection semantic. Curated mode only overlays fresh
-	// metadata onto the explicit selection: unselected models never
-	// enter the cache, and selected models missing from this fetch keep
-	// their previous entry so one bad refresh can't silently drop an
+	// the pre-selection semantic. Curated mode serves the explicit
+	// selection in stored order: fresh metadata where the fetch has it,
+	// previous entry (or a bare seed) otherwise, so newly added models
+	// appear immediately and one bad refresh can't silently drop an
 	// explicit choice.
 	if u.selected == nil {
 		out := make([]domain.Model, 0, len(order))
@@ -125,16 +173,26 @@ func (u *CustomUpstream) ListModels(ctx context.Context) ([]domain.Model, error)
 		u.cache.Set(out)
 		return out, nil
 	}
-	cur := u.cache.Get()
-	out := make([]domain.Model, 0, len(u.selected))
-	for _, m := range cur {
+	curByID := make(map[string]domain.Model, len(u.selected))
+	for _, m := range u.cache.Get() {
 		if _, ok := u.selected[m.ID]; !ok {
 			continue
 		}
-		if fresh, ok := byID[m.ID]; ok {
-			m = fresh
+		if _, dup := curByID[m.ID]; !dup {
+			curByID[m.ID] = m
 		}
-		out = append(out, m)
+	}
+	out := make([]domain.Model, 0, len(u.selected))
+	for _, id := range u.selectedOrder {
+		if fresh, ok := byID[id]; ok {
+			out = append(out, fresh)
+			continue
+		}
+		if cur, ok := curByID[id]; ok {
+			out = append(out, cur)
+			continue
+		}
+		out = append(out, domain.Model{ID: id, Object: "model", Provider: "custom:" + u.name})
 	}
 	u.cache.Set(out)
 	return out, nil
