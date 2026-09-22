@@ -1,996 +1,226 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>freegate — providers</title>
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <style>
-    .prov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
-    .prov-field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
-    .prov-field.full { grid-column: 1 / -1; }
-    .combo-form { border-top: 1px dashed var(--border); padding-top: var(--space-4); }
-    .combo-form[hidden] { display: none; }
-    .combo-row { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px dashed var(--border); font-size: 13px; flex-wrap: wrap; }
-    .combo-row:last-child { border-bottom: 0; }
-    .combo-tiers { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
-    .prov-warn { color: var(--warning); font-size: 12px; margin-bottom: var(--space-2); }
-    @media (max-width: 640px) {
-      .prov-grid { grid-template-columns: 1fr; }
-      .combo-row select, .combo-row .prov-input { max-width: 100%; flex: 1 1 140px; }
-    }
-     .pool-modal-panel { max-width: 520px; }
-     .prov-editor { border-top: 1px dashed var(--border); padding-top: var(--space-4); margin-top: var(--space-4); }
-     .prov-editor[hidden] { display: none; }
-     .palette-item { display: block; width: 100%; text-align: left; margin-bottom: var(--space-1); }
-     .palette-item.is-active { background: var(--surface-hover); border-color: var(--border-hover); color: var(--text); }
-     .kbd { font-size: 11px; color: var(--text-faint); border: 1px solid var(--border); padding: 1px 5px; }
-   </style>
-</head>
-<body>
-  <div class="prov-shell">
-    <nav class="nav">
-      <div class="nav-left">
-        <div class="nav-brand">
-          <span class="brand-dot" id="status-dot"></span>
-          freegate
-        </div>
-        <a href="/" class="btn-tertiary" style="text-decoration:none">&lt; dashboard</a>
-      </div>
-      <div class="nav-meta">
-        <button id="palette-open" class="btn-tertiary" type="button"><span class="kbd">Ctrl+K</span> palette</button>
-        <form method="POST" action="/logout" class="logout-form">
-          <button type="submit" class="btn-tertiary">> logout</button>
-        </form>
-      </div>
-    </nav>
+{{template "layout/head" .}}
 
-    <div class="page-header">
-      <h1>$ providers</h1>
-      <p class="subtitle">// custom upstream providers and routing combos</p>
-    </div>
+<body x-data>
+  {{template "layout/nav" .}}
 
-    <div class="card section-block">
-      <div class="card-header">
-        <span class="card-title"># Custom Providers</span>
-        <button id="provider-new" class="btn-primary" type="button">> new provider</button>
+  <main class="mx-auto max-w-7xl px-6 pb-24 pt-12">
+    <header class="mb-12">
+      <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">Configuration</p>
+      <h1 class="text-heading-lg font-semibold text-ink sm:text-display">$ providers</h1>
+      <p class="mt-3 max-w-xl text-body text-mid-gray">// custom upstream providers and routing combos</p>
+    </header>
+
+    <!-- Custom Providers -->
+    <section class="mb-6 min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
+        <h2 class="text-body font-medium text-ink">Custom providers</h2>
+        <button id="provider-new" type="button" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">New provider</button>
       </div>
-      <div id="provider-err" class="prov-err" role="alert" style="display:none"></div>
-      <div class="table-wrap">
-        <table>
+      <div id="provider-err" role="alert" class="mx-5 mt-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+      <div id="provider-ok" role="status" class="mx-5 mt-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
+      <div class="overflow-auto">
+        <table class="w-full text-left text-body">
           <thead>
-            <tr>
-              <th>name</th>
-              <th>base_url</th>
-              <th style="width:80px">models</th>
-              <th style="width:80px">priority</th>
-              <th style="width:80px">enabled</th>
-              <th style="width:160px">actions</th>
+            <tr class="border-b border-hairline text-caption uppercase tracking-[0.05em] text-mid-gray">
+              <th class="px-5 py-3 font-medium">Name</th>
+              <th class="px-5 py-3 font-medium">Base URL</th>
+              <th class="w-24 px-5 py-3 font-medium">Models</th>
+              <th class="w-24 px-5 py-3 font-medium">Priority</th>
+              <th class="w-24 px-5 py-3 font-medium">Enabled</th>
+              <th class="w-40 px-5 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody id="provider-table">
-            <tr><td colspan="6" class="dim" aria-busy="true">// loading…</td></tr>
+            <tr><td colspan="6" class="px-5 py-8 text-center text-body text-mid-gray" aria-busy="true">Loading…</td></tr>
           </tbody>
         </table>
       </div>
-      <div id="provider-editor" class="prov-editor" hidden>
-        <div class="card-header">
-          <span class="card-title" id="provider-modal-title">// provider</span>
-          <button id="provider-modal-close" class="btn-tertiary" type="button">x cancel</button>
+
+      <!-- Provider editor -->
+      <div id="provider-modal" x-data x-show="$store.ui.providerEditor" x-cloak class="border-t border-hairline p-5">
+        <div class="mb-4 flex items-center justify-between">
+          <h3 id="provider-modal-title" class="text-body font-medium text-ink">Provider</h3>
+          <button id="provider-modal-close" type="button" class="rounded-2xl px-3 py-1.5 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Cancel</button>
         </div>
-        <div id="provider-form-err" class="prov-err" role="alert" style="display:none"></div>
-        <div id="provider-test-out" class="prov-ok" style="display:none"></div>
-        <form id="provider-form">
+        <div id="provider-form-err" role="alert" class="mb-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+        <div id="provider-test-out" class="mb-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
+        <form id="provider-form" class="grid gap-5 sm:grid-cols-2">
           <input type="hidden" id="f-id">
-          <div class="prov-grid">
-            <div class="prov-field">
-              <label class="prov-label" for="f-name">name</label>
-              <input id="f-name" class="prov-input" required placeholder="my-provider">
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-base-url">base_url</label>
-              <input id="f-base-url" class="prov-input" required placeholder="https://api.example.com/v1">
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label" for="f-api-keys">api_keys (one per line — leave blank to keep existing keys)</label>
-              <textarea id="f-api-keys" class="prov-input" rows="2" placeholder="sk-..."></textarea>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label" for="f-headers">headers (KEY=Value, one per line)</label>
-              <textarea id="f-headers" class="prov-input" rows="2" placeholder="X-Custom=1"></textarea>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label">models — only checked models are stored & routed</label>
-              <div id="f-legacy" class="prov-warn" style="display:none">// legacy row: whole catalog currently routes — klik > test lalu save untuk mengunci seleksi</div>
-              <div id="f-models" class="prov-models"><span class="dim">// klik > test untuk memuat daftar model dari upstream</span></div>
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-refresh">refresh_sec</label>
-              <input id="f-refresh" class="prov-input" type="number" min="0" value="60">
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="f-priority">priority</label>
-              <input id="f-priority" class="prov-input" type="number" value="0">
-            </div>
-            <div class="prov-field full">
-              <label class="prov-check"><input id="f-enabled" type="checkbox" checked> enabled</label>
+          <label class="flex flex-col gap-1.5">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Name</span>
+            <input id="f-name" required placeholder="my-provider" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
+          </label>
+          <label class="flex flex-col gap-1.5">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Base URL</span>
+            <input id="f-base-url" required placeholder="https://api.example.com/v1" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
+          </label>
+          <label class="flex flex-col gap-1.5 sm:col-span-2">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">API keys — one per line (blank keeps existing keys)</span>
+            <textarea id="f-api-keys" rows="2" placeholder="sk-…" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray"></textarea>
+          </label>
+          <label class="flex flex-col gap-1.5 sm:col-span-2">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Headers — KEY=Value, one per line</span>
+            <textarea id="f-headers" rows="2" placeholder="X-Custom=1" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray"></textarea>
+          </label>
+          <div class="sm:col-span-2">
+            <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">Models — only checked models are stored and routed</p>
+            <p id="f-legacy" class="mb-2 hidden text-caption text-mid-gray">Legacy row: the whole catalog routes. Run Test, then Save to lock the selection.</p>
+            <div id="f-models" class="flex max-h-56 flex-wrap gap-x-6 gap-y-2 overflow-auto rounded-2xl bg-canvas p-3 text-caption text-mid-gray">
+              <span>Run Test to load the model list from the upstream.</span>
             </div>
           </div>
-          <div class="prov-actions">
-            <button id="provider-save" type="submit" class="btn-primary">> save</button>
-            <button id="provider-test" type="button" class="btn-secondary">> test</button>
-            <button id="provider-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
+          <label class="flex flex-col gap-1.5">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Refresh (sec)</span>
+            <input id="f-refresh" type="number" min="0" value="60" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
+          </label>
+          <label class="flex flex-col gap-1.5">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Priority</span>
+            <input id="f-priority" type="number" value="0" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
+          </label>
+          <label class="flex items-center gap-2 text-body sm:col-span-2">
+            <input id="f-enabled" type="checkbox" checked class="size-4 accent-[#0a0a0a]"> Enabled
+          </label>
+          <div class="flex flex-wrap gap-2 sm:col-span-2">
+            <button id="provider-save" type="submit" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Save</button>
+            <button id="provider-test" type="button" class="rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">Test</button>
+            <button id="provider-delete" type="button" class="rounded-2xl px-4 py-2 text-body font-medium text-ember transition-colors hover:bg-canvas">Delete</button>
           </div>
         </form>
       </div>
-    </div>
+    </section>
 
-    <div class="card section-block section-gap">
-      <div class="card-header">
-        <span class="card-title"># Proxy Pools</span>
-        <button id="pool-deploy" class="btn-primary" type="button">> deploy to vercel</button>
-        <button id="pool-new" class="btn-secondary" type="button">> new pool</button>
+    <!-- Proxy Pools -->
+    <section class="mb-6 min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
+        <div>
+          <h2 class="text-body font-medium text-ink">Proxy Pools</h2>
+          <p class="mt-1 text-caption text-mid-gray">Vercel edge relays — round-robin via x-relay-target / x-relay-path</p>
+        </div>
+        <div class="flex gap-2">
+          <button id="pool-new" type="button" class="rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">New pool</button>
+          <button id="pool-deploy" type="button" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Deploy to Vercel</button>
+        </div>
       </div>
-      <p class="subtitle">// vercel edge relays — round-robin via x-relay-target / x-relay-path</p>
-      <div id="pool-err" class="prov-err" role="alert" style="display:none"></div>
-      <div class="table-wrap">
-        <table>
+      <div id="pool-err" role="alert" class="mx-5 mt-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+      <div id="pool-ok" role="status" class="mx-5 mt-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
+      <div class="overflow-auto">
+        <table class="w-full text-left text-body">
           <thead>
-            <tr>
-              <th>name</th>
-              <th>proxy_url</th>
-              <th style="width:80px">enabled</th>
-              <th style="width:160px">actions</th>
+            <tr class="border-b border-hairline text-caption uppercase tracking-[0.05em] text-mid-gray">
+              <th class="px-5 py-3 font-medium">Name</th>
+              <th class="px-5 py-3 font-medium">Proxy URL</th>
+              <th class="w-28 px-5 py-3 font-medium">Status</th>
+              <th class="w-24 px-5 py-3 font-medium">Enabled</th>
+              <th class="w-56 px-5 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody id="pool-table">
-            <tr><td colspan="4" class="dim" aria-busy="true">// loading…</td></tr>
+            <tr><td colspan="5" class="px-5 py-8 text-center text-body text-mid-gray" aria-busy="true">Loading…</td></tr>
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <div class="card section-block section-gap">
-      <div class="card-header">
-        <span class="card-title"># Routing Combos</span>
-        <button id="combo-new" class="btn-secondary" type="button">> new combo</button>
+    <!-- Routing Combos -->
+    <section class="min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
+        <div>
+          <h2 class="text-body font-medium text-ink">Routing combos</h2>
+          <p class="mt-1 text-caption text-mid-gray">Virtual models — ordered tiers, first tier is primary</p>
+        </div>
+        <button id="combo-new" type="button" class="rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">New combo</button>
       </div>
-      <p class="subtitle">// virtual models — ordered tiers, first tier is primary</p>
-      <div id="provider-err-combo" class="prov-err" role="alert" style="display:none"></div>
-      <div id="combo-test-out" class="prov-ok" style="display:none"></div>
-      <div id="combo-list"></div>
-      <form id="combo-form" class="combo-form section-gap" hidden>
-        <div class="prov-field full">
-          <label class="prov-label" for="combo-name">combo name (= model ID)</label>
-          <input id="combo-name" class="prov-input" required placeholder="hemat">
-        </div>
-        <span class="prov-label">tiers — in failover order, first row is primary</span>
-        <div id="combo-tiers"></div>
-        <div class="prov-actions">
-          <button id="combo-add-tier" class="btn-tertiary" type="button">> add tier</button>
-        </div>
-        <div class="prov-actions">
+      <div id="combo-err" role="alert" class="mx-5 mt-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+      <div id="provider-err-combo" role="status" class="hidden"></div>
+      <div id="combo-test-out" class="mx-5 mt-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
+      <div id="combo-list" class="divide-y divide-hairline"></div>
+      <form id="combo-form" class="hidden gap-5 border-t border-hairline p-5">
+        <label class="flex flex-col gap-1.5">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Combo name (= model ID)</span>
+          <input id="combo-name" required placeholder="hemat" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+        </label>
+        <p class="text-caption uppercase tracking-[0.05em] text-mid-gray">Tiers — failover order, first row is primary</p>
+        <div id="combo-tiers" class="flex flex-col gap-2"></div>
+        <div class="flex flex-wrap gap-2">
+          <button id="combo-add-tier" type="button" class="rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">Add tier</button>
           <input type="hidden" id="combo-id">
-          <button id="combo-save" class="btn-primary" type="submit">> save combo</button>
-          <button id="combo-cancel" class="btn-tertiary" type="button" hidden>x cancel</button>
+          <button id="combo-save" type="submit" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Save combo</button>
+          <button id="combo-cancel" type="button" hidden class="rounded-2xl px-4 py-2 text-body font-medium text-mid-gray transition-colors hover:bg-canvas">Cancel</button>
+        </div>
+      </form>
+    </section>
+
+    <footer class="mt-12 border-t border-hairline pt-6 text-center text-caption text-mid-gray">freegate — configuration</footer>
+  </main>
+
+  <!-- Command palette -->
+  <div id="command-palette" x-data x-show="$store.ui.palette" x-cloak
+       @keydown.escape.window="$store.ui.palette = false"
+       class="fixed inset-0 z-50 flex items-start justify-center bg-ink/40 p-4 pt-32"
+       role="dialog" aria-modal="true" aria-labelledby="palette-title">
+    <div class="w-full max-w-xl rounded-3xl border border-hairline bg-paper p-5 shadow-card" @click.outside="$store.ui.palette = false">
+      <div class="mb-4 flex items-center justify-between">
+        <span class="text-body font-medium text-ink" id="palette-title">Command palette</span>
+        <span class="text-caption text-mid-gray">Esc to close</span>
+      </div>
+      <input id="palette-input" aria-label="Command palette search" autocomplete="off"
+             placeholder="Type a command (new, test, edit, delete, toggle)…"
+             class="w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+      <div id="palette-results" class="mt-4 flex max-h-72 flex-col gap-1 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- Pool modal -->
+  <div id="pool-modal" x-data x-show="$store.ui.poolModal" x-cloak
+       @keydown.escape.window="$store.ui.poolModal = false"
+       class="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+       role="dialog" aria-modal="true" aria-labelledby="pool-modal-title">
+    <div class="max-h-[90vh] w-full max-w-xl overflow-auto rounded-3xl border border-hairline bg-paper p-5 shadow-card" @click.outside="$store.ui.poolModal = false">
+      <div class="mb-4 flex items-center justify-between">
+        <span class="text-body font-medium text-ink" id="pool-modal-title">Pool</span>
+        <button id="pool-modal-close" type="button" class="rounded-2xl px-3 py-1.5 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Close</button>
+      </div>
+      <div id="pool-form-err" role="alert" class="mb-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+      <div id="pool-deploy-out" class="mb-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
+      <p id="pf-explainer" class="mb-4 hidden text-caption text-mid-gray">Deploys an edge relay to Vercel — provider requests forward through Vercel's edge network, masking your IP behind its dynamic edge IPs (100GB/mo and 500K invocations free; deploy on multiple accounts for more diversity).</p>
+      <form id="pool-form" class="grid gap-5 sm:grid-cols-2">
+        <input type="hidden" id="pf-id">
+        <label class="flex flex-col gap-1.5" for="pf-name">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Name</span>
+          <input id="pf-name" required placeholder="Office Proxy" aria-describedby="pf-name-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+          <span id="pf-name-help" class="text-caption text-mid-gray">Spaces and uppercase are converted to lowercase-dashes.</span>
+        </label>
+        <span id="pf-name-hint" class="hidden self-end text-caption text-mid-gray">Deploy mode: unique Vercel project name — leave blank to auto-generate.</span>
+        <label id="pf-proxy-url-wrap" class="flex flex-col gap-1.5" for="pf-proxy-url">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Proxy URL</span>
+          <input id="pf-proxy-url" required placeholder="http://127.0.0.1:7897" inputmode="url" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+        </label>
+        <label class="flex flex-col gap-1.5 sm:col-span-2" for="pf-no-proxy">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">No proxy</span>
+          <input id="pf-no-proxy" placeholder="localhost,127.0.0.1,.internal" aria-describedby="pf-no-proxy-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+          <span id="pf-no-proxy-help" class="text-caption text-mid-gray">Comma-separated hosts/domains that bypass the proxy.</span>
+        </label>
+        <label class="flex items-center gap-2 text-body">
+          <input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help" class="size-4 accent-[#0a0a0a]"> Active
+        </label>
+        <span id="pf-enabled-help" class="self-center text-caption text-mid-gray">Inactive pools are ignored at runtime.</span>
+        <label class="flex items-center gap-2 text-body">
+          <input id="pf-strict" type="checkbox" aria-describedby="pf-strict-help" class="size-4 accent-[#0a0a0a]"> Strict proxy
+        </label>
+        <span id="pf-strict-help" class="self-center text-caption text-mid-gray">Fail the request if the relay is unreachable instead of falling back to direct.</span>
+        <label id="pf-token-wrap" class="hidden flex-col gap-1.5 sm:col-span-2" for="pf-token">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Vercel token — used once for deployment, never stored</span>
+          <input id="pf-token" type="password" placeholder="Paste Vercel API token" autocomplete="off" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+        </label>
+        <div class="flex flex-wrap gap-2 sm:col-span-2">
+          <button id="pool-save" type="submit" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Save</button>
+          <button id="pool-deploy-go" type="button" class="hidden rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">Deploy</button>
+          <button id="pool-delete" type="button" class="rounded-2xl px-4 py-2 text-body font-medium text-ember transition-colors hover:bg-canvas">Delete</button>
         </div>
       </form>
     </div>
-
-    <footer class="footer" style="margin-top:var(--space-7)"># freegate — TerminalUI</footer>
   </div>
 
-  <div id="command-palette" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="palette-title">
-    <div class="modal-panel" style="max-width:560px">
-      <div class="modal-header">
-        <span class="modal-title" id="palette-title">&gt; command palette</span>
-        <span class="modal-close" id="palette-close" role="button" tabindex="0" aria-label="Close command palette">x</span>
-      </div>
-      <div class="modal-body" style="padding:var(--space-3)">
-        <input id="palette-input" class="prov-input" aria-label="Command palette search" placeholder="Type a command or provider (e.g. 'new', 'test openai', 'edit')..." autocomplete="off">
-        <div id="palette-results" style="margin-top:var(--space-3); max-height:280px; overflow-y:auto"></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="pool-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="pool-modal-title">
-    <div class="modal-panel pool-modal-panel">
-      <div class="modal-header">
-        <span class="modal-title" id="pool-modal-title">// pool</span>
-        <span class="modal-close" id="pool-modal-close" role="button" tabindex="0" aria-label="Close pool modal">x</span>
-      </div>
-      <div class="modal-body">
-        <div id="pool-form-err" class="prov-err" role="alert" style="display:none"></div>
-        <div id="pool-deploy-out" class="prov-ok" style="display:none"></div>
-        <div id="pf-explainer" class="prov-warn" style="display:none">// deploys an edge relay function to Vercel — all AI provider requests forward through Vercel's edge network, masking your IP behind Vercel's dynamic edge IPs (100GB/mo, 500K invocations free; deploy on multiple accounts for more diversity)</div>
-        <form id="pool-form">
-          <input type="hidden" id="pf-id">
-          <div class="prov-grid">
-            <div class="prov-field">
-              <label class="prov-label" for="pf-name">Name</label>
-              <input id="pf-name" class="prov-input" required placeholder="Office Proxy" aria-describedby="pf-name-help">
-              <span class="dim" id="pf-name-help">// spaces/uppercase auto-converted to lowercase-dashes</span>
-            </div>
-            <div class="prov-field" id="pf-name-hint" style="display:none">
-              <span class="dim">// deploy mode: unique Vercel project name — leave empty for auto-generated</span>
-            </div>
-            <div class="prov-field">
-              <label class="prov-label" for="pf-proxy-url">Proxy URL</label>
-              <input id="pf-proxy-url" class="prov-input" required placeholder="http://127.0.0.1:7897" inputmode="url">
-            </div>
-            <div class="prov-field full">
-              <label class="prov-label" for="pf-no-proxy">No Proxy</label>
-              <input id="pf-no-proxy" class="prov-input" placeholder="localhost,127.0.0.1,.internal" aria-describedby="pf-no-proxy-help">
-              <span class="dim" id="pf-no-proxy-help">// comma-separated hosts/domains to bypass proxy</span>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-check"><input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help"> Active</label>
-              <span class="dim" id="pf-enabled-help">// inactive pools are ignored by runtime resolution</span>
-            </div>
-            <div class="prov-field full">
-              <label class="prov-check"><input id="pf-strict" type="checkbox" aria-describedby="pf-strict-help"> Strict Proxy</label>
-              <span class="dim" id="pf-strict-help">// fail request if proxy is unreachable instead of falling back to direct</span>
-            </div>
-            <div class="prov-field full" id="pf-token-wrap" style="display:none">
-              <label class="prov-label" for="pf-token">vercel token (used once for deployment, never stored) — <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">get token</a></label>
-              <input id="pf-token" class="prov-input" type="password" placeholder="paste Vercel API token" autocomplete="off">
-            </div>
-          </div>
-          <div class="prov-actions">
-            <button id="pool-save" type="submit" class="btn-primary">> save</button>
-            <button id="pool-deploy-go" type="button" class="btn-secondary" style="display:none">> deploy</button>
-            <button id="pool-delete" type="button" class="btn-tertiary" style="color:var(--error)">> delete</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
-
-<script>
-(function() {
-  "use strict";
-  var table = document.getElementById('provider-table');
-  var errBox = document.getElementById('provider-err');
-  var formErr = document.getElementById('provider-form-err');
-  var testOut = document.getElementById('provider-test-out');
-  // Stored selection of the row being edited: null = legacy row (whole
-  // catalog routes until first save), [] = explicit empty, undefined =
-  // new provider. Drives the legacy banner + probe auto-check.
-  var editingLegacyModels;
-
-  function show(el, msg, ok) {
-    el.textContent = msg;
-    el.style.display = msg ? 'block' : 'none';
-    el.className = ok ? 'prov-ok' : 'prov-err';
-  }
-
-  // fetch + parse JSON, with HTTP status checked and typed errors.
-  // Tolerates empty bodies (204 on DELETE).
-  function getJSON(url, opts) {
-    return fetch(url, Object.assign({credentials: 'same-origin'}, opts || {}))
-      .then(function(r) {
-        if (r.status === 204) return {ok: true, body: null};
-        return r.json().then(function(b) { return {ok: r.ok, status: r.status, body: b}; });
-      })
-      .then(function(res) {
-        if (!res.ok) {
-          var msg = res.body && res.body.error && res.body.error.message
-            ? res.body.error.message : JSON.stringify(res.body);
-          throw new Error(msg);
-        }
-        return res.body;
-      });
-  }
-
-  // Disable a button while its request is in flight; restores it after.
-  // Rethrows the error so callers' .catch handlers still run.
-  function withBusy(btn, label, fn) {
-    if (btn.disabled) return Promise.reject(new Error('busy'));
-    var orig = btn.textContent;
-    btn.disabled = true;
-    if (label) btn.textContent = label;
-    return fn().catch(function(e) { throw e; }).then(function() {
-      btn.disabled = false;
-      if (label) btn.textContent = orig;
-    }, function(e) {
-      btn.disabled = false;
-      if (label) btn.textContent = orig;
-      throw e;
-    });
-  }
-
-  function lines(id) {
-    return document.getElementById(id).value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
-  }
-  function parseHeaders() {
-    var out = {};
-    lines('f-headers').forEach(function(l) {
-      var i = l.indexOf('=');
-      if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
-    });
-    return out;
-  }
-
-  // Model checklist: `saved` are the stored selection (always shown
-  // checked); `probe` is the upstream catalog from > test (unchecked
-  // unless already saved). Only checked IDs are sent on save.
-  function renderModelChecks(saved, probe) {
-    var box = document.getElementById('f-models');
-    var keep = {};
-    Array.prototype.forEach.call(box.querySelectorAll('input[type=checkbox]:checked'), function(c) { keep[c.value] = true; });
-    (saved || []).forEach(function(id) { keep[id] = true; });
-    var ids = [];
-    (saved || []).concat(probe || []).forEach(function(id) {
-      if (id && ids.indexOf(id) < 0) ids.push(id);
-    });
-    if (!ids.length) {
-      box.innerHTML = '<span class="dim">// klik > test untuk memuat daftar model dari upstream</span>';
-      return;
-    }
-    box.innerHTML = ids.map(function(id) {
-      return '<label class="prov-check"><input type="checkbox" value="' + esc(id) + '"' +
-        (keep[id] ? ' checked' : '') + '> ' + esc(id) + '</label>';
-    }).join('');
-  }
-  function checkedModels() {
-    return Array.prototype.map.call(
-      document.getElementById('f-models').querySelectorAll('input[type=checkbox]:checked'),
-      function(c) { return c.value; });
-  }
-
-  var providersCache = [];
-
-  function loadProviders() {
-    getJSON('/api/providers')
-      .then(function(body) {
-        var rows = body.data || body || [];
-        providersCache = rows;
-        if (!rows.length) {
-          table.innerHTML = '<tr><td colspan="6" class="dim">// no custom providers yet — use "> new provider"</td></tr>';
-          return;
-        }
-          table.innerHTML = rows.map(function(p) {
-          var legacy = p.models == null;
-          var n = (p.models || []).length;
-          var modelsCell = legacy ? '<span class="pill tone-amber">all — legacy</span>'
-            : (n ? n : '<span class="dim">0 — no route</span>');
-          return '<tr data-id="' + p.id + '">' +
-            '<td>' + esc(p.name) + '</td>' +
-            '<td class="dim">' + esc(p.base_url) + '</td>' +
-            '<td>' + modelsCell + '</td>' +
-            '<td>' + (p.priority || 0) + '</td>' +
-            '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
-            '<td><button class="btn-tertiary prov-edit" type="button" data-id="' + p.id + '">> edit</button></td>' +
-            '</tr>';
-        }).join('');
-      })
-      .catch(function(e) { table.innerHTML = '<tr><td colspan="6" class="dim">! load failed — ' + esc(e.message) + '</td></tr>'; show(errBox, '! load providers: ' + e.message); });
-  }
-
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) {
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
-    });
-  }
-
-  var editor = document.getElementById('provider-editor');
-
-  function openModal(p) {
-    p = p || {};
-    document.getElementById('f-id').value = p.id || '';
-    document.getElementById('f-name').value = p.name || '';
-    document.getElementById('f-base-url').value = p.base_url || '';
-    document.getElementById('f-api-keys').value = '';
-    document.getElementById('f-headers').value = Object.entries(p.headers || {}).map(function(kv){return kv[0]+'='+kv[1];}).join('\n');
-    editingLegacyModels = ('models' in p) ? p.models : undefined;
-    document.getElementById('f-legacy').style.display = editingLegacyModels === null ? '' : 'none';
-    renderModelChecks(p.models || [], null);
-    document.getElementById('f-refresh').value = p.refresh_sec != null ? p.refresh_sec : 60;
-    document.getElementById('f-priority').value = p.priority || 0;
-    document.getElementById('f-enabled').checked = p.enabled !== false;
-    document.getElementById('provider-delete').style.display = p.id ? '' : 'none';
-    // Test stays visible for new providers too: without an id it probes
-    // the form values ad-hoc so the checklist can be filled pre-save.
-    document.getElementById('provider-modal-title').textContent = p.id ? '// edit provider' : '// new provider';
-    show(formErr, ''); show(testOut, '');
-    editor.hidden = false;
-    document.getElementById('f-name').focus();
-    editor.scrollIntoView({block: 'nearest'});
-  }
-  function closeModal() {
-    editor.hidden = true;
-  }
-
-  var lastTrigger = null;
-  document.getElementById('provider-new').addEventListener('click', function() { lastTrigger = this; openModal(); });
-  document.getElementById('provider-modal-close').addEventListener('click', function() { closeModal(); if (lastTrigger) lastTrigger.focus(); });
-  document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && !editor.hidden) closeModal(); });
-
-  table.addEventListener('click', function(e) {
-    var btn = e.target.closest('.prov-edit');
-    if (!btn || btn.disabled) return;
-    lastTrigger = btn;
-    withBusy(btn, '> loading…', function() {
-      return getJSON('/api/providers/' + btn.dataset.id).then(function(body) {
-        openModal(body.data || body);
-      });
-    }).catch(function(e2) { show(errBox, '! load provider: ' + e2.message); });
-  });
-
-  document.getElementById('provider-form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    var saveBtn = document.getElementById('provider-save');
-    var id = document.getElementById('f-id').value;
-    var payload = {
-      name: document.getElementById('f-name').value.trim(),
-      base_url: document.getElementById('f-base-url').value.trim(),
-      api_keys: lines('f-api-keys'),
-      headers: parseHeaders(),
-      models: checkedModels(),
-      refresh_sec: parseInt(document.getElementById('f-refresh').value, 10) || 0,
-      priority: parseInt(document.getElementById('f-priority').value, 10) || 0,
-      enabled: document.getElementById('f-enabled').checked
-    };
-    var method = id ? 'PUT' : 'POST';
-    var url = id ? '/api/providers/' + id : '/api/providers';
-    withBusy(saveBtn, '> saving…', function() {
-      return getJSON(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
-        .then(function() {
-          closeModal(); loadProviders(); loadTierEditor();
-        });
-    }).catch(function(e2) { show(formErr, '! save: ' + e2.message); });
-  });
-
-  document.getElementById('provider-test').addEventListener('click', function() {
-    var id = document.getElementById('f-id').value;
-    var url, opts;
-    if (id) {
-      url = '/api/providers/' + id + '/test';
-      opts = {method: 'POST'};
-    } else {
-      // No id yet: probe the form values ad-hoc (stores nothing).
-      url = '/api/providers/probe';
-      opts = {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
-        base_url: document.getElementById('f-base-url').value.trim(),
-        api_keys: lines('f-api-keys'),
-        headers: parseHeaders()
-      })};
-    }
-    withBusy(this, '> testing…', function() {
-      return getJSON(url, opts)
-        .then(function(b) {
-          // getJSON resolves with the body itself (never {body}).
-          var probed = (b && b.models) || [];
-          // Legacy row (models === null, saved pre-selection): everything
-          // currently routes, so pre-check the whole catalog — saving then
-          // preserves routing instead of silently narrowing it.
-          var legacy = editingLegacyModels === null;
-          var keep = legacy ? probed : checkedModels();
-          renderModelChecks(keep, probed);
-          show(testOut, (b.ok && b.ok ? '// ok — centang model yang mau disimpan' : '// fail') + ' ' + JSON.stringify(b), !!(b.ok && b.ok));
-        });
-    }).catch(function(e) { show(testOut, '! test: ' + e.message); });
-  });
-
-  document.getElementById('provider-delete').addEventListener('click', function() {
-    var id = document.getElementById('f-id').value;
-    if (!id) return;
-    var name = document.getElementById('f-name').value.trim();
-    if (!confirm('delete provider "' + name + '"? combos using it will lose that tier.')) return;
-    withBusy(this, '> deleting…', function() {
-      return getJSON('/api/providers/' + id, {method: 'DELETE'}).then(function() {
-        closeModal(); loadProviders(); loadTierEditor();
-      });
-    }).catch(function(e) { show(formErr, '! delete: ' + e.message); });
-  });
-
-  var poolTable = document.getElementById('pool-table');
-  var poolErr = document.getElementById('pool-err');
-
-  function loadPools() {
-    getJSON('/api/pools')
-      .then(function(body) {
-        var rows = body.data || body || [];
-        if (!rows.length) {
-          poolTable.innerHTML = '<tr><td colspan="4" class="dim">// no proxy pools yet — use "> new pool"</td></tr>';
-          return;
-        }
-        poolTable.innerHTML = rows.map(function(p) {
-          return '<tr data-id="' + p.id + '">' +
-            '<td>' + esc(p.name) + '</td>' +
-            '<td class="dim">' + esc(p.proxy_url) + '</td>' +
-            '<td>' + (p.enabled ? '<span class="pill tone-green">on</span>' : '<span class="pill tone-gray">off</span>') + '</td>' +
-            '<td><button class="btn-tertiary pool-edit" type="button" data-id="' + p.id + '">> edit</button> ' +
-            '<button class="btn-tertiary pool-test" type="button" data-id="' + p.id + '">> test</button> ' +
-            '<button class="btn-tertiary pool-delete" type="button" data-id="' + p.id + '" style="color:var(--error)">x</button></td>' +
-            '</tr>';
-        }).join('');
-      })
-      .catch(function(e) { poolTable.innerHTML = '<tr><td colspan="4" class="dim">! load failed — ' + esc(e.message) + '</td></tr>'; show(poolErr, '! load pools: ' + e.message); });
-  }
-
-  function savePool(id, payload, btn) {
-    var method = id ? 'PUT' : 'POST';
-    var url = id ? '/api/pools/' + id : '/api/pools';
-    withBusy(btn, '> saving…', function() {
-      return getJSON(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
-        .then(function() { closePoolModal(); loadPools(); });
-    }).catch(function(e) { show(document.getElementById('pool-form-err'), '! save pool: ' + e.message); });
-  }
-
-  var poolModal = document.getElementById('pool-modal');
-  var poolFormErr = document.getElementById('pool-form-err');
-  var poolDeployOut = document.getElementById('pool-deploy-out');
-  var poolLastTrigger = null;
-
-  function openPoolModal(p, deployMode) {
-    p = p || {};
-    if (poolModal.style.display !== 'flex') {
-      poolLastTrigger = document.activeElement;
-    }
-    document.getElementById('pf-id').value = p.id || '';
-    document.getElementById('pf-name').value = p.name || '';
-    document.getElementById('pf-proxy-url').value = p.proxy_url || '';
-    document.getElementById('pf-no-proxy').value = p.no_proxy || '';
-    document.getElementById('pf-enabled').checked = p.enabled !== false;
-    document.getElementById('pf-strict').checked = !!p.strict_proxy;
-    document.getElementById('pf-token').value = '';
-    document.getElementById('pf-token-wrap').style.display = deployMode ? '' : 'none';
-    document.getElementById('pf-proxy-url').closest('.prov-field').style.display = deployMode ? 'none' : '';
-    document.getElementById('pf-name').required = !deployMode;
-    document.getElementById('pf-proxy-url').required = !deployMode;
-    document.getElementById('pf-name-hint').style.display = deployMode ? '' : 'none';
-    document.getElementById('pf-explainer').style.display = deployMode ? '' : 'none';
-    document.getElementById('pool-deploy-go').style.display = deployMode ? '' : 'none';
-    document.getElementById('pool-save').style.display = deployMode ? 'none' : '';
-    document.getElementById('pool-delete').style.display = p.id && !deployMode ? '' : 'none';
-    document.getElementById('pool-modal-title').textContent = deployMode ? '// deploy relay to vercel' : (p.id ? '// edit pool' : '// new pool');
-    show(poolFormErr, ''); show(poolDeployOut, '');
-    poolModal.style.display = 'flex';
-    document.body.classList.add('modal-open');
-    document.getElementById('pool-modal-close').focus();
-  }
-  function closePoolModal() {
-    poolModal.style.display = 'none';
-    document.body.classList.remove('modal-open');
-    if (poolLastTrigger && typeof poolLastTrigger.focus === 'function') {
-      poolLastTrigger.focus();
-    }
-    poolLastTrigger = null;
-  }
-
-  // Focus trap: keep Tab cycling inside the open pool modal (mirrors the
-  // provider modal). Hidden controls are skipped via offsetParent.
-  poolModal.addEventListener('keydown', function(e) {
-    if (e.key !== 'Tab' || poolModal.style.display !== 'flex') return;
-    var items = Array.prototype.filter.call(
-      poolModal.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'),
-      function(el) { return !el.disabled && el.type !== 'hidden' && el.offsetParent !== null; }
-    );
-    if (!items.length) return;
-    var first = items[0], last = items[items.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  });
-
-  document.getElementById('pool-modal-close').addEventListener('click', function() { closePoolModal(); });
-  poolModal.addEventListener('click', function(e) { if (e.target === poolModal) closePoolModal(); });
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && poolModal.style.display === 'flex') closePoolModal();
-    if ((e.key === 'Enter' || e.key === ' ') && e.target && e.target.id === 'pool-modal-close') {
-      e.preventDefault();
-      closePoolModal();
-    }
-  });
-
-  document.getElementById('pool-new').addEventListener('click', function() { openPoolModal({}, false); });
-  document.getElementById('pool-deploy').addEventListener('click', function() { openPoolModal({}, true); });
-
-  document.getElementById('pool-form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    var id = document.getElementById('pf-id').value;
-    var rawName = document.getElementById('pf-name').value.trim();
-    var slug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
-    if (!slug) { show(poolFormErr, '! save pool: name must contain a-z0-9'); return; }
-    savePool(id, {
-      name: slug,
-      proxy_url: document.getElementById('pf-proxy-url').value.trim(),
-      no_proxy: document.getElementById('pf-no-proxy').value.trim(),
-      enabled: document.getElementById('pf-enabled').checked,
-      strict_proxy: document.getElementById('pf-strict').checked
-    }, document.getElementById('pool-save'));
-  });
-
-  document.getElementById('pool-deploy-go').addEventListener('click', function() {
-    var btn = this;
-    var token = document.getElementById('pf-token').value.trim();
-    var name = document.getElementById('pf-name').value.trim();
-    if (!token) { show(poolFormErr, '! deploy: vercel token is required'); return; }
-    if (!name) { show(poolFormErr, '! deploy: project name is required'); return; }
-    show(poolFormErr, ''); show(poolDeployOut, '// deploying to vercel… (up to ~2 min)', true);
-    withBusy(btn, '> deploying…', function() {
-      return getJSON('/api/pools/vercel-deploy', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({vercel_token: token, project_name: name})})
-        .then(function(b) {
-          document.getElementById('pf-token').value = '';
-          var url = (b && (b.deploy_url || (b.pool && b.pool.proxy_url))) || '';
-          show(poolDeployOut, '// deployed: ' + url, true);
-          loadPools();
-        });
-    }).catch(function(e) { show(poolFormErr, '! deploy: ' + e.message); });
-  });
-
-  document.getElementById('pool-delete').addEventListener('click', function() {
-    var id = document.getElementById('pf-id').value;
-    if (!id) return;
-    if (!confirm('delete pool ' + id + '?')) return;
-    withBusy(this, '> deleting…', function() {
-      return getJSON('/api/pools/' + id, {method: 'DELETE'}).then(function() {
-        closePoolModal(); loadPools();
-      });
-    }).catch(function(e) { show(poolFormErr, '! delete pool: ' + e.message); });
-  });
-
-  poolTable.addEventListener('click', function(e) {
-    var edt = e.target.closest('.pool-edit');
-    var tst = e.target.closest('.pool-test');
-    var del = e.target.closest('.pool-delete');
-    if (edt) {
-      withBusy(edt, '> loading…', function() {
-        return getJSON('/api/pools/' + edt.dataset.id).then(function(body) {
-          openPoolModal(body.data || body, false);
-        });
-      }).catch(function(e2) { show(poolErr, '! load pool: ' + e2.message); });
-    } else if (tst) {
-      withBusy(tst, '> testing…', function() {
-        return getJSON('/api/pools/' + tst.dataset.id + '/test', {method: 'POST'})
-          .then(function(b) {
-            show(poolErr, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok);
-            loadPools();
-          });
-      }).catch(function(e2) { show(poolErr, '! test pool: ' + e2.message); });
-    } else if (del) {
-      if (!confirm('delete pool ' + del.dataset.id + '?')) return;
-      withBusy(del, '> deleting…', function() {
-        return getJSON('/api/pools/' + del.dataset.id, {method: 'DELETE'}).then(function() {
-          loadPools();
-        });
-      }).catch(function(e2) { show(poolErr, '! delete pool: ' + e2.message); });
-    }
-  });
-
-  var comboErr = document.getElementById('provider-err-combo');
-  var comboProviders = ['opencode', 'kilo', 'llm7'];
-  var combosCache = {};
-  var comboTestOut = document.getElementById('combo-test-out');
-
-  function addTierRow(provider, model) {
-    var wrap = document.getElementById('combo-tiers');
-    if (provider && comboProviders.indexOf(provider) < 0) comboProviders.push(provider);
-    var row = document.createElement('div');
-    row.className = 'combo-row';
-    row.innerHTML =
-      '<select class="prov-input combo-tier-provider" name="tier_provider" style="max-width:220px" aria-label="tier provider">' +
-        comboProviders.map(function(n) {
-          return '<option value="' + esc(n) + '"' + (n === provider ? ' selected' : '') + '>' + esc(n) + '</option>';
-        }).join('') +
-      '</select>' +
-      '<input class="prov-input combo-tier-model" name="tier_model" style="max-width:200px" placeholder="model (optional)" value="' + esc(model || '') + '" aria-label="tier model">' +
-      '<button class="btn-tertiary tier-up" type="button" aria-label="move tier up">up</button>' +
-      '<button class="btn-tertiary tier-down" type="button" aria-label="move tier down">down</button>' +
-      '<button class="btn-tertiary tier-remove" type="button" aria-label="remove tier" style="color:var(--error)">x</button>';
-    wrap.appendChild(row);
-  }
-
-  function loadTierEditor() {
-    return getJSON('/api/providers')
-      .then(function(body) {
-        var rows = body.data || body || [];
-        comboProviders = ['opencode', 'kilo', 'llm7'];
-        rows.forEach(function(p) { comboProviders.push('custom:' + p.name); });
-        var wrap = document.getElementById('combo-tiers');
-        var kept = [];
-        wrap.querySelectorAll('.combo-row').forEach(function(row) {
-          kept.push({
-            provider: row.querySelector('.combo-tier-provider').value,
-            model: row.querySelector('.combo-tier-model').value
-          });
-        });
-        wrap.innerHTML = '';
-        if (!kept.length) kept.push({provider: 'opencode', model: ''});
-        kept.forEach(function(t) { addTierRow(t.provider, t.model); });
-      })
-      .catch(function(e) { show(comboErr, '! load tier providers: ' + e.message); });
-  }
-
-  function tierLabel(t) {
-    return t.model ? t.provider + ':' + t.model : t.provider;
-  }
-
-  function loadCombos() {
-    return getJSON('/api/combos')
-      .then(function(body) {
-        var rows = body.data || body || [];
-        combosCache = {};
-        var list = document.getElementById('combo-list');
-        if (!rows.length) { list.innerHTML = '<p class="subtitle">// no combos yet — use "> new combo"</p>'; return; }
-        list.innerHTML = rows.map(function(c) {
-          combosCache[c.id] = c;
-          var tiers = (c.tiers || []).map(tierLabel).join(' → ');
-          return '<div class="combo-row" data-id="' + c.id + '">' +
-            '<strong>' + esc(c.name) + '</strong>' +
-            '<span class="combo-tiers">' + esc(tiers) + '</span>' +
-            '<button class="btn-tertiary combo-test" type="button" data-id="' + c.id + '">> test</button>' +
-            '<button class="btn-tertiary combo-edit" type="button" data-id="' + c.id + '">> edit</button>' +
-            '<button class="btn-tertiary combo-delete" type="button" data-id="' + c.id + '" style="color:var(--error)">x</button>' +
-            '</div>';
-        }).join('');
-      })
-      .catch(function(e) { show(comboErr, '! load combos: ' + e.message); });
-  }
-
-  var comboForm = document.getElementById('combo-form');
-  var comboCancelBtn = document.getElementById('combo-cancel');
-
-  function resetComboForm() {
-    document.getElementById('combo-id').value = '';
-    document.getElementById('combo-name').value = '';
-    document.getElementById('combo-tiers').innerHTML = '';
-    addTierRow('opencode', '');
-    comboCancelBtn.hidden = true;
-    comboForm.hidden = true;
-    show(comboTestOut, '');
-  }
-
-  document.getElementById('combo-new').addEventListener('click', function() {
-    lastTrigger = this;
-    resetComboForm();
-    comboForm.hidden = false;
-    document.getElementById('combo-name').focus();
-  });
-  comboCancelBtn.addEventListener('click', resetComboForm);
-
-  document.getElementById('combo-add-tier').addEventListener('click', function() { addTierRow('opencode', ''); });
-
-  document.getElementById('combo-tiers').addEventListener('click', function(e) {
-    var row = e.target.closest('.combo-row');
-    if (!row) return;
-    if (e.target.closest('.tier-remove')) {
-      row.remove();
-      if (!document.querySelectorAll('#combo-tiers .combo-row').length) addTierRow('opencode', '');
-    } else if (e.target.closest('.tier-up')) {
-      var prev = row.previousElementSibling;
-      if (prev) row.parentNode.insertBefore(row, prev);
-    } else if (e.target.closest('.tier-down')) {
-      var next = row.nextElementSibling;
-      if (next) row.parentNode.insertBefore(next, row);
-    }
-  });
-
-  document.getElementById('combo-form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    var tiers = [];
-    document.querySelectorAll('#combo-tiers .combo-row').forEach(function(row) {
-      var t = {provider: row.querySelector('.combo-tier-provider').value};
-      var m = row.querySelector('.combo-tier-model').value.trim();
-      if (m) t.model = m;
-      tiers.push(t);
-    });
-    var id = document.getElementById('combo-id').value;
-    var payload = {
-      name: document.getElementById('combo-name').value.trim(),
-      tiers: tiers
-    };
-    var method = id ? 'PUT' : 'POST';
-    var url = id ? '/api/combos/' + id : '/api/combos';
-    withBusy(document.getElementById('combo-save'), '> saving…', function() {
-      return getJSON(url, {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)})
-        .then(function() {
-          resetComboForm();
-          loadCombos();
-        });
-    }).catch(function(e2) { show(comboErr, '! save combo: ' + e2.message); });
-  });
-
-  document.getElementById('combo-list').addEventListener('click', function(e) {
-    var tst = e.target.closest('.combo-test');
-    var edt = e.target.closest('.combo-edit');
-    var del = e.target.closest('.combo-delete');
-    if (tst) {
-      withBusy(tst, '> testing…', function() {
-        return getJSON('/api/combos/' + tst.dataset.id + '/test', {method: 'POST'})
-          .then(function(b) {
-            var rows = (b.tiers || []).map(function(t) {
-              var st = t.ok ? 'ok' : 'fail';
-              var lat = t.latencyMs != null ? ' ' + t.latencyMs + 'ms' : '';
-              var why = !t.ok && t.error ? ' ' + t.error : '';
-              return t.provider + ': ' + st + lat + why;
-            });
-            show(comboTestOut, (b.ok ? '// ok' : '// fail') + '\n' + rows.join('\n'), !!b.ok);
-          });
-      }).catch(function(e2) { show(comboTestOut, '! test combo: ' + e2.message); });
-    } else if (edt) {
-      var c = combosCache[edt.dataset.id];
-      if (!c) return;
-      lastTrigger = edt;
-      document.getElementById('combo-id').value = c.id;
-      document.getElementById('combo-name').value = c.name || '';
-      var wrap = document.getElementById('combo-tiers');
-      wrap.innerHTML = '';
-      (c.tiers || []).forEach(function(t) { addTierRow(t.provider, t.model); });
-      if (!(c.tiers || []).length) addTierRow('opencode', '');
-      comboForm.hidden = false;
-      comboCancelBtn.hidden = false;
-      document.getElementById('combo-name').focus();
-    } else if (del) {
-      if (!confirm('delete combo ' + del.dataset.id + '?')) return;
-      withBusy(del, '> deleting…', function() {
-        return getJSON('/api/combos/' + del.dataset.id, {method: 'DELETE'}).then(function() {
-          loadCombos();
-        });
-      }).catch(function(e2) { show(comboErr, '! delete combo: ' + e2.message); });
-    }
-  });
-
-  var palette = document.getElementById('command-palette');
-  var paletteInput = document.getElementById('palette-input');
-  var paletteResults = document.getElementById('palette-results');
-
-  function openPalette() {
-    palette.style.display = 'flex';
-    document.body.classList.add('modal-open');
-    paletteInput.value = '';
-    paletteInput.focus();
-    renderPaletteResults('');
-  }
-
-  function closePalette() {
-    palette.style.display = 'none';
-    document.body.classList.remove('modal-open');
-  }
-
-  function renderPaletteResults(q) {
-    var parts = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    var cmd = parts[0] || '';
-    var arg = parts.slice(1).join(' ');
-
-    var items = [];
-
-    if (!cmd) {
-      items = [
-        {label: '> new provider', action: function() { closePalette(); openModal(); }},
-        {label: '> new pool', action: function() { closePalette(); openPoolModal({}, false); }},
-        {label: '> new combo', action: function() { closePalette(); resetComboForm(); comboForm.hidden = false; document.getElementById('combo-name').focus(); }},
-        {label: '> toggle [provider]', hint: 'type provider name'},
-        {label: '> test [provider]', hint: 'type provider name'},
-        {label: '> edit [provider]', hint: 'type provider name'},
-        {label: '> delete [provider]', hint: 'type provider name'}
-      ];
-    } else if (cmd === 'new') {
-      if (!arg || arg.indexOf('pool') === 0) {
-        items.push({label: '> new pool', action: function() { closePalette(); openPoolModal({}, false); }});
-      }
-      if (!arg || arg.indexOf('prov') === 0) {
-        items.push({label: '> new provider', action: function() { closePalette(); openModal(); }});
-      }
-      if (!arg || arg.indexOf('comb') === 0) {
-        items.push({label: '> new combo', action: function() { closePalette(); resetComboForm(); comboForm.hidden = false; document.getElementById('combo-name').focus(); }});
-      }
-    } else if (['toggle', 'test', 'edit', 'delete'].indexOf(cmd) >= 0) {
-      providersCache.forEach(function(p) {
-        if (!arg || p.name.toLowerCase().indexOf(arg) >= 0) {
-          var label = '>' + cmd + ' ' + p.name;
-          if (cmd === 'toggle') label += ' [' + (p.enabled ? 'on' : 'off') + ']';
-          items.push({
-            label: label,
-            action: function() {
-              closePalette();
-              if (cmd === 'toggle') {
-                toggleProvider(p.id, !p.enabled);
-              } else if (cmd === 'test') {
-                testProviderById(p.id);
-              } else if (cmd === 'edit') {
-                openModalById(p.id);
-              } else if (cmd === 'delete') {
-                deleteProviderById(p.id, p.name);
-              }
-            }
-          });
-        }
-      });
-    }
-
-    if (!items.length) {
-      paletteResults.innerHTML = '<span class="dim" style="display:block;padding:var(--space-2)">no matches</span>';
-      return;
-    }
-
-    paletteResults.innerHTML = items.slice(0, 10).map(function(item, i) {
-      return '<button class="btn-tertiary palette-item" data-idx="' + i + '" style="display:block;width:100%;text-align:left;margin-bottom:var(--space-1)">' +
-        esc(item.label) + (item.hint ? ' <span class="dim">' + esc(item.hint) + '</span>' : '') + '</button>';
-    }).join('');
-
-    paletteResults.querySelectorAll('.palette-item').forEach(function(btn, i) {
-      btn.addEventListener('click', function() { items[i].action(); });
-    });
-  }
-
-  function toggleProvider(id, enabled) {
-    getJSON('/api/providers/' + id)
-      .then(function(body) {
-        var p = body.data || body;
-        return getJSON('/api/providers/' + id, {
-          method: 'PUT',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            name: p.name,
-            base_url: p.base_url,
-            headers: p.headers || {},
-            refresh_sec: p.refresh_sec || 60,
-            priority: p.priority || 0,
-            enabled: enabled
-          })
-        });
-      })
-      .then(function() { loadProviders(); })
-      .catch(function(e) { show(errBox, '! toggle: ' + e.message); });
-  }
-
-  function testProviderById(id) {
-    show(errBox, '// testing…', true);
-    getJSON('/api/providers/' + id + '/test', {method: 'POST'})
-      .then(function(b) { show(errBox, (b.ok ? '// ok' : '// fail') + ' ' + JSON.stringify(b), !!b.ok); })
-      .catch(function(e) { show(errBox, '! test: ' + e.message); });
-  }
-
-  function openModalById(id) {
-    getJSON('/api/providers/' + id).then(function(body) { openModal(body.data || body); }).catch(function(e) { show(errBox, '! load: ' + e.message); });
-  }
-
-  function deleteProviderById(id, name) {
-    if (!confirm('delete provider "' + name + '"? combos using it will lose that tier.')) return;
-    getJSON('/api/providers/' + id, {method: 'DELETE'}).then(function() { loadProviders(); loadTierEditor(); }).catch(function(e) { show(errBox, '! delete: ' + e.message); });
-  }
-
-  document.getElementById('palette-open').addEventListener('click', openPalette);
-  document.getElementById('palette-close').addEventListener('click', closePalette);
-  palette.addEventListener('click', function(e) { if (e.target === palette) closePalette(); });
-
-  document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-      e.preventDefault();
-      if (palette.style.display === 'flex') closePalette(); else openPalette();
-    }
-    if (e.key === 'Escape' && palette.style.display === 'flex') closePalette();
-  });
-
-  paletteInput.addEventListener('input', function() { renderPaletteResults(paletteInput.value); });
-  var paletteIdx = -1;
-  palette.addEventListener('keydown', function(e) {
-    var btns = paletteResults.querySelectorAll('.palette-item');
-    if (!btns.length) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      paletteIdx = Math.min(paletteIdx + 1, btns.length - 1);
-      btns.forEach(function(b, i) { b.style.background = i === paletteIdx ? 'var(--surface-hover)' : ''; });
-      btns[paletteIdx].focus();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      paletteIdx = Math.max(paletteIdx - 1, 0);
-      btns.forEach(function(b, i) { b.style.background = i === paletteIdx ? 'var(--surface-hover)' : ''; });
-      btns[paletteIdx].focus();
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      var idx = paletteIdx >= 0 ? paletteIdx : 0;
-      if (btns[idx]) btns[idx].click();
-    }
-  });
-
-  loadProviders();
-  loadPools();
-  loadCombos();
-  loadTierEditor();
-})();
-</script>
+  <span hidden data-api="/api/providers /api/combos /api/pools /api/pools/vercel-deploy"></span>
 </body>
 </html>

@@ -1,43 +1,56 @@
-<div id="pg-overlay" class="pg-overlay" role="dialog" aria-modal="true" aria-labelledby="pg-title" style="display:none">
-  <div id="pg-panel" class="pg-panel">
-    <header class="pg-header">
-      <span id="pg-title" class="pg-title">> playground</span>
-      <div class="pg-header-controls">
-        <select id="pg-model" name="model" class="pg-model" aria-label="Model"
-                hx-get="/partials/playground/models"
-                hx-trigger="intersect once"
-                hx-swap="beforeend"
-                hx-on:htmx:after-request="window.fgPlayground.onModelsLoaded()">
-          <option value="" disabled selected>// pick a model</option>
+<div id="pg-overlay" x-data="playground()" x-show="open" x-cloak
+     x-on:open-playground.window="open = true; $nextTick(() => { $refs.input.focus(); loadModels() })"
+     class="fixed inset-0 z-50 flex justify-end bg-ink/40"
+     role="dialog" aria-modal="true" aria-labelledby="pg-title"
+     x-transition.opacity>
+  <div id="pg-panel" class="flex h-full w-full max-w-xl flex-col border-l border-hairline bg-paper" @click.outside="close()" @keydown.escape.window="close()">
+    <header class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
+      <span id="pg-title" class="text-body font-medium text-ink">Playground</span>
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="pg-model" x-model="model" aria-label="Model" @change="save()"
+          class="max-w-56 rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none">
+          <option value="" disabled x-show="!models.length">Loading models…</option>
+          <template x-for="m in models" :key="m">
+            <option :value="m" x-text="m"></option>
+          </template>
         </select>
-        <label class="pg-stream-toggle">
-          <input id="pg-stream" type="checkbox"
-                 hx-on:change="window.fgPlayground.onStreamToggle(event)"> stream
+        <label class="flex cursor-pointer items-center gap-1.5 text-caption text-mid-gray">
+          <input id="pg-stream" type="checkbox" x-model="stream" @change="save()" class="size-4 accent-[#0a0a0a]"> stream
         </label>
-        <button id="pg-clear" class="btn-tertiary" title="Clear thread" type="button"
-                hx-on:click="window.fgPlayground.clear()">clear</button>
-        <button id="pg-close" class="pg-close" aria-label="Close playground" type="button"
-                hx-on:click="window.fgPlayground.close()">x</button>
+        <button id="pg-clear" title="Clear thread" type="button" @click="clear()"
+          class="rounded-2xl px-3 py-2 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Clear</button>
+        <button id="pg-close" aria-label="Close playground" type="button" @click="close()"
+          class="rounded-2xl px-3 py-2 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Close</button>
       </div>
     </header>
-    <div id="pg-list" class="pg-body" role="log" aria-live="polite">
-      <div id="pg-empty" class="pg-empty">// pick a model and say something</div>
-    </div>
-    <footer class="pg-footer">
-      <div id="pg-system-wrap" class="pg-system-wrap collapsed">
-        <button id="pg-system-toggle" class="pg-system-toggle" type="button" aria-expanded="false"
-                hx-on:click="window.fgPlayground.toggleSystem()">// system prompt ▾</button>
-        <textarea id="pg-system" class="pg-system" rows="2" placeholder="optional system prompt..."
-                  hx-on:input="window.fgPlayground.onSystemInput(event)"></textarea>
+    <div id="pg-list" class="flex flex-1 flex-col gap-4 overflow-y-auto p-5" role="log" aria-live="polite">
+      <div id="pg-empty" x-show="!messages.length" class="m-auto text-body text-mid-gray">Pick a model and say something.</div>
+      <template x-for="(m, i) in messages" :key="i">
+        <div class="rounded-2xl border border-hairline bg-paper p-4" :class="m.role === 'user' ? 'border-l-4 border-l-ink-soft' : (m.err ? 'border-l-4 border-l-ember' : 'border-l-4 border-l-ink')">
+          <p class="mb-1.5 font-mono text-caption text-mid-gray" x-text="meta(m)"></p>
+          <pre class="m-0 whitespace-pre-wrap break-words font-mono text-body text-ink" :class="m.err && 'text-ember'" x-text="m.content"></pre>
+        </div>
+      </template>
+      <div x-show="streaming" class="rounded-2xl border border-hairline border-l-4 border-l-ink bg-paper p-4">
+        <p class="mb-1.5 font-mono text-caption text-mid-gray">assistant</p>
+        <pre class="m-0 whitespace-pre-wrap break-words font-mono text-body text-ink"><span x-text="draft"></span><span class="animate-pulse">▍</span></pre>
       </div>
-      <form id="pg-form" class="pg-input-row"
-            hx-on:submit="window.fgPlayground.send(event)">
-        <textarea id="pg-input" name="content" class="pg-input" rows="3"
-                  placeholder="type a message... (Enter to send, Shift+Enter for new line)"
-                  hx-on:keydown="window.fgPlayground.onInputKeydown(event)"></textarea>
-        <button id="pg-send" class="btn-primary" type="submit">> send</button>
-        <button id="pg-stop" class="pg-stop" type="button" style="display:none"
-                hx-on:click="window.fgPlayground.stopStreaming()">> stop</button>
+    </div>
+    <footer class="flex flex-col gap-3 border-t border-hairline bg-surface-alt p-5">
+      <div>
+        <button id="pg-system-toggle" type="button" @click="showSystem = !showSystem" :aria-expanded="showSystem"
+          class="p-0 text-caption text-mid-gray hover:text-ink">System prompt</button>
+        <textarea id="pg-system" x-show="showSystem" x-model="system" @input="save()" rows="2" placeholder="Optional system prompt…"
+          class="mt-2 w-full resize-y rounded-2xl border border-hairline bg-canvas p-2.5 text-body text-ink outline-none placeholder:text-mid-gray"></textarea>
+      </div>
+      <form id="pg-form" @submit.prevent="send()" class="flex items-stretch gap-2">
+        <textarea id="pg-input" x-ref="input" x-model="input" rows="3" @keydown.enter.exact.prevent="send()"
+          placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+          class="min-h-16 flex-1 resize-y rounded-2xl border border-hairline bg-canvas p-2.5 text-body text-ink outline-none placeholder:text-mid-gray"></textarea>
+        <button id="pg-send" type="submit" :disabled="busy"
+          class="self-end rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90 disabled:opacity-40">Send</button>
+        <button id="pg-stop" type="button" x-show="streaming" @click="stop()"
+          class="self-end rounded-2xl border border-ember px-4 py-2 text-body font-medium text-ember transition-colors hover:bg-ember hover:text-paper">Stop</button>
       </form>
     </footer>
   </div>

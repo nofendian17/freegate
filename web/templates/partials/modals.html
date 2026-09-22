@@ -1,0 +1,31 @@
+<div id="error-modal" x-data x-show="$store.modal.error.open" x-cloak
+     x-on:keydown.escape.window="$store.modal.error.open = false"
+     x-transition.opacity
+     class="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="error-detail">
+  <div class="w-full max-w-lg rounded-3xl border border-hairline bg-paper p-5 shadow-card" @click.outside="$store.modal.error.open = false">
+    <div class="mb-4 flex items-center justify-between">
+      <span class="text-body font-medium text-ink" id="modal-title">Error</span>
+      <button type="button" @click="$store.modal.error.open = false" aria-label="Close error modal"
+        class="rounded-2xl px-3 py-1.5 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Close</button>
+    </div>
+    <pre id="error-detail" x-text="$store.modal.error.text" class="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-canvas p-4 font-mono text-caption text-ember"></pre>
+  </div>
+</div>
+
+<div id="test-modal" x-data x-show="$store.modal.test.open" x-cloak
+     x-on:keydown.escape.window="$store.modal.test.open = false"
+     x-transition.opacity
+     class="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="test-title" aria-describedby="test-detail">
+  <div class="w-full max-w-lg rounded-3xl border border-hairline bg-paper p-5 shadow-card" @click.outside="$store.modal.test.open = false">
+    <div class="mb-4 flex items-center justify-between">
+      <span class="text-body font-medium text-ink" id="test-title" x-text="$store.modal.test.title">Model test</span>
+      <button type="button" id="test-close" @click="$store.modal.test.open = false" aria-label="Close test modal"
+        class="rounded-2xl px-3 py-1.5 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Close</button>
+    </div>
+    <pre id="test-detail" x-text="$store.modal.test.detail"
+      class="test-body max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-2xl bg-canvas p-4 font-mono text-caption"
+      :class="$store.modal.test.tone"></pre>
+  </div>
+</div>

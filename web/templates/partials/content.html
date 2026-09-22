@@ -1,0 +1,81 @@
+{{define "partials/stats.html"}}
+{{if not .Cards}}
+<div aria-busy="true" aria-label="Loading metrics">
+  <p class="text-heading-lg font-semibold tabular-nums text-mid-gray">—</p>
+  <p class="mt-1 text-caption uppercase tracking-[0.05em] text-mid-gray">loading</p>
+</div>
+{{end}}
+{{range .Cards}}
+<div>
+  <p class="text-heading-lg font-semibold tabular-nums text-ink sm:text-heading">{{.Value}}</p>
+  <p class="mt-1 text-caption uppercase tracking-[0.05em] text-mid-gray">{{.Label}}</p>
+</div>
+{{end}}
+{{end}}
+
+{{define "partials/upstreams.html"}}
+<div class="flex flex-col gap-5">
+  {{range .}}
+  <div>
+    <div class="mb-2 flex items-baseline justify-between">
+      <span class="font-mono text-caption text-mid-gray">{{.Name}}</span>
+      <span class="text-body font-semibold tabular-nums text-ink">{{.Count}}</span>
+    </div>
+    <div class="h-1.5 overflow-hidden rounded-full bg-canvas">
+      <div class="h-full rounded-full bg-ink-soft" style="width:{{.Pct}}%"></div>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "partials/models.html"}}
+{{if .}}
+{{range .}}
+<tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
+  <td class="px-5 py-3 font-mono text-caption">{{.ID}}</td>
+  <td class="px-5 py-3">
+    <span class="inline-flex items-center rounded-2xl px-2 py-0.5 text-caption font-medium bg-canvas text-ink-soft">{{.Provider}}</span>
+  </td>
+  <td class="px-5 py-3">
+    {{if .IsFree}}<span class="inline-flex items-center rounded-2xl bg-ink-soft px-2 py-0.5 text-caption font-medium text-surface-alt">free</span>
+    {{else}}<span class="text-mid-gray">—</span>
+    {{end}}
+  </td>
+  <td class="px-5 py-3">
+    <button type="button" class="test-btn rounded-2xl border border-hairline bg-paper px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-canvas" data-model="{{.ID}}">Test</button>
+  </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="4" class="px-5 py-8 text-center text-body text-mid-gray">No models loaded.</td></tr>
+{{end}}
+{{end}}
+
+{{define "partials/requests.html"}}
+{{if .}}
+{{range .}}
+<tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
+  <td class="whitespace-nowrap px-5 py-3 font-mono text-caption text-mid-gray">{{.Time}}</td>
+  <td class="max-w-56 truncate px-5 py-3 font-mono text-caption">{{.Model}}</td>
+  <td class="px-5 py-3">
+    <span class="inline-flex items-center rounded-2xl bg-canvas px-2 py-0.5 text-caption font-medium text-ink-soft">{{.Upstream}}</span>
+  </td>
+  <td class="px-5 py-3">
+    <span data-status-tone="{{.StatusTone}}" class="inline-flex items-center rounded-2xl px-2 py-0.5 text-caption font-medium {{if eq .StatusTone "green"}}bg-ink-soft text-surface-alt{{else if eq .StatusTone "amber"}}bg-canvas text-ink{{else if eq .StatusTone "red"}}bg-ember text-paper{{else}}bg-canvas text-mid-gray{{end}}">{{.Status}}</span>
+  </td>
+  <td class="whitespace-nowrap px-5 py-3 tabular-nums text-caption text-mid-gray">{{.Duration}}</td>
+  <td class="whitespace-nowrap px-5 py-3 tabular-nums text-caption text-mid-gray">{{.Tokens}}</td>
+  <td class="px-5 py-3 font-mono text-caption text-mid-gray">{{.IP}}</td>
+  <td class="max-w-64 truncate px-5 py-3">{{if .HasError}}<button type="button" class="error-link text-caption text-ember hover:underline" data-err-idx="{{.ErrIdx}}" aria-label="Show full error">{{.Error}}</button>{{end}}</td>
+</tr>
+{{end}}
+<script type="application/json" class="req-errs">{{toJSONFullErrors .}}</script>
+{{else}}
+<tr><td colspan="8" class="px-5 py-8 text-center text-body text-mid-gray">No requests yet.</td></tr>
+{{end}}
+{{end}}
+
+{{define "partials/requests_empty.html"}}
+<tr><td colspan="8" class="px-5 py-8 text-center text-body text-mid-gray">No requests yet.</td></tr>
+{{end}}

@@ -1,175 +1,121 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{{.Title}}</title>
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <script src="/static/js/htmx.min.js" defer></script>
-  <script src="/static/js/chart.umd.js" defer></script>
-  <script src="/static/js/playground.js" defer></script>
-</head>
-<body>
+{{template "layout/head" .}}
 
-  <div class="shell">
+<body hx-boost="false" x-data="dashboard()">
+  {{template "layout/nav" .}}
 
-    <!-- Navigation -->
-    <nav class="nav">
-      <div class="nav-left">
-        <div class="nav-brand">
-          <span class="brand-dot" id="status-dot"></span>
-          freegate
-        </div>
-        <button id="open-playground" class="btn-tertiary pg-nav-btn" type="button">> playground</button>
-        <a href="/providers" class="btn-tertiary pg-nav-btn">> providers</a>
-      </div>
-      <div class="nav-meta">
-        <span><span class="label">uptime</span><span id="uptime">{{.Uptime}}</span></span>
-        <span><span class="label">started</span><span>{{.StartedAt}}</span></span>
-        <span><span class="label">models</span><span id="model-count">{{.ModelCount}}</span></span>
-        <form method="POST" action="/logout" class="logout-form">
-          <button type="submit" class="btn-tertiary">> logout</button>
-        </form>
-      </div>
-    </nav>
+  <main class="mx-auto max-w-7xl px-6 pb-24 pt-12">
+    <header class="mb-12">
+      <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">Overview</p>
+      <h1 class="text-heading-lg font-semibold text-ink sm:text-display">$ freegate dashboard</h1>
+      <p class="mt-3 max-w-xl text-body text-mid-gray">// real-time metrics and activity for the freegate proxy service — in-memory only (lost on restart)</p>
+    </header>
 
-    <!-- Page Header -->
-    <div class="page-header">
-      <h1>$ freegate dashboard</h1>
-      <p class="subtitle">// real-time metrics and activity for the freegate proxy service</p>
-    </div>
-
-    <!-- Metrics Grid (server-rendered initially, HTMX refreshes) -->
-    <div class="section-block metrics-grid"
-         hx-get="/partials/stats"
-         hx-trigger="every 5s"
-         hx-swap="innerHTML">
+    <!-- Stat blocks — typographic scale only, no card chrome (design.md) -->
+    <section class="mb-12 grid grid-cols-2 gap-x-8 gap-y-10 lg:grid-cols-4"
+             hx-get="/partials/stats"
+             hx-trigger="every 5s"
+             hx-swap="innerHTML">
       {{.Stats}}
-    </div>
+    </section>
 
-    <!-- Charts Row -->
-    <div class="section-block grid-charts section-gap">
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title"># Requests / min (last 1h)</span>
+    <div class="grid gap-6 lg:grid-cols-3">
+      <!-- Requests / min -->
+      <section class="rounded-3xl border border-hairline bg-paper p-5 shadow-card lg:col-span-2">
+        <div class="mb-5 flex items-center justify-between">
+          <h2 class="text-body font-medium text-ink">Requests / min</h2>
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">last hour</span>
         </div>
-        <div class="chart-wrap">
+        <div class="h-56">
           <canvas id="ts-chart"></canvas>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title"># Upstreams</span>
+      </section>
+
+      <!-- Upstreams: header is static; HTMX swaps only the list inside. -->
+      <section class="rounded-3xl border border-hairline bg-paper p-5 shadow-card">
+        <div class="mb-5 flex items-center justify-between">
+          <h2 class="text-body font-medium text-ink">Upstreams</h2>
         </div>
-        <div class="upstream-list">
-          {{range .Upstream}}
-          <div class="upstream-row">
-            <span class="upstream-label">{{.Name}}</span>
-            <span class="upstream-count tone-{{.Tone}}">{{.Count}}</span>
+        <div hx-get="/partials/upstreams"
+             hx-trigger="every 5s"
+             hx-swap="innerHTML">
+          {{template "partials/upstreams.html" .Upstream}}
+        </div>
+      </section>
+    </div>
+
+    <div class="mt-6 grid min-w-0 gap-6 lg:grid-cols-3">
+      <!-- Free Models -->
+      <section class="min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card lg:col-span-2">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
+          <h2 class="text-body font-medium text-ink">Free models</h2>
+          <div class="flex items-center gap-2">
+            <label for="model-filter" class="text-caption uppercase tracking-[0.05em] text-mid-gray">Provider</label>
+            <select id="model-filter"
+                    aria-label="Filter models by provider"
+                    hx-get="/partials/models"
+                    hx-trigger="change, every 10s"
+                    hx-target="#models-body"
+                    hx-sync="this:replace"
+                    hx-swap="innerHTML"
+                    name="provider"
+                    class="rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none focus:border-hairline focus:ring-1 focus:ring-hairline">
+              <option value="all">$ all</option>
+              {{range .Providers}}
+              <option value="{{.}}">$ {{.}}</option>
+              {{end}}
+            </select>
           </div>
-          <div class="upstream-track">
-            <div class="upstream-fill tone-bg-{{.Tone}}" style="width:{{.Pct}}%"></div>
-          </div>
+        </div>
+        <div class="max-h-80 overflow-auto">
+          <table class="w-full text-left text-body">
+            <thead class="sticky top-0 bg-paper">
+              <tr class="border-b border-hairline text-caption uppercase tracking-[0.05em] text-mid-gray">
+                <th class="px-5 py-3 font-medium">Model</th>
+                <th class="w-32 px-5 py-3 font-medium">Provider</th>
+                <th class="w-20 px-5 py-3 font-medium">Free</th>
+                <th class="w-24 px-5 py-3 font-medium">Test</th>
+              </tr>
+            </thead>
+            <tbody id="models-body">
+              {{.Models}}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- API Endpoints -->
+      <section class="rounded-3xl border border-hairline bg-paper p-5 shadow-card">
+        <h2 class="mb-5 text-body font-medium text-ink">API endpoints</h2>
+        <ul class="flex flex-col divide-y divide-hairline">
+          {{range .Endpoints}}
+          <li class="flex items-center gap-3 py-3">
+            <span class="w-11 shrink-0 font-mono text-caption font-medium {{if eq .Method "POST"}}text-ink{{else}}text-mid-gray{{end}}">{{.Method}}</span>
+            <code class="font-mono text-caption text-ink">{{.Path}}</code>
+            <span class="ml-auto hidden text-caption text-mid-gray sm:block">{{.Desc}}</span>
+          </li>
           {{end}}
-        </div>
-      </div>
-    </div>
-
-    <!-- API Endpoints -->
-    <div class="card section-block section-gap">
-      <div class="card-header">
-        <span class="card-title"># API Endpoints</span>
-      </div>
-      <div class="endpoint-list">
-        <div class="endpoint-row">
-          <span class="method get">GET</span>
-          <code class="endpoint-path">/v1/models</code>
-          <span class="endpoint-desc">// list available free models</span>
-        </div>
-        <div class="endpoint-row">
-          <span class="method post">POST</span>
-          <code class="endpoint-path">/v1/chat/completions</code>
-          <span class="endpoint-desc">// OpenAI-compatible chat completion</span>
-        </div>
-        <div class="endpoint-row">
-          <span class="method post">POST</span>
-          <code class="endpoint-path">/v1/messages</code>
-          <span class="endpoint-desc">// Anthropic-compatible messages</span>
-        </div>
-        <div class="endpoint-row">
-          <span class="method post">POST</span>
-          <code class="endpoint-path">/v1/responses</code>
-          <span class="endpoint-desc">// OpenAI Responses API</span>
-        </div>
-        <div class="endpoint-row">
-          <span class="method get">GET</span>
-          <code class="endpoint-path">/v1/metrics</code>
-          <span class="endpoint-desc">// request metrics per upstream</span>
-        </div>
-        <div class="endpoint-row">
-          <span class="method get">GET</span>
-          <code class="endpoint-path">/ready</code>
-          <span class="endpoint-desc">// health check</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Free Models -->
-    <div class="card section-block section-gap">
-      <div class="card-header">
-        <span class="card-title"># Free Models</span>
-        <div class="filter-bar">
-          <select id="model-filter"
-                  aria-label="Filter models by provider"
-                  hx-get="/partials/models"
-                  hx-trigger="change, every 10s"
-                  hx-target="#models-body"
-                  hx-sync="this:replace"
-                  hx-swap="innerHTML"
-                  name="provider">
-            <option value="all">$ all</option>
-            {{range .Providers}}
-            <option value="{{.}}">$ {{.}}</option>
-            {{end}}
-          </select>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>model</th>
-              <th style="width:120px">provider</th>
-              <th style="width:80px">free</th>
-              <th style="width:80px">test</th>
-            </tr>
-          </thead>
-          <tbody id="models-body">
-            {{.Models}}
-          </tbody>
-        </table>
-      </div>
+        </ul>
+      </section>
     </div>
 
     <!-- Recent Requests -->
-    <div class="card section-block section-gap">
-      <div class="card-header">
-        <span class="card-title"># Recent Requests (last 100)</span>
-        <span class="card-sub" id="req-count">{{.RequestCount}} shown</span>
+    <section class="mt-6 min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card">
+      <div class="flex items-center justify-between border-b border-hairline p-5">
+        <h2 class="text-body font-medium text-ink">Recent requests</h2>
+        <span class="text-caption text-mid-gray"><span x-text="count">{{.RequestCount}}</span> shown</span>
       </div>
-      <div class="table-wrap tall">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:90px">time</th>
-              <th>model</th>
-              <th style="width:100px">upstream</th>
-              <th style="width:80px">status</th>
-              <th style="width:80px">dur</th>
-              <th style="width:110px">tokens</th>
-              <th style="width:120px">ip</th>
-              <th>error</th>
+      <div class="max-h-[30rem] overflow-auto">
+        <table class="w-full text-left text-body">
+          <thead class="sticky top-0 bg-paper">
+            <tr class="border-b border-hairline text-caption uppercase tracking-[0.05em] text-mid-gray">
+              <th class="w-24 px-5 py-3 font-medium">Time</th>
+              <th class="px-5 py-3 font-medium">Model</th>
+              <th class="w-28 px-5 py-3 font-medium">Upstream</th>
+              <th class="w-24 px-5 py-3 font-medium">Status</th>
+              <th class="w-20 px-5 py-3 font-medium">Duration</th>
+              <th class="w-32 px-5 py-3 font-medium">Tokens</th>
+              <th class="w-32 px-5 py-3 font-medium">IP</th>
+              <th class="px-5 py-3 font-medium">Error</th>
             </tr>
           </thead>
           <tbody id="requests-body"
@@ -180,307 +126,14 @@
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <!-- Footer -->
-    <footer class="footer">
-      # freegate — auto-refresh 5s — in-memory only (lost on restart)
+    <footer class="mt-12 border-t border-hairline pt-6 text-center text-caption text-mid-gray">
+      freegate — auto-refresh 5s — in-memory only (lost on restart)
     </footer>
-  </div>
+  </main>
 
-  <!-- Error Modal -->
-  <div id="error-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="error-detail">
-    <div class="modal-panel">
-      <div class="modal-header">
-        <span class="modal-title" id="modal-title">// error</span>
-        <span class="modal-close" role="button" tabindex="0" aria-label="Close error modal">x</span>
-      </div>
-      <pre id="error-detail" class="modal-body"></pre>
-    </div>
-  </div>
-
-  <!-- Model Test Result Modal -->
-  <div id="test-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="test-title" aria-describedby="test-detail">
-    <div class="modal-panel">
-      <div class="modal-header">
-        <span class="modal-title" id="test-title">// model test</span>
-        <span class="modal-close" id="test-close" role="button" tabindex="0" aria-label="Close test modal">x</span>
-      </div>
-      <pre id="test-detail" class="modal-body test-body"></pre>
-    </div>
-  </div>
-
-  <script>
-    // ----- Timeseries Chart -----
-    let tsChart = null;
-    async function refreshChart() {
-      try {
-        const resp = await fetch('/api/timeseries');
-        if (!resp.ok) return;
-        const data = await resp.json();
-        if (!data || data.length < 2) return;
-        const labels = data.map(d => {
-          const dt = new Date(d.ts);
-          return dt.getUTCHours().toString().padStart(2,'0') + ':' +
-                 dt.getUTCMinutes().toString().padStart(2,'0') + ':' +
-                 dt.getUTCSeconds().toString().padStart(2,'0');
-        });
-        const values = [];
-        for (let i = 1; i < data.length; i++) {
-          const delta = data[i].total_requests - data[i-1].total_requests;
-          values.push(Math.max(0, delta * 6));
-        }
-        const ctx = document.getElementById('ts-chart');
-        if (!ctx) return;
-        if (tsChart) {
-          tsChart.data.labels = labels.slice(1);
-          tsChart.data.datasets[0].data = values;
-          tsChart.update('none');
-        } else {
-          tsChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-              labels: labels.slice(1),
-              datasets: [{
-                label: 'req/min',
-                data: values,
-                borderColor: '#FFB454',
-                backgroundColor: 'rgba(255,180,84,0.06)',
-                borderWidth: 1,
-                fill: true,
-                tension: 0,
-                pointRadius: 0,
-                pointHoverRadius: 3,
-                pointHoverBackgroundColor: '#FFB454',
-                pointHoverBorderColor: '#FFB454',
-              }]
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              animation: false,
-              plugins: { legend: { display: false } },
-              scales: {
-                x: {
-                  ticks: { color: '#667082', maxTicksLimit: 8, font: { size: 11, family: "'JetBrains Mono', monospace" } },
-                  grid: { color: '#262C36' },
-                },
-                y: {
-                  beginAtZero: true,
-                  ticks: { color: '#667082', font: { size: 11, family: "'JetBrains Mono', monospace" } },
-                  grid: { color: '#262C36' },
-                }
-              }
-            }
-          });
-        }
-      } catch (e) { /* ignore */ }
-    }
-    document.addEventListener('DOMContentLoaded', () => {
-      refreshChart();
-      setInterval(refreshChart, 10000);
-    });
-
-    // ----- Health Badge + Uptime -----
-    async function refreshHealth() {
-      try {
-        const resp = await fetch('/api/health');
-        if (!resp.ok) return;
-        const h = await resp.json();
-        const dot = document.getElementById('status-dot');
-        if (h.ok) {
-          dot.className = 'brand-dot';
-        } else {
-          dot.className = 'brand-dot warn';
-        }
-        const u = document.getElementById('uptime');
-        if (u && h.uptime) u.textContent = h.uptime;
-        const mc = document.getElementById('model-count');
-        if (mc) mc.textContent = h.model_count;
-      } catch (e) { /* ignore */ }
-    }
-    setInterval(refreshHealth, 3000);
-    document.addEventListener('DOMContentLoaded', refreshHealth);
-
-    // ----- Model Test (HTMX-safe delegation) -----
-    var testInFlight = false;
-    var testLastFocused = null;
-    function openTestModal() {
-      testLastFocused = document.activeElement;
-      document.getElementById('test-modal').style.display = 'flex';
-      document.body.classList.add('modal-open');
-      var closeBtn = document.getElementById('test-close');
-      if (closeBtn) closeBtn.focus();
-    }
-    function closeTestModal() {
-      document.getElementById('test-modal').style.display = 'none';
-      document.body.classList.remove('modal-open');
-      if (testLastFocused && typeof testLastFocused.focus === 'function') {
-        testLastFocused.focus();
-      }
-      testLastFocused = null;
-    }
-    document.addEventListener('click', function(e) {
-      var btn = e.target.closest('.test-btn');
-      if (!btn) return;
-      e.preventDefault();
-      // Guard against concurrent tests: the models tbody is swapped by HTMX
-      // every 10s, so a disabled state on a specific button does not survive
-      // the swap. A module-level flag prevents double-firing while a test
-      // (which can take 30–90s on free relays) is still in flight.
-      if (testInFlight) return;
-      testInFlight = true;
-      var model = btn.dataset.model;
-      btn.disabled = true;
-      var orig = btn.textContent;
-      btn.textContent = '…';
-      var detail = document.getElementById('test-detail');
-      var title = document.getElementById('test-title');
-      title.textContent = '// testing: ' + model;
-      detail.textContent = '// sending completion…';
-      detail.className = 'modal-body test-body';
-      openTestModal();
-
-      var t0 = Date.now();
-      fetch('/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: model,
-          messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-          max_tokens: 20,
-          // Explicit non-stream probe (like opencode): single JSON
-          // response, so the modal can parse it. Omitting `stream`
-          // leaves the framing to gateway defaults.
-          stream: false
-        })
-      })
-      .then(function(resp) {
-        return resp.text().then(function(text) { return { status: resp.status, body: text }; });
-      })
-      .then(function(result) {
-        var ms = Date.now() - t0;
-        var status = result.status;
-        var raw = result.body || '';
-        var lines = ['status: ' + status + ' [' + ms + 'ms]'];
-        var ok = status >= 200 && status < 300;
-        var content = '';
-        try {
-          var data = JSON.parse(raw);
-          if (data.error && data.error.message) {
-            lines.push('error: ' + data.error.message);
-            ok = false;
-          } else if (data.choices && data.choices[0] && data.choices[0].message) {
-            var msg = data.choices[0].message;
-            content = msg.content || msg.reasoning || '';
-            if (content) lines.push('content: ' + content);
-            if (data.usage) {
-              lines.push('tokens: ' + (data.usage.total_tokens || '?') +
-                ' (in ' + (data.usage.prompt_tokens || 0) + ' / out ' + (data.usage.completion_tokens || 0) + ')');
-            }
-            if (msg.reasoning && msg.content) lines.push('reasoning: ' + msg.reasoning);
-          } else if (!content) {
-            ok = false;
-            lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
-          }
-        } catch (err) {
-          ok = false;
-          lines.push('parse error: ' + err.message);
-          if (raw) lines.push('raw: ' + (raw.length > 300 ? raw.slice(0, 300) + '…' : raw));
-        }
-        detail.textContent = lines.join('\n');
-        detail.className = 'modal-body test-body ' + (ok ? 'tone-ok' : 'tone-err');
-      })
-      .catch(function(err) {
-        var ms = Date.now() - t0;
-        detail.textContent = 'status: network error [' + ms + 'ms]\nerror: ' + (err && err.message ? err.message : String(err));
-        detail.className = 'modal-body test-body tone-err';
-      })
-      .finally(function() {
-        testInFlight = false;
-        // The tbody may have been swapped by HTMX since the click; the
-        // detached node is safe to mutate regardless.
-        btn.disabled = false;
-        btn.textContent = orig;
-      });
-    });
-    document.getElementById('test-close').addEventListener('click', closeTestModal);
-    document.getElementById('test-modal').addEventListener('click', function(e) {
-      if (e.target === this) closeTestModal();
-    });
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && document.getElementById('test-modal').style.display === 'flex') {
-        closeTestModal();
-      }
-    });
-
-    ['error-modal', 'test-modal'].forEach(function(id) {
-      const modal = document.getElementById(id);
-      modal.addEventListener('keydown', function(e) {
-        if (e.key === 'Tab' && modal.style.display === 'flex') {
-          e.preventDefault();
-          modal.querySelector('.modal-close').focus();
-        }
-      });
-    });
-
-    // ----- Error Modal (HTMX-safe delegation) -----
-    let lastFocused = null;
-    function openErrorModal(fullError, trigger) {
-      document.getElementById('error-detail').textContent = fullError;
-      const modal = document.getElementById('error-modal');
-      modal.style.display = 'flex';
-      document.body.classList.add('modal-open');
-      lastFocused = trigger || document.activeElement;
-      const closeBtn = modal.querySelector('.modal-close');
-      if (closeBtn) closeBtn.focus();
-    }
-    function closeErrorModal() {
-      const modal = document.getElementById('error-modal');
-      modal.style.display = 'none';
-      document.body.classList.remove('modal-open');
-      if (lastFocused && typeof lastFocused.focus === 'function') {
-        lastFocused.focus();
-        lastFocused = null;
-      }
-    }
-    document.addEventListener('click', function(e) {
-      const link = e.target.closest('.error-link');
-      if (link) {
-        openErrorModal(link.dataset.fullError, link);
-      }
-    });
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter' || e.key === ' ') {
-        const link = e.target.closest('.error-link');
-        if (link) {
-          e.preventDefault();
-          openErrorModal(link.dataset.fullError, link);
-          return;
-        }
-        const closeBtn = e.target.closest('.modal-close');
-        if (closeBtn) {
-          e.preventDefault();
-          if (closeBtn.closest('#error-modal')) closeErrorModal();
-          else if (closeBtn.closest('#test-modal')) closeTestModal();
-        }
-      }
-    });
-    document.getElementById('error-modal').addEventListener('click', function(e) {
-      if (e.target === this || e.target.closest('.modal-close')) {
-        closeErrorModal();
-      }
-    });
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') {
-        const modal = document.getElementById('error-modal');
-        if (modal.style.display === 'flex') {
-          closeErrorModal();
-        }
-      }
-    });
-  </script>
+  {{template "partials/modals.html" .}}
   {{template "partials/playground_modal.html" .}}
-
 </body>
 </html>

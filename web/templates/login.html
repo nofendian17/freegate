@@ -1,44 +1,27 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>freegate — login</title>
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <style>
-    .login-shell { max-width: 420px; margin: 80px auto 0; padding: 0 var(--space-5); }
-    .login-card { background: var(--surface); border: 1px solid var(--border); padding: var(--space-6); }
-    .login-title { font-size: 16px; font-weight: 700; color: var(--primary); margin: 0 0 var(--space-2); letter-spacing: 0.02em; }
-    .login-subtitle { font-size: 12px; color: var(--text-dim); margin: 0 0 var(--space-5); }
-    .login-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: var(--space-2); text-transform: uppercase; letter-spacing: 0.08em; }
-    .login-input { width: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 14px; border: 1px solid var(--border); padding: 10px 12px; outline: none; box-sizing: border-box; }
-    .login-input:focus { border-color: var(--primary); }
-    .login-error { background: rgba(255,0,64,0.08); border: 1px solid var(--error); color: var(--error); font-size: 12px; padding: var(--space-2) var(--space-3); margin-bottom: var(--space-4); white-space: pre-wrap; overflow-wrap: break-word; }
-    .login-actions { margin-top: var(--space-5); display: flex; gap: var(--space-2); }
-    .login-actions button { flex: 0 0 auto; }
-  </style>
-</head>
+{{template "layout/head" .}}
+
 <body>
-  <div class="login-shell">
-    <div class="page-header" style="margin-bottom:var(--space-6)">
-      <h1 style="font-size:24px">$ freegate</h1>
-      <p class="subtitle">// admin login — enter ADMIN_TOKEN</p>
+  <main class="flex min-h-screen items-center justify-center bg-canvas px-6">
+    <div class="w-full max-w-md">
+      <div class="mb-8 text-center">
+        <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">TerminalUI</p>
+        <h1 class="text-heading font-semibold text-ink">$ freegate</h1>
+        <p class="mt-2 text-body text-mid-gray">// admin login — enter ADMIN_TOKEN</p>
+      </div>
+      <div class="rounded-3xl border border-hairline bg-paper p-5 shadow-card">
+        <h2 class="mb-1 text-body font-medium text-ink">Login</h2>
+        <p class="mb-5 text-caption text-mid-gray">Authenticate to access the dashboard.</p>
+        {{if .Error}}<div role="alert" class="mb-4 rounded-2xl border border-ember bg-paper p-3 text-caption text-ember">{{.Error}}</div>{{end}}
+        <form method="POST" action="/login{{if .Next}}?next={{.Next}}{{end}}">
+          {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+          <label for="admin_token" class="mb-1.5 block text-caption uppercase tracking-[0.05em] text-mid-gray">Admin token</label>
+          <input id="admin_token" name="admin_token" type="password" placeholder="••••••••" required autofocus autocomplete="current-password"
+            class="mb-5 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
+          <button type="submit" class="w-full rounded-2xl bg-ink px-4 py-2.5 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Login</button>
+        </form>
+      </div>
+      <footer class="mt-8 text-center text-caption text-mid-gray">freegate</footer>
     </div>
-    <div class="login-card">
-      <div class="login-title">> login</div>
-      <p class="login-subtitle">// authenticate to access dashboard</p>
-      {{if .Error}}<div class="login-error">! {{.Error}}</div>{{end}}
-      <form method="POST" action="/login{{if .Next}}?next={{.Next}}{{end}}">
-        {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
-        <label class="login-label" for="admin_token">admin_token</label>
-        <input id="admin_token" name="admin_token" type="password" class="login-input" placeholder="••••••••" required autofocus autocomplete="current-password">
-        <div class="login-actions">
-          <button type="submit" class="btn-primary">> login</button>
-        </div>
-      </form>
-    </div>
-    <footer class="footer" style="margin-top:var(--space-7)"># freegate — TerminalUI</footer>
-  </div>
+  </main>
 </body>
 </html>
