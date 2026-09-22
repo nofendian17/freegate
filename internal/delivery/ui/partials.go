@@ -13,7 +13,6 @@ import (
 type statCard struct {
 	Label string
 	Value string
-	Tone  string
 }
 
 type statCardsView struct {
@@ -25,7 +24,6 @@ type upstreamStat struct {
 	Name  string
 	Count int64
 	Pct   int
-	Tone  string
 }
 
 func buildStatsData(m map[string]any) statCardsView {
@@ -40,10 +38,10 @@ func buildStatsData(m map[string]any) statCardsView {
 	}
 
 	cards := []statCard{
-		{Label: "Total Requests", Value: fmt.Sprintf("%d", total), Tone: "blue"},
-		{Label: "Upstream Errors", Value: fmt.Sprintf("%d", errors), Tone: "red"},
-		{Label: "Input Tokens", Value: fmt.Sprintf("%d", inputTokens), Tone: "blue"},
-		{Label: "Output Tokens", Value: fmt.Sprintf("%d", outputTokens), Tone: "green"},
+		{Label: "Total Requests", Value: fmt.Sprintf("%d", total)},
+		{Label: "Upstream Errors", Value: fmt.Sprintf("%d", errors)},
+		{Label: "Input Tokens", Value: fmt.Sprintf("%d", inputTokens)},
+		{Label: "Output Tokens", Value: fmt.Sprintf("%d", outputTokens)},
 	}
 
 	var upstream []upstreamStat
@@ -59,7 +57,6 @@ func buildStatsData(m map[string]any) statCardsView {
 			Name:  n,
 			Count: perUp[n],
 			Pct:   pctOf(perUp[n], upTotal),
-			Tone:  toneForProvider(n),
 		})
 	}
 
@@ -78,6 +75,17 @@ func (h *Handler) partialStats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// partialUpstreams refreshes the upstream distribution card. Same view model
+// as the stats partial; separate target so each card swaps independently.
+func (h *Handler) partialUpstreams(w http.ResponseWriter, r *http.Request) {
+	data := buildStatsData(h.data.Metrics())
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.templates.ExecuteTemplate(w, "partials/upstreams.html", data.Upstream); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 type requestRow struct {
 	Time       string
 	Model      string
@@ -89,6 +97,7 @@ type requestRow struct {
 	IP         string
 	Error      string
 	HasError   bool
+	ErrIdx     int
 	FullError  string
 }
 
@@ -123,6 +132,7 @@ func (h *Handler) buildRequestRows() requestRowsView {
 			IP:         e.IP,
 			Error:      errStr,
 			HasError:   len(e.Error) > 0,
+			ErrIdx:     len(rows),
 			FullError:  e.Error,
 		})
 	}
@@ -138,10 +148,9 @@ func (h *Handler) partialRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 type modelRow struct {
-	ID           string
-	Provider     string
-	ProviderTone string
-	IsFree       bool
+	ID       string
+	Provider string
+	IsFree   bool
 }
 
 type modelRowsView []modelRow
@@ -157,10 +166,9 @@ func (h *Handler) buildModelRows(provider string) modelRowsView {
 			continue
 		}
 		rows = append(rows, modelRow{
-			ID:           m.ID,
-			Provider:     m.Provider,
-			ProviderTone: toneForProvider(m.Provider),
-			IsFree:       m.IsFree,
+			ID:       m.ID,
+			Provider: m.Provider,
+			IsFree:   m.IsFree,
 		})
 	}
 	return rows
@@ -176,19 +184,9 @@ func (h *Handler) partialModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// partialPlaygroundModels renders the <option> list for the playground's
-// model picker. It is a thin wrapper over DataSource.Models() that
-// returns plain HTML fragments (no table rows). The playground modal
-// is open/close and system-prompt state is managed client-side; this
-// endpoint only provides the option list so HTMX can swap it into the
-// <select id="pg-model"> without a fetch+innerHTML round-trip in JS.
-func (h *Handler) partialPlaygroundModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.templates.ExecuteTemplate(w, "partials/playground_models.html", h.data.Models()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
+// toneForStatus maps an HTTP status to a semantic tone name. The name is
+// emitted as a data-status-tone test hook; visual styling comes from the
+// template's {{if eq}} branches (achromatic palette + ember, per design.md).
 func toneForStatus(code int) string {
 	switch {
 	case code >= 200 && code < 300:
@@ -214,19 +212,6 @@ func tokenDisplay(total, prompt, completion int) string {
 		return fmt.Sprintf("%d (%d↑ %d↓)", total, prompt, completion)
 	}
 	return fmt.Sprintf("%d", total)
-}
-
-func toneForProvider(p string) string {
-	switch strings.ToLower(p) {
-	case "opencode":
-		return "blue"
-	case "kilo":
-		return "amber"
-	case "llm7":
-		return "purple"
-	default:
-		return "gray"
-	}
 }
 
 func (h *Handler) apiTimeseries(w http.ResponseWriter, r *http.Request) {

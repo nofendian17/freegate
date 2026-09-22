@@ -6,14 +6,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"freegate/internal/domain"
 )
 
 // TestPlaygroundCSSNoDesignViolations asserts that the playground CSS block
 // (delimited by the marker comments we add) does not introduce any pattern
-// that violates the TerminalUI design system: non-zero border-radius,
-// non-`none` box-shadow, or a sans-serif font-family declaration.
+// that violates the design system: non-zero border-radius outside the
+// documented 18px/24px scale, non-`none` box-shadow, or a non-mono
+// font-family declaration. ponytail: the built Tailwind stylesheet is
+// generated — audit the input (web/assets/tailwind.css) when this fails.
 func TestPlaygroundCSSNoDesignViolations(t *testing.T) {
 	const marker = "/* Playground Modal */"
 	const cssPath = "../../../web/static/css/app.css"
@@ -88,6 +88,12 @@ func TestPlaygroundModalTemplateLoads(t *testing.T) {
 		`id="pg-close"`,
 		`id="pg-clear"`,
 		`id="pg-system-toggle"`,
+		// Alpine component contract: overlay state, message loop, events.
+		`x-data="playground()"`,
+		`x-show="open"`,
+		`x-on:open-playground.window`,
+		`x-for="(m, i) in messages"`,
+		`@submit.prevent="send()"`,
 	} {
 		if !strings.Contains(body, id) {
 			t.Errorf("playground modal missing %s", id)
@@ -95,11 +101,11 @@ func TestPlaygroundModalTemplateLoads(t *testing.T) {
 	}
 }
 
-// TestPlaygroundJSExists is a smoke test that catches gross omissions in
-// the JS module. It does not execute the code — that happens in a real
-// browser. It asserts the file exists and contains the function and
-// identifier names the rest of the system depends on.
-func TestPlaygroundJSExists(t *testing.T) {
+// TestPlaygroundAlpineComponent is a smoke test that pins the Alpine
+// component contract: registration name, persistence, thread rendering,
+// streaming parser, and abort wiring. It does not execute the code —
+// that happens in a real browser.
+func TestPlaygroundAlpineComponent(t *testing.T) {
 	const jsPath = "../../../web/static/js/playground.js"
 	data, err := os.ReadFile(jsPath)
 	if err != nil {
@@ -107,47 +113,21 @@ func TestPlaygroundJSExists(t *testing.T) {
 	}
 	js := string(data)
 
-	// Persistence + shim identity + streaming functions (must keep working across refactors)
 	must := []string{
-		"freegate.playground.v1",               // localStorage key
-		"window.fgPlayground",                  // public surface
-		"function open(",                       // modal open
-		"function close(",                      // modal close
-		"function clear(",                      // clear thread
-		"function load(",                       // localStorage load
-		"function save(",                       // localStorage save
-		"function onInputKeydown(",             // Enter-to-send
-		"function onModelsLoaded(",             // model select restore
-		"function onSystemInput(",              // system prompt input
-		"function toggleSystem(",               // collapse/expand
-		"function onStreamToggle(",             // stream checkbox handler
-		"function requestBody(",                // build OpenAI request body
-		"function beforeSend(",                 // validation + optimistic UI
-		"function send(",                       // form submit handler (hx-on:submit)
-		"function handleFetchResponse(",        // fetch() response handler (non-streaming)
-		"function appendUserMessage(",          // optimistic user bubble
-		"function createAssistantPlaceholder(", // optimistic assistant bubble
-		"function finalizeAssistant(",          // close out the assistant bubble
-		"function parseSSEChunks(",             // SSE streaming parser
-		"function stopStreaming(",              // abort/stop handler
+		"Alpine.data('playground'", // Alpine component registration
+		"freegate.playground.v1",   // localStorage key
+		"function parseSSEChunks(", // SSE streaming parser
+		"sendStream",               // streaming path
+		"sendOnce",                 // non-streaming path
+		"requestBody",              // OpenAI request body builder
+		"loadModels",               // /v1/models fetch
+		"new AbortController",      // stop/abort wiring
+		"pushAssistant",            // assistant bubble finalize
+		"alpine:init",
 	}
 	for _, want := range must {
 		if !strings.Contains(js, want) {
 			t.Errorf("playground.js missing %q", want)
-		}
-	}
-
-	// The streaming implementation uses native ReadableStream / TextDecoder /
-	// getReader() — these are now required, not banned. See spec.md Sprint 1.
-	// We still ban legacy function names and eval/document.write.
-	for _, banned := range []string{
-		"streamResponse(",          // legacy streaming function
-		"nonStreamResponse(",       // legacy non-streaming function
-		"loadModels(",              // legacy model fetcher
-		"function handleResponse(", // legacy htmx:after-request hook
-	} {
-		if strings.Contains(js, banned) {
-			t.Errorf("playground.js contains legacy pattern %q", banned)
 		}
 	}
 
@@ -159,12 +139,9 @@ func TestPlaygroundJSExists(t *testing.T) {
 	}
 }
 
-// TestPlaygroundModalUsesHTMX asserts that the modal template now drives
-// behavior via HTMX attributes (hx-get for the model picker, hx-on:* for
-// event wiring) and uses hx-on:submit + the shim's send() for the chat
-// form. The earlier hx-post + hx-vals='js:...' design was removed because
-// htmx 2.0.4's js: expression evaluator chokes on member-access expressions
-// (see .claude/validation/playground-rewrite-2026-06-07/report.md).
+// TestPlaygroundModalUsesHTMX asserts the modal is declarative: HTMX polls
+// the read endpoints while Alpine owns the interactive state (no legacy
+// hx-on:submit + window.fgPlayground shim wiring).
 func TestPlaygroundModalUsesHTMX(t *testing.T) {
 	const tplPath = "../../../web/templates/partials/playground_modal.html"
 	data, err := os.ReadFile(tplPath)
@@ -174,15 +151,17 @@ func TestPlaygroundModalUsesHTMX(t *testing.T) {
 	body := string(data)
 
 	must := []string{
-		`hx-get="/partials/playground/models"`,                            // model picker loads via HTMX
-		`hx-on:submit="window.fgPlayground.send(event)"`,                  // form submit goes to shim
-		`hx-on:htmx:after-request="window.fgPlayground.onModelsLoaded()"`, // model list swap
-		`window.fgPlayground.close`,                                       // close trigger
-		`window.fgPlayground.clear`,                                       // clear trigger
-		`window.fgPlayground.toggleSystem`,                                // system prompt collapse
-		`window.fgPlayground.onInputKeydown`,                              // Enter-to-send
-		`window.fgPlayground.onStreamToggle`,                              // stream checkbox change
-		`window.fgPlayground.stopStreaming`,                               // stop button click
+		`x-data="playground()"`,      // Alpine owns modal state
+		`@submit.prevent="send()"`,   // form submit goes to the component
+		`@click="close()"`,           // close trigger
+		`@click="clear()"`,           // clear trigger
+		`@keydown.enter.exact`,       // Enter-to-send
+		`x-model="model"`,            // model picker binding
+		`x-model="stream"`,           // stream checkbox binding
+		`x-model="system"`,           // system prompt binding
+		`x-model="input"`,            // input binding
+		`@click="stop()"`,            // stop button
+		`x-for="(m, i) in messages"`, // thread rendering
 	}
 	for _, want := range must {
 		if !strings.Contains(body, want) {
@@ -190,80 +169,88 @@ func TestPlaygroundModalUsesHTMX(t *testing.T) {
 		}
 	}
 
-	// Ban the old hx-post + hx-vals='js:...' design — it does not work in
-	// htmx 2.0.4 (see validation report). The form must use hx-on:submit
-	// with a shim function that calls fetch() directly.
+	// The hx-on:* + window.fgPlayground shim design is gone — Alpine owns
+	// all event wiring now.
 	for _, banned := range []string{
 		`hx-post="/v1/chat/completions"`,
 		`hx-vals='js:`,
 		`hx-on:htmx:before-request`,
-		`hx-on:htmx:after-request="window.fgPlayground.handleResponse`,
+		`window.fgPlayground`,
 		`onsubmit="window.fgPlayground.send`,
 	} {
 		if strings.Contains(body, banned) {
-			t.Errorf("playground_modal.html still uses legacy pattern %q; should use hx-on:submit + shim send()", banned)
+			t.Errorf("playground_modal.html still uses legacy shim pattern %q; Alpine owns event wiring now", banned)
 		}
 	}
 }
 
-// TestPlaygroundModelsPartial asserts the new partial renders a proper
-// <option> list (one per model) and the empty-state fallback.
-func TestPlaygroundModelsPartial(t *testing.T) {
+// TestPlaygroundModelsFallback asserts the Alpine playground degrades
+// gracefully: the model picker renders its loading placeholder when the
+// /v1/models fetch has not resolved yet.
+func TestPlaygroundModelsFallback(t *testing.T) {
 	tpl, err := LoadTemplates(webTemplatesFS(t))
 	if err != nil {
 		t.Fatalf("LoadTemplates: %v", err)
 	}
 
-	// Happy path: with models
 	var buf bytes.Buffer
-	models := []domain.Model{
-		{ID: "test-model-1", Provider: "opencode", IsFree: true},
-		{ID: "test-model-2", Provider: "kilo", IsFree: true},
-	}
-	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", models); err != nil {
-		t.Fatalf("execute with models: %v", err)
+	if err := tpl.ExecuteTemplate(&buf, "partials/playground_modal.html", map[string]any{}); err != nil {
+		t.Fatalf("execute: %v", err)
 	}
 	body := buf.String()
 	for _, want := range []string{
-		`<option value="test-model-1">test-model-1</option>`,
-		`<option value="test-model-2">test-model-2</option>`,
+		`Loading models`,
+		`x-for="m in models"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("playground_models.html missing %q (got: %s)", want, body)
+			t.Errorf("playground_modal.html missing model fallback %q", want)
 		}
-	}
-
-	// Empty path: no models
-	buf.Reset()
-	if err := tpl.ExecuteTemplate(&buf, "partials/playground_models.html", []domain.Model{}); err != nil {
-		t.Fatalf("execute empty: %v", err)
-	}
-	body = buf.String()
-	if !strings.Contains(body, "// no models available") {
-		t.Errorf("playground_models.html missing empty-state placeholder (got: %s)", body)
 	}
 }
 
-// TestDashboardWiresPlayground asserts that the dashboard template
-// includes the playground modal partial, the playground.js script,
-// and the open-playground button. This is a string-search guardrail
-// that catches wiring regressions without running a browser.
+// TestDashboardWiresPlayground asserts the dashboard wires up the playground:
+// the modal partial is included and the Alpine component script is listed for
+// the shared layout head, where page scripts are emitted before alpine.min.js
+// so components register before Alpine auto-starts.
 func TestDashboardWiresPlayground(t *testing.T) {
-	const tplPath = "../../../web/templates/dashboard.html"
-	data, err := os.ReadFile(tplPath)
+	layoutBytes, err := os.ReadFile("../../../web/templates/layout.html")
 	if err != nil {
-		t.Fatalf("read %s: %v", tplPath, err)
+		t.Fatalf("read layout.html: %v", err)
 	}
-	body := string(data)
+	layout := string(layoutBytes)
+	for _, want := range []string{
+		`{{range .Scripts}}<script src="{{.}}" defer></script>`, // page script slot
+		`<script src="/static/js/alpine.min.js" defer></script>`,
+		`id="open-playground"`,         // open button
+		`$dispatch('open-playground')`, // Alpine event trigger
+	} {
+		if !strings.Contains(layout, want) {
+			t.Errorf("layout.html missing %q", want)
+		}
+	}
 
-	must := []string{
-		`id="open-playground"`,                                   // open button
-		`partials/playground_modal.html`,                         // modal include
-		`<script src="/static/js/playground.js" defer></script>`, // js include
+	// alpine.min.js must load after the page scripts: Alpine auto-starts in a
+	// microtask, so a later Alpine.data(...) registration would never run and
+	// every component would break at runtime.
+	if strings.Index(layout, ".Scripts") > strings.Index(layout, "alpine.min.js") {
+		t.Error("alpine.min.js is loaded before the page scripts; Alpine would start before components register")
 	}
-	for _, want := range must {
-		if !strings.Contains(body, want) {
-			t.Errorf("dashboard.html missing %q", want)
+
+	page, err := os.ReadFile("../../../web/templates/dashboard.html")
+	if err != nil {
+		t.Fatalf("read dashboard.html: %v", err)
+	}
+	if !strings.Contains(string(page), "partials/playground_modal.html") {
+		t.Error("dashboard.html missing playground modal include")
+	}
+
+	handlerSrc, err := os.ReadFile("../../../internal/delivery/ui/dashboard.go")
+	if err != nil {
+		t.Fatalf("read dashboard.go: %v", err)
+	}
+	for _, want := range []string{"dashboard.js", "playground.js"} {
+		if !strings.Contains(string(handlerSrc), want) {
+			t.Errorf("dashboard.go does not register %q in the script slot", want)
 		}
 	}
 }

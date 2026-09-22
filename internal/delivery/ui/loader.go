@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"html/template"
 	"io/fs"
 	"strings"
@@ -18,6 +19,20 @@ func LoadTemplates(fsys fs.FS) (*template.Template, error) {
 				return s
 			}
 			return s[:n] + "…"
+		},
+		// toJSONFullErrors renders the fragment's full error texts as a JSON
+		// array indexed by row ErrIdx. encoding/json escapes <, >, & so
+		// hostile upstream error text cannot break out of the script block.
+		"toJSONFullErrors": func(rows requestRowsView) (template.JS, error) {
+			errs := make([]string, len(rows))
+			for i, r := range rows {
+				errs[i] = r.FullError
+			}
+			raw, err := json.Marshal(errs)
+			if err != nil {
+				return "", err
+			}
+			return template.JS(raw), nil
 		},
 	}
 

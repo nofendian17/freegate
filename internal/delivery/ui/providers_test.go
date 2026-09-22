@@ -54,7 +54,7 @@ func TestProvidersPage_Renders(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"provider-table", "provider-modal", "/api/providers", "/api/combos", "freegate"} {
+	for _, want := range []string{"provider-table", "provider-modal", "/api/providers", "/api/combos", "providers.js", "freegate"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}
@@ -73,7 +73,7 @@ func TestProvidersPage_RendersPoolSection(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"pool-table", "/api/pools", "Proxy Pools", "pool-deploy", "pool-modal", "vercel-deploy"} {
+	for _, want := range []string{"pool-table", "/api/pools", "pool-deploy", "pool-modal", "vercel-deploy"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}

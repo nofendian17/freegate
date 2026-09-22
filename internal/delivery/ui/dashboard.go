@@ -9,8 +9,19 @@ import (
 	"time"
 )
 
+type endpoint struct {
+	Method string
+	Path   string
+	Desc   string
+}
+
 type pageData struct {
 	Title        string
+	Active       string
+	Meta         bool
+	Playground   bool
+	Palette      bool
+	Scripts      []string
 	Uptime       string
 	StartedAt    string
 	ModelCount   int
@@ -20,10 +31,12 @@ type pageData struct {
 	Models       template.HTML
 	Providers    []string
 	Upstream     []upstreamStat
+	Endpoints    []endpoint
 }
 
 // dashboard renders the main dashboard page with initial data inline.
-// HTMX polling then keeps the 3 dynamic sections (stats, requests, models) fresh.
+// HTMX polling then keeps the dynamic sections (stats, upstreams, requests,
+// models) fresh.
 func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	m := h.data.Metrics()
@@ -42,8 +55,15 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(providers)
 
 	data := pageData{
-		Providers:    providers,
-		Title:        "freegate dashboard",
+		Providers:  providers,
+		Title:      "freegate — dashboard",
+		Active:     "dashboard",
+		Meta:       true,
+		Playground: true,
+		Palette:    false,
+		// chart.umd.js rides in Scripts (not a separate Chart flag) so all
+		// page scripts stay ordered before alpine.min.js in layout/head.
+		Scripts:      []string{"/static/js/chart.umd.js", "/static/js/dashboard.js", "/static/js/playground.js"},
 		Uptime:       formatDuration(uptime),
 		StartedAt:    time.Unix(h.data.StartedAtUnix(), 0).UTC().Format("2006-01-02 15:04:05 UTC"),
 		ModelCount:   len(models),
@@ -52,6 +72,14 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		Requests:     h.renderToString("partials/requests.html", h.buildRequestRows()),
 		Models:       h.renderToString("partials/models.html", h.buildModelRows("")),
 		Upstream:     statsData.Upstream,
+		Endpoints: []endpoint{
+			{Method: "GET", Path: "/v1/models", Desc: "list available free models"},
+			{Method: "POST", Path: "/v1/chat/completions", Desc: "OpenAI-compatible chat completion"},
+			{Method: "POST", Path: "/v1/messages", Desc: "Anthropic-compatible messages"},
+			{Method: "POST", Path: "/v1/responses", Desc: "OpenAI Responses API"},
+			{Method: "GET", Path: "/v1/metrics", Desc: "request metrics per upstream"},
+			{Method: "GET", Path: "/ready", Desc: "health check"},
+		},
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

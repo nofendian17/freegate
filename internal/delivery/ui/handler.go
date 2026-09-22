@@ -60,15 +60,19 @@ func isSecure(r *http.Request) bool {
 }
 
 type loginData struct {
-	Error string
-	Next  string
+	Title   string
+	Error   string
+	Next    string
+	Scripts []string
 }
 
 // LoginPage renders the login form. Public, no auth.
 func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	next := r.URL.Query().Get("next")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Next: next})
+	if err := h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Next: next}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // Login validates admin_token from POST form, sets HMAC cookie on success.
@@ -85,7 +89,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminToken)) != 1 {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Error: "invalid token", Next: r.URL.Query().Get("next")})
+		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Error: "invalid token", Next: r.URL.Query().Get("next")})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -126,9 +130,9 @@ func (h *Handler) Routes() chi.Router {
 	})
 
 	r.Get("/partials/stats", h.partialStats)
+	r.Get("/partials/upstreams", h.partialUpstreams)
 	r.Get("/partials/requests", h.partialRequests)
 	r.Get("/partials/models", h.partialModels)
-	r.Get("/partials/playground/models", h.partialPlaygroundModels)
 
 	r.Get("/api/timeseries", h.apiTimeseries)
 	r.Get("/api/health", h.apiHealth)
