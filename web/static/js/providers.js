@@ -217,6 +217,61 @@
       function (c) { return c.value; });
   }
 
+  // Proxy dropdown: "" = global rotation, "direct" = no relay,
+  // "pool:<id>" = pinned pool.
+  function parseProxy() {
+    var v = document.getElementById('f-proxy').value || '';
+    if (v === 'direct') return { proxy_mode: 'direct' };
+    var m = /^pool:(\d+)$/.exec(v);
+    if (m) return { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };
+    return { proxy_mode: '' };
+  }
+
+  // Pool options shared by the provider and builtin proxy dropdowns.
+  // Static Global/Direct options stay in markup; pool entries rebuild
+  // from poolsCache. Preserves the current value, including stale pins.
+  var poolsCache = [];
+
+  function renderPoolOptions(sel) {
+    if (!sel) return;
+    var cur = sel.value;
+    Array.prototype.forEach.call(sel.querySelectorAll('option[data-pool]'), function (o) { o.remove(); });
+    poolsCache.forEach(function (pl) {
+      var opt = document.createElement('option');
+      opt.value = 'pool:' + pl.id;
+      opt.setAttribute('data-pool', '1');
+      opt.textContent = pl.name + (pl.enabled ? '' : ' (disabled)');
+      sel.appendChild(opt);
+    });
+    // A stale pin becomes real again when its pool reappears.
+    Array.prototype.forEach.call(sel.querySelectorAll('option[data-stale]'), function (o) {
+      if (sel.querySelector('option[data-pool][value="' + o.value + '"]')) o.remove();
+    });
+    sel.value = cur;
+  }
+
+  // Sets a proxy dropdown from a stored selection, keeping stale pins
+  // visible instead of silently flipping to global.
+  function setProxyValue(sel, mode, poolId) {
+    if (!sel) return;
+    var v = '';
+    if (mode === 'direct') v = 'direct';
+    else if (mode === 'pool' && poolId != null) v = 'pool:' + poolId;
+    if (v && !sel.querySelector('option[value="' + v + '"]')) {
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.setAttribute('data-stale', '1');
+      opt.textContent = 'pool #' + v.slice(5) + ' (unavailable)';
+      sel.appendChild(opt);
+    }
+    sel.value = v;
+  }
+
+  function setProxy(mode, poolId) {
+    renderProxyOptions();
+    setProxyValue(document.getElementById('f-proxy'), mode, poolId);
+  }
+
   function openProviderModal(p) {
     p = p || {};
     document.getElementById('f-id').value = p.id || '';
@@ -231,6 +286,7 @@
       : 'API keys — one per line';
     document.getElementById('f-models-filter').value = '';
     renderModelChecks(p.models || [], null);
+    setProxy(p.proxy_mode, p.proxy_pool_id);
     document.getElementById('f-refresh').value = p.refresh_sec != null ? p.refresh_sec : 60;
     document.getElementById('f-priority').value = p.priority || 0;
     document.getElementById('f-enabled').checked = p.enabled !== false;
@@ -282,6 +338,7 @@
       priority: parseInt(document.getElementById('f-priority').value, 10) || 0,
       enabled: document.getElementById('f-enabled').checked,
     };
+    Object.assign(payload, parseProxy());
     var method = id ? 'PUT' : 'POST';
     var url = id ? '/api/providers/' + id : '/api/providers';
     withBusy(saveBtn, 'Saving…', function () {
@@ -306,11 +363,11 @@
       opts = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(Object.assign({
           base_url: document.getElementById('f-base-url').value.trim(),
           api_keys: lines('f-api-keys'),
           headers: parseHeaders(),
-        }),
+        }, parseProxy())),
       };
     }
     withBusy(this, 'Testing…', function () {
@@ -374,11 +431,23 @@
 
   function loadPools() {
     return getJSON('/api/pools')
-      .then(function (body) { renderPools(body.data || body || []); })
+      .then(function (body) {
+        poolsCache = body.data || body || [];
+        renderPools(poolsCache);
+        renderProxyOptions();
+        renderBuiltinProxyOptions();
+      })
       .catch(function (e) {
         poolTable.innerHTML = '<tr><td colspan="5" class="px-5 py-8 text-center text-body text-mid-gray">Load failed — ' + esc(e.message) + '</td></tr>';
         show(poolErr, 'load pools: ' + e.message);
       });
+  }
+
+  // Pool options for the provider proxy dropdown. The static Global and
+  // Direct options stay in markup; pool entries rebuild from the pool
+  // list so newly created pools are selectable without a reload.
+  function renderProxyOptions() {
+    renderPoolOptions(document.getElementById('f-proxy'));
   }
 
   function openPoolModal(p, deployMode) {
@@ -417,6 +486,53 @@
   document.getElementById('pool-modal-close').addEventListener('click', closePoolModal);
   document.getElementById('pool-new').addEventListener('click', function () { openPoolModal({}, false); });
   document.getElementById('pool-deploy').addEventListener('click', function () { openPoolModal({}, true); });
+
+  // ----- built-in providers (proxy choice) -----
+  var builtinNames = ['opencode', 'kilo', 'llm7'];
+  var builtinErr = document.getElementById('builtin-err');
+
+  function builtinSelect(name) { return document.getElementById('builtin-proxy-' + name); }
+
+  function renderBuiltinProxyOptions() {
+    builtinNames.forEach(function (name) {
+      renderPoolOptions(builtinSelect(name));
+    });
+  }
+
+  function setBuiltinProxy(name, mode, poolId) {
+    renderBuiltinProxyOptions();
+    setProxyValue(builtinSelect(name), mode, poolId);
+  }
+
+  function loadBuiltinProxies() {
+    return getJSON('/api/builtin-proxies')
+      .then(function (body) {
+        (body.data || body || []).forEach(function (b) { setBuiltinProxy(b.name, b.proxy_mode, b.proxy_pool_id); });
+      })
+      .catch(function (e) { show(builtinErr, 'load builtin proxies: ' + e.message); });
+  }
+
+  document.getElementById('builtin-table').addEventListener('change', function (e) {
+    var sel = e.target.closest('select[data-builtin]');
+    if (!sel || sel.disabled) return;
+    var name = sel.getAttribute('data-builtin');
+    var v = sel.value || '';
+    var payload = { proxy_mode: '' };
+    if (v === 'direct') payload = { proxy_mode: 'direct' };
+    else {
+      var m = /^pool:(\d+)$/.exec(v);
+      if (m) payload = { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };
+    }
+    sel.disabled = true;
+    getJSON('/api/builtin-proxies/' + name, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(function () {
+      sel.disabled = false;
+      show(builtinErr, '');
+    }, function (e2) {
+      sel.disabled = false;
+      show(builtinErr, 'save ' + name + ' proxy: ' + e2.message);
+      loadBuiltinProxies();
+    });
+  });
 
   document.getElementById('pool-form').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -680,6 +796,7 @@
 
   loadProviders();
   loadPools();
+  loadBuiltinProxies();
   loadCombos();
   loadTierEditor();
 })();

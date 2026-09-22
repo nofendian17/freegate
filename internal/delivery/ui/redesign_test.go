@@ -203,6 +203,43 @@ func TestProvidersPage_PoolModalA11y(t *testing.T) {
 	}
 }
 
+// TestProvidersPage_BuiltinProxySection pins the built-in providers'
+// proxy section: one labeled dropdown per builtin plus the JS that loads
+// and saves their relay selection.
+func TestProvidersPage_BuiltinProxySection(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="builtin-table"`,
+		`id="builtin-err"`,
+		`id="builtin-proxy-opencode"`,
+		`id="builtin-proxy-kilo"`,
+		`id="builtin-proxy-llm7"`,
+		`data-builtin="opencode"`,
+		`data-builtin="kilo"`,
+		`data-builtin="llm7"`,
+		`/api/builtin-proxies`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("builtin proxy section missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/providers.js")
+	for _, want := range []string{
+		"loadBuiltinProxies",
+		"renderBuiltinProxyOptions",
+		"setBuiltinProxy",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("providers.js missing %q", want)
+		}
+	}
+}
+
 // TestProvidersPage_ProviderEditorA11y pins the provider editor's dialog
 // contract: titled role=dialog, labeled inputs, a model checklist filter,
 // and the JS behaviors behind empty-save, focus restore, header warnings,
@@ -225,10 +262,12 @@ func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
 		`for="f-refresh"`,
 		`for="f-priority"`,
 		`for="f-enabled"`,
+		`for="f-proxy"`,        // per-provider proxy dropdown
 		`inputmode="url"`,      // URL keyboard on mobile
 		`id="f-models-filter"`, // model checklist filter
 		`id="f-models-select-all"`,
 		`id="f-models-deselect-all"`,
+		`id="f-proxy"`,
 		`id="f-api-keys-label"`, // hint toggles new vs edit
 	} {
 		if !strings.Contains(body, want) {
@@ -242,6 +281,8 @@ func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
 		"testSummary",          // human-readable test output
 		"applyModelFilter",     // checklist filter behavior
 		"setModelsChecked",     // bulk select/deselect
+		"parseProxy",           // per-provider proxy selection
+		"renderProxyOptions",   // proxy dropdown options from pools
 		"line(s) without",      // malformed header warning
 	} {
 		if !strings.Contains(js, want) {
