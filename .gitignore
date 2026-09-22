@@ -19,3 +19,6 @@ docs/superpowers/
 
 # Runtime SQLite state (providers/combos DB)
 data/
+
+# Tailwind build workspace (dev-only; built CSS is committed)
+web/assets/node_modules/

@@ -1,4 +1,4 @@
-.PHONY: help test test-v test-cover test-race build run up down restart logs ps ps-all clean tidy vet fmt check compose-build compose-pull
+.PHONY: help test test-v test-cover test-race build run css up down restart logs ps ps-all clean tidy vet fmt check compose-build compose-pull
 
 BINARY   := server
 PKG      := ./...
@@ -27,6 +27,9 @@ build: ## Build the server binary
 
 run: ## Run the server locally
 	go run ./cmd/server
+
+css: ## Rebuild vendored Tailwind CSS (needs npm once)
+	npm --prefix web/assets run css
 
 tidy: ## Tidy go modules
 	go mod tidy

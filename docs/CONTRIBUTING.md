@@ -25,7 +25,7 @@ See `README.md → Project Structure`. Source of truth for new code organization
 - `internal/domain` — types and interfaces that don't depend on frameworks
 - `internal/infrastructure` — out-of-process integrations (upstreams, metrics, recorder)
 - `internal/translate` — OpenAI ↔ Claude ↔ Gemini format translation
-- `web/` — embedded templates, CSS, JS, fonts
+- `web/` — embedded templates, CSS, JS, fonts (`web/assets/` holds the Tailwind build input, dev-only)
 
 ## Available scripts
 
@@ -87,7 +87,8 @@ The compose file binds `127.0.0.1:1234:1234` by default so the dashboard is not 
 
 Templates and static files are loaded via `go:embed` (`web/embed.go`). After any change:
 
-- **Templates / static:** restart the server. With `make run` (`go run`) the binary is rebuilt automatically.
+- **Templates:** restart the server. With `make run` (`go run`) the binary is rebuilt automatically.
+- **Tailwind classes:** `make css` rebuilds `web/static/css/app.css` from `web/assets/tailwind.css` (design.md tokens; needs `npm install` in `web/assets` once, then committed CSS ships in the binary — no runtime dependency).
 - **Go source:** `make run` recompiles; no manual rebuild.
 
 ## Testing
