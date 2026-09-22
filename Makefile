@@ -1,6 +1,6 @@
 .PHONY: help test test-v test-cover test-race build run css up down restart logs ps ps-all clean tidy vet fmt check compose-build compose-pull
 
-BINARY   := server
+BINARY   := bin/freegate
 PKG      := ./...
 COMPOSE  := docker compose
 
@@ -71,4 +71,4 @@ rebuild: ## Rebuild and restart a service (usage: make rebuild svc=proxy)
 
 clean: ## Stop services and remove build artifacts
 	$(COMPOSE) down -v
-	rm -f $(BINARY) coverage.out coverage.html
+	rm -rf bin coverage.out coverage.html
