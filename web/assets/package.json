@@ -1,0 +1,12 @@
+{
+  "name": "freegate-assets",
+  "private": true,
+  "description": "Dev-only Tailwind build for web/static/css/app.css. Nothing here ships at runtime.",
+  "scripts": {
+    "css": "tailwindcss -i tailwind.css -o ../static/css/app.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}
