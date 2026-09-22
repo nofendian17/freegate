@@ -80,6 +80,35 @@ func TestDashboard_ModelTestParseFailureMarksError(t *testing.T) {
 	}
 }
 
+// TestRequestsPartial_LocalTimeHook pins the timezone contract: each row
+// time is a <time> with an ISO datetime attr and data-localtime, so
+// dashboard.js can rewrite it in the viewer's timezone. The UTC fallback
+// text stays for no-JS.
+func TestRequestsPartial_LocalTimeHook(t *testing.T) {
+	h := New(&fakeData{
+		metrics: map[string]any{},
+		models:  []domain.Model{},
+		reqs: []domain.RequestLogEntry{
+			{Ts: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), Method: "POST", Path: "/v1/chat/completions", Model: "m", Upstream: "kilo", Status: 200, DurationMs: 5, IP: "127.0.0.1"},
+		},
+		ts: nil, uptime: 1, start: time.Now().Unix(),
+	}, mustLoadTemplates(t), webStaticFS(t))
+
+	rr := serveViaRoutes(h, "GET", "/partials/requests")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<time datetime="2026-09-22T12:00:00Z" data-localtime>`,
+		`>12:00:00</time>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("requests row missing local-time hook %q, got: %s", want, body)
+		}
+	}
+}
+
 // TestRequestsPartial_StatusToneHook pins the status tone test hook: a 200
 // row emits data-status-tone="green", which the template's {{if eq}}
 // branches map to achromatic styling (palette stays achromatic per
@@ -170,6 +199,50 @@ func TestProvidersPage_PoolModalA11y(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pool modal missing accessible behavior %q", want)
+		}
+	}
+}
+
+// TestProvidersPage_ProviderEditorA11y pins the provider editor's dialog
+// contract: titled role=dialog, labeled inputs, a model checklist filter,
+// and the JS behaviors behind empty-save, focus restore, header warnings,
+// and human-readable test output.
+func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="provider-modal"`,
+		`role="dialog"`, // titled dialog
+		`aria-labelledby="provider-modal-title"`,
+		`for="f-name"`, // labeled inputs
+		`for="f-base-url"`,
+		`for="f-api-keys"`,
+		`for="f-headers"`,
+		`for="f-refresh"`,
+		`for="f-priority"`,
+		`for="f-enabled"`,
+		`inputmode="url"`,       // URL keyboard on mobile
+		`id="f-models-filter"`,  // model checklist filter
+		`id="f-api-keys-label"`, // hint toggles new vs edit
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("provider editor missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/providers.js")
+	for _, want := range []string{
+		"no models selected",   // empty-save guard on new providers
+		"restoreProviderFocus", // focus restore after save/delete
+		"testSummary",          // human-readable test output
+		"applyModelFilter",     // checklist filter behavior
+		"line(s) without",      // malformed header warning
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("providers.js missing %q", want)
 		}
 	}
 }

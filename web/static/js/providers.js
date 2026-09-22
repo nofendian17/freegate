@@ -1,6 +1,6 @@
 // freegate providers — Alpine store + JSON admin API client.
 // Tables render client-side (the /api/* endpoints already return JSON);
-// Alpine owns modal/editor/palette visibility and form state.
+// Alpine owns modal/editor visibility and form state.
 (function () {
   'use strict';
 
@@ -76,13 +76,33 @@
     return el.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
+  // Lines without "=" (or with a blank key) are dropped from the map —
+  // surface that instead of failing silently. Warns but does not block.
   function parseHeaders() {
     var out = {};
+    var dropped = 0;
     lines('f-headers').forEach(function (l) {
       var i = l.indexOf('=');
       if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+      else dropped++;
     });
+    if (dropped) show(providerFormErr, 'headers: ' + dropped + ' line(s) without "=" were ignored');
     return out;
+  }
+
+  // Human-readable Test/probe result; raw JSON is too noisy to read.
+  function testSummary(b) {
+    if (!b) return 'no response';
+    if (!b.ok) return 'fail — ' + (b.error || ('status ' + b.status));
+    var n = b.modelCount != null ? b.modelCount : (b.models || []).length;
+    return 'ok — ' + n + ' models' + (b.latencyMs != null ? ' · ' + b.latencyMs + 'ms' : '');
+  }
+
+  function applyModelFilter() {
+    var q = document.getElementById('f-models-filter').value.trim().toLowerCase();
+    document.querySelectorAll('#f-models label').forEach(function (lab) {
+      lab.classList.toggle('hidden', !!q && lab.textContent.toLowerCase().indexOf(q) < 0);
+    });
   }
 
   // ----- alpine store -----
@@ -90,7 +110,6 @@
     Alpine.store('ui', {
       providerEditor: false,
       poolModal: false,
-      palette: false,
     });
   });
 
@@ -108,7 +127,18 @@
   var lastTrigger = null;
 
   function openEditor() { Alpine.store('ui').providerEditor = true; }
-  function closeEditor() { Alpine.store('ui').providerEditor = false; }
+  function closeEditor() {
+    Alpine.store('ui').providerEditor = false;
+    if (lastTrigger && typeof lastTrigger.focus === 'function') lastTrigger.focus();
+    lastTrigger = null;
+  }
+
+  // After save/delete the table re-renders, so the old trigger node is
+  // stale: refocus the row's Edit button, else the New provider button.
+  function restoreProviderFocus(id) {
+    var btn = id ? providerTable.querySelector('.prov-edit[data-id="' + id + '"]') : null;
+    (btn || document.getElementById('provider-new')).focus();
+  }
 
   function providerModelsCell(p) {
     if (p.models == null) {
@@ -159,12 +189,15 @@
     });
     if (!ids.length) {
       box.innerHTML = '<span>Run Test to load the model list from the upstream.</span>';
+      document.getElementById('f-models-filter').hidden = true;
       return;
     }
+    document.getElementById('f-models-filter').hidden = false;
     box.innerHTML = ids.map(function (id) {
       return '<label class="flex items-center gap-2 font-mono"><input type="checkbox" class="size-4 accent-[#0a0a0a]" value="' + esc(id) + '"' +
         (keep[id] ? ' checked' : '') + '> ' + esc(id) + '</label>';
     }).join('');
+    applyModelFilter();
   }
 
   function checkedModels() {
@@ -182,6 +215,10 @@
     document.getElementById('f-headers').value = Object.entries(p.headers || {}).map(function (kv) { return kv[0] + '=' + kv[1]; }).join('\n');
     editingLegacyModels = ('models' in p) ? p.models : undefined;
     document.getElementById('f-legacy').classList.toggle('hidden', editingLegacyModels !== null);
+    document.getElementById('f-api-keys-label').textContent = p.id
+      ? 'API keys — one per line (blank keeps existing keys)'
+      : 'API keys — one per line';
+    document.getElementById('f-models-filter').value = '';
     renderModelChecks(p.models || [], null);
     document.getElementById('f-refresh').value = p.refresh_sec != null ? p.refresh_sec : 60;
     document.getElementById('f-priority').value = p.priority || 0;
@@ -197,10 +234,8 @@
   }
 
   document.getElementById('provider-new').addEventListener('click', function () { lastTrigger = this; openProviderModal(); });
-  document.getElementById('provider-modal-close').addEventListener('click', function () {
-    closeEditor();
-    if (lastTrigger) lastTrigger.focus();
-  });
+  document.getElementById('provider-modal-close').addEventListener('click', closeEditor);
+  document.getElementById('f-models-filter').addEventListener('input', applyModelFilter);
 
   if (providerTable) {
     providerTable.addEventListener('click', function (e) {
@@ -217,6 +252,11 @@
 
   document.getElementById('provider-form').addEventListener('submit', function (e) {
     e.preventDefault();
+    var models = checkedModels();
+    if (!document.getElementById('f-id').value && !models.length) {
+      show(providerFormErr, 'no models selected — run Test, check the models to route, then Save');
+      return;
+    }
     var saveBtn = document.getElementById('provider-save');
     var id = document.getElementById('f-id').value;
     var payload = {
@@ -224,7 +264,7 @@
       base_url: document.getElementById('f-base-url').value.trim(),
       api_keys: lines('f-api-keys'),
       headers: parseHeaders(),
-      models: checkedModels(),
+      models: models,
       refresh_sec: parseInt(document.getElementById('f-refresh').value, 10) || 0,
       priority: parseInt(document.getElementById('f-priority').value, 10) || 0,
       enabled: document.getElementById('f-enabled').checked,
@@ -235,8 +275,8 @@
       return getJSON(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         .then(function () {
           closeEditor();
-          loadProviders();
           loadTierEditor();
+          return loadProviders().then(function () { restoreProviderFocus(id || null); });
         });
     }).catch(function (e2) { show(providerFormErr, 'save: ' + e2.message); });
   });
@@ -263,11 +303,14 @@
     withBusy(this, 'Testing…', function () {
       return getJSON(url, opts).then(function (b) {
         var probed = (b && b.models) || [];
-        // Legacy row: everything currently routes, so pre-check the catalog.
-        var legacy = editingLegacyModels === null;
-        renderModelChecks(legacy ? probed : checkedModels(), probed);
-        if (b && b.ok) show(providerTestOut, 'ok — ' + JSON.stringify(b), true);
-        else show(providerFormErr, 'fail — ' + JSON.stringify(b));
+        // New provider: everything is unchecked, so pre-check the catalog
+        // (same as legacy) — saving a fresh probe with nothing checked is
+        // almost never intended.
+        var fresh = editingLegacyModels === null || editingLegacyModels === undefined;
+        renderModelChecks(fresh ? probed : checkedModels(), probed);
+        show(providerTestOut, testSummary(b), !!(b && b.ok));
+        if (!(b && b.ok)) show(providerFormErr, testSummary(b));
+        else show(providerFormErr, '');
       });
     }).catch(function (e) { show(providerTestOut, 'test: ' + e.message); });
   });
@@ -280,8 +323,8 @@
     withBusy(this, 'Deleting…', function () {
       return getJSON('/api/providers/' + id, { method: 'DELETE' }).then(function () {
         closeEditor();
-        loadProviders();
         loadTierEditor();
+        return loadProviders().then(function () { restoreProviderFocus(null); });
       });
     }).catch(function (e) { show(providerFormErr, 'delete: ' + e.message); });
   });
@@ -615,145 +658,11 @@
     }
   });
 
-  // ----- command palette -----
-  var paletteInput = document.getElementById('palette-input');
-  var paletteResults = document.getElementById('palette-results');
-  var paletteIdx = -1;
-
-  function openPalette() {
-    Alpine.store('ui').palette = true;
-    paletteInput.value = '';
-    paletteInput.focus();
-    renderPaletteResults('');
-  }
-
-  function closePalette() { Alpine.store('ui').palette = false; }
-
-  function renderPaletteResults(q) {
-    var parts = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    var cmd = parts[0] || '';
-    var arg = parts.slice(1).join(' ');
-    var items = [];
-
-    if (!cmd) {
-      items = [
-        { label: 'New provider', action: function () { closePalette(); openProviderModal(); } },
-        { label: 'New pool', action: function () { closePalette(); openPoolModal({}, false); } },
-        { label: 'New combo', action: function () { closePalette(); resetComboForm(); comboForm.classList.remove('hidden'); comboForm.classList.add('grid'); document.getElementById('combo-name').focus(); } },
-        { label: 'toggle [provider]', hint: 'type a provider name' },
-        { label: 'test [provider]', hint: 'type a provider name' },
-        { label: 'edit [provider]', hint: 'type a provider name' },
-        { label: 'delete [provider]', hint: 'type a provider name' },
-      ];
-    } else if (cmd === 'new') {
-      if (!arg || arg.indexOf('pool') === 0) items.push({ label: 'New pool', action: function () { closePalette(); openPoolModal({}, false); } });
-      if (!arg || arg.indexOf('prov') === 0) items.push({ label: 'New provider', action: function () { closePalette(); openProviderModal(); } });
-      if (!arg || arg.indexOf('comb') === 0) items.push({ label: 'New combo', action: function () { closePalette(); resetComboForm(); comboForm.classList.remove('hidden'); comboForm.classList.add('grid'); document.getElementById('combo-name').focus(); } });
-    } else if (['toggle', 'test', 'edit', 'delete'].indexOf(cmd) >= 0) {
-      providersCache.forEach(function (p) {
-        if (arg && p.name.toLowerCase().indexOf(arg) < 0) return;
-        var label = cmd + ' ' + p.name + (cmd === 'toggle' ? ' [' + (p.enabled ? 'on' : 'off') + ']' : '');
-        items.push({
-          label: label,
-          action: function () {
-            closePalette();
-            if (cmd === 'toggle') toggleProvider(p.id, !p.enabled);
-            else if (cmd === 'test') testProviderById(p.id);
-            else if (cmd === 'edit') openProviderById(p.id);
-            else if (cmd === 'delete') deleteProviderById(p.id, p.name);
-          },
-        });
-      });
-    }
-
-    if (!items.length) {
-      paletteResults.innerHTML = '<span class="p-2 text-caption text-mid-gray">No matches.</span>';
-      return;
-    }
-
-    paletteResults.innerHTML = items.slice(0, 10).map(function (item, i) {
-      return '<button type="button" class="palette-item rounded-2xl px-3 py-2 text-left text-body text-ink hover:bg-canvas" data-idx="' + i + '">' +
-        esc(item.label) + (item.hint ? ' <span class="text-mid-gray">' + esc(item.hint) + '</span>' : '') + '</button>';
-    }).join('');
-
-    paletteResults.querySelectorAll('.palette-item').forEach(function (btn, i) {
-      btn.addEventListener('click', function () {
-        var item = items.slice(0, 10)[i];
-        if (item && typeof item.action === 'function') item.action();
-      });
-    });
-    paletteIdx = -1;
-  }
-
-  function toggleProvider(id, enabled) {
-    getJSON('/api/providers/' + id)
-      .then(function (body) {
-        var p = body.data || body;
-        return getJSON('/api/providers/' + id, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: p.name,
-            base_url: p.base_url,
-            headers: p.headers || {},
-            refresh_sec: p.refresh_sec || 60,
-            priority: p.priority || 0,
-            enabled: enabled,
-          }),
-        });
-      })
-      .then(function () { loadProviders(); })
-      .catch(function (e) { show(providerErr, 'toggle: ' + e.message); });
-  }
-
-  function testProviderById(id) {
-    show(providerOk, 'testing…', true);
-    getJSON('/api/providers/' + id + '/test', { method: 'POST' })
-      .then(function (b) { (b.ok ? show(providerOk, 'ok ' + JSON.stringify(b), true) : show(providerErr, 'fail ' + JSON.stringify(b))); })
-      .catch(function (e) { show(providerErr, 'test: ' + e.message); });
-  }
-
-  function openProviderById(id) {
-    getJSON('/api/providers/' + id)
-      .then(function (body) { openProviderModal(body.data || body); })
-      .catch(function (e) { show(providerErr, 'load: ' + e.message); });
-  }
-
-  function deleteProviderById(id, name) {
-    if (!confirm('Delete provider "' + name + '"? Combos using it will lose that tier.')) return;
-    getJSON('/api/providers/' + id, { method: 'DELETE' })
-      .then(function () { loadProviders(); loadTierEditor(); })
-      .catch(function (e) { show(providerErr, 'delete: ' + e.message); });
-  }
-
-  window.addEventListener('open-palette', openPalette);
   document.addEventListener('keydown', function (e) {
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
-      e.preventDefault();
-      if (Alpine.store('ui').palette) closePalette();
-      else openPalette();
-    }
-    if (Alpine.store('ui').palette && e.key === 'ArrowDown') {
-      var btns = paletteResults.querySelectorAll('.palette-item');
-      if (!btns.length) return;
-      e.preventDefault();
-      paletteIdx = Math.min(paletteIdx + 1, btns.length - 1);
-      btns[paletteIdx].focus();
-    }
-    if (Alpine.store('ui').palette && e.key === 'ArrowUp') {
-      var btns2 = paletteResults.querySelectorAll('.palette-item');
-      if (!btns2.length) return;
-      e.preventDefault();
-      paletteIdx = Math.max(paletteIdx - 1, 0);
-      btns2[paletteIdx].focus();
-    }
-    if (Alpine.store('ui').palette && e.key === 'Enter' && paletteIdx >= 0) {
-      var btns3 = paletteResults.querySelectorAll('.palette-item');
-      if (btns3[paletteIdx]) { e.preventDefault(); btns3[paletteIdx].click(); }
+    if (e.key === 'Escape' && Alpine.store('ui').providerEditor) {
+      closeEditor();
     }
   });
-
-  paletteInput.addEventListener('input', function () { renderPaletteResults(paletteInput.value); });
 
   loadProviders();
   loadPools();

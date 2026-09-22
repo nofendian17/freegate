@@ -16,10 +16,11 @@
         count: 0,
         init: function () {
           this.syncCount();
-          // HTMX swaps #requests-body every 5s; recount after each swap.
+          localizeTimes();
+          // HTMX swaps #requests-body every 5s; recount and relocalize.
           var self = this;
           document.body.addEventListener('htmx:afterSwap', function (e) {
-            if (e.target && e.target.id === 'requests-body') self.syncCount();
+            if (e.target && e.target.id === 'requests-body') { self.syncCount(); localizeTimes(); }
           });
           this.watchHealth();
         },
@@ -53,12 +54,31 @@
     });
   });
 
+  // ----- Local times -----
+  // Server renders UTC text with an ISO datetime attr; the browser
+  // rewrites it in the viewer's timezone (date + HH:MM:SS, 24h).
+  function localizeTimes() {
+    var els = document.querySelectorAll('[data-localtime]:not([data-localized])');
+    for (var i = 0; i < els.length; i++) {
+      var iso = els[i].getAttribute('datetime');
+      if (!iso) continue;
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) continue;
+      var p = function (n) { return (n < 10 ? '0' : '') + n; };
+      els[i].textContent = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+        ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      els[i].setAttribute('title', iso.replace('T', ' ').replace('Z', ' UTC'));
+      els[i].setAttribute('data-localized', '1');
+    }
+  }
+  localizeTimes();
+
   // ----- Timeseries chart (Chart.js) -----
   function timestamps(data) {
     return data.map(function (d) {
       var dt = new Date(d.ts);
       var p = function (n) { return (n < 10 ? '0' : '') + n; };
-      return p(dt.getUTCHours()) + ':' + p(dt.getUTCMinutes()) + ':' + p(dt.getUTCSeconds());
+      return p(dt.getHours()) + ':' + p(dt.getMinutes()) + ':' + p(dt.getSeconds());
     });
   }
 

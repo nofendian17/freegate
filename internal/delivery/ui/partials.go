@@ -88,6 +88,7 @@ func (h *Handler) partialUpstreams(w http.ResponseWriter, r *http.Request) {
 
 type requestRow struct {
 	Time       string
+	TimeISO    string
 	Model      string
 	Upstream   string
 	Status     string
@@ -123,6 +124,7 @@ func (h *Handler) buildRequestRows() requestRowsView {
 		}
 		rows = append(rows, requestRow{
 			Time:       e.Ts.UTC().Format("15:04:05"),
+			TimeISO:    e.Ts.UTC().Format("2006-01-02T15:04:05Z"),
 			Model:      model,
 			Upstream:   upstream,
 			Status:     fmt.Sprintf("%d", e.Status),

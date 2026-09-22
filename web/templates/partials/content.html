@@ -56,7 +56,7 @@
 {{if .}}
 {{range .}}
 <tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
-  <td class="whitespace-nowrap px-5 py-3 font-mono text-caption text-mid-gray">{{.Time}}</td>
+  <td class="whitespace-nowrap px-5 py-3 font-mono text-caption text-mid-gray"><time datetime="{{.TimeISO}}" data-localtime>{{.Time}}</time></td>
   <td class="max-w-56 truncate px-5 py-3 font-mono text-caption">{{.Model}}</td>
   <td class="px-5 py-3">
     <span class="inline-flex items-center rounded-2xl bg-canvas px-2 py-0.5 text-caption font-medium text-ink-soft">{{.Upstream}}</span>

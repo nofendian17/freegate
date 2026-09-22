@@ -31,12 +31,6 @@
       <span>uptime <span id="uptime" class="text-ink">{{$nav.Uptime}}</span></span>
       <span>models <span id="model-count" class="text-ink">{{$nav.ModelCount}}</span></span>
       {{end}}
-      {{if $nav.Palette}}
-      <button type="button" @click="$dispatch('open-palette')" class="flex items-center gap-2 rounded-2xl bg-canvas px-3 py-2 text-mid-gray transition-colors hover:text-ink">
-        <span>Search…</span>
-        <kbd class="rounded-md border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px]">Ctrl K</kbd>
-      </button>
-      {{end}}
       {{if $nav.Playground}}
       <button id="open-playground" type="button" @click="$dispatch('open-playground')" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Playground</button>
       {{end}}
