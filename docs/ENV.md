@@ -54,7 +54,7 @@ Upstream requests route through enabled proxy pools (`GET/POST/PUT/DELETE /api/p
 | `UPSTREAM_DEFAULT` | No | `opencode` | Fallback upstream for models claimed by nothing else. Accepts `opencode`, `kilo`, or `llm7`. |
 | `RESPONSE_MODELS` | No | `muse-spark,muse_spark` | Comma-separated substrings (case-insensitive) routing models to the OpenAI Responses API (`/zen/v1/responses`). |
 | `MESSAGE_MODELS` | No | `union-alpha` | Comma-separated substrings (case-insensitive) routing models to the Anthropic Messages API (`/zen/v1/messages`). |
-| `PROVIDERS_DB_PATH` | No | `./data/providers.db` | SQLite file (GORM, pure-Go, CGO-free) holding custom providers, tiered combos, and — once seeded — auth + upstream settings. Auto-created on boot. Persist it: mount a volume over `./data` in docker; back up the file before upgrades. |
+| `PROVIDERS_DB_PATH` | No | `./data/providers.db` | SQLite file (GORM, pure-Go, CGO-free) holding custom providers, tiered combos, and — once seeded — auth + upstream settings. Auto-created on boot; local files are restricted to `0600` and their directory to `0700`. Persist it: mount a volume over `./data` in docker; back up the file before upgrades. |
 
 ## Custom providers + tiered combos (SQLite)
 
@@ -62,7 +62,7 @@ Built-in upstreams (opencode/kilo/llm7) stay env-configured. User providers live
 
 - **Custom providers** — any OpenAI-compatible base URL + API keys + optional headers + explicit model selection (checkboxes from the `test` probe; only stored models route, refresh only updates their metadata) + per-provider refresh interval, managed at `/providers` (dashboard, admin-only) or `GET/POST/PUT/DELETE /api/providers` (+ `POST /api/providers/{id}/test` on the stored row, `POST /api/providers/probe` ad-hoc on form values pre-save; the probe sends custom headers too). Keys are masked on read (last-4). Rows saved before the selection feature have `models: null` (legacy: whole catalog routes); probing such a row pre-checks the full catalog so the first save preserves routing. `PUT` without a `models` key keeps the stored selection; an explicit `[]` routes nothing.
 - **Tiered combos** — each combo is a virtual model: `{"name":"hemat","tiers":[{"provider":"opencode"},{"provider":"custom:acme"}]}`. Request `model=hemat` and tiers are tried in order; transport errors, 429s, and 5xx fail over to the next tier (body sent as-is, failed tier bodies closed). Other 4xx (e.g. 401) pass through verbatim by design. Combos appear in `GET /v1/models` with `provider: combo:<name>`. Managed at `/providers` or `GET/POST/PUT/DELETE /api/combos` (+ `POST /api/combos/{id}/test` per-tier probe). No activate step — every combo is always routable.
-- **Live rebuild** — provider/combo CRUD rebuilds upstreams synchronously (failure → 400, old chain kept). No restart needed. Deleted providers are pruned from combo tiers (combos left with zero tiers are deleted).
+- **Live rebuild** — provider/combo CRUD rebuilds upstreams synchronously (failure → 500, old chain kept). No restart needed. Deleted providers are pruned from combo tiers (combos left with zero tiers are deleted).
 
 ## Debugging
 

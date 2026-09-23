@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -10,12 +9,17 @@ import (
 	"freegate/internal/infrastructure/providers"
 )
 
+type builtinProxyIn struct {
+	ProxyMode   string `json:"proxy_mode" validate:"proxy_mode"`
+	ProxyPoolID *uint  `json:"proxy_pool_id" validate:"omitempty,min=1"`
+}
+
 // listBuiltinProxies returns the relay selection of every builtin upstream
 // (opencode, kilo, llm7), defaulting to the global rotation.
 func (h *Handler) listBuiltinProxies(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListBuiltinProxies()
+	rows, err := h.store.ListBuiltinProxies(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
@@ -30,23 +34,19 @@ func (h *Handler) updateBuiltinProxy(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusNotFound, "not_found", "unknown builtin provider")
 		return
 	}
-	var in struct {
-		ProxyMode   string `json:"proxy_mode"`
-		ProxyPoolID *uint  `json:"proxy_pool_id"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var in builtinProxyIn
+	if !decodeInput(w, r, &in) {
 		return
 	}
 	// SetBuiltinProxy validates the selection itself (single GetPool), so
 	// no pre-validation here — one query, one error path.
-	row, err := h.store.SetBuiltinProxy(name, in.ProxyMode, in.ProxyPoolID)
+	row, err := h.store.SetBuiltinProxy(r.Context(), name, in.ProxyMode, in.ProxyPoolID)
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, row)

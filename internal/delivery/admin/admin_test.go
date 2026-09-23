@@ -2,12 +2,17 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 
 	"freegate/internal/domain"
 	"freegate/internal/infrastructure/providers"
@@ -26,13 +31,13 @@ func testRouter(h *Handler) chi.Router {
 }
 
 func TestAdmin_CustomProviderLifecycle(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	rebuilt := 0
-	h := New(s, func() error { rebuilt++; return nil }, nil)
+	h := New(s, func(context.Context) error { rebuilt++; return nil }, nil)
 	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -44,7 +49,7 @@ func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 		return w
 	}
 	request("POST", "/api/providers", `{"name":"default-on","base_url":"https://example.test/v1","api_keys":["test-key"]}`, http.StatusCreated)
-	defaulted, err := s.GetProviderByName("default-on")
+	defaulted, err := s.GetProviderByName(t.Context(), "default-on")
 	if err != nil || !defaulted.Enabled {
 		t.Fatalf("omitted enabled should default true: %+v, %v", defaulted, err)
 	}
@@ -56,7 +61,7 @@ func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 	if created.Enabled {
 		t.Fatal("response enabled a disabled provider")
 	}
-	raw, err := s.GetProviderRaw(created.ID)
+	raw, err := s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil || raw.Enabled {
 		t.Fatalf("disabled provider not persisted: %+v, %v", raw, err)
 	}
@@ -65,19 +70,19 @@ func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 	request("POST", "/api/combos", `{"name":"mixed","tiers":[{"provider":"custom:before","model":"pinned"},{"provider":"opencode"}]}`, http.StatusCreated)
 	request("POST", "/api/combos", `{"name":"solo","tiers":[{"provider":"custom:before"}]}`, http.StatusCreated)
 	request("PUT", path, `{"name":"after","base_url":"https://example.test/v1","enabled":true}`, http.StatusOK)
-	combos, err := s.ListCombos()
+	combos, err := s.ListCombos(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(combos) != 2 || combos[0].Tiers[0].Provider != "custom:after" || combos[0].Tiers[0].Model != "pinned" || combos[1].Tiers[0].Provider != "custom:after" {
 		t.Fatalf("rename lost combo references: %+v", combos)
 	}
-	raw, err = s.GetProviderRaw(created.ID)
+	raw, err = s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil || len(raw.APIKeys) != 1 || raw.APIKeys[0] != "test-key" {
 		t.Fatalf("rename lost keys: %+v, %v", raw, err)
 	}
 	request("DELETE", path, "", http.StatusNoContent)
-	combos, err = s.ListCombos()
+	combos, err = s.ListCombos(t.Context())
 	if err != nil || len(combos) != 1 || combos[0].Name != "mixed" || len(combos[0].Tiers) != 1 || combos[0].Tiers[0].Provider != "opencode" {
 		t.Fatalf("delete did not clean up combos: %+v, %v", combos, err)
 	}
@@ -88,9 +93,9 @@ func TestAdmin_CustomProviderLifecycle(t *testing.T) {
 }
 
 func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
-	s, _ := providers.Open("file:admin-create?mode=memory&cache=shared")
+	s, _ := providers.Open(t.Context(), "file:admin-create?mode=memory&cache=shared")
 	rebuilt := 0
-	h := New(s, func() error { rebuilt++; return nil }, nil)
+	h := New(s, func(context.Context) error { rebuilt++; return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "acme", "base_url": "https://api.acme.test/v1", "api_keys": []string{"sk-1"}, "refresh_sec": 60, "enabled": true})
@@ -107,13 +112,13 @@ func TestAdmin_CreateProvider_TriggersRebuild(t *testing.T) {
 }
 
 func TestAdmin_PoolLifecycle(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	rebuilt := 0
-	h := New(s, func() error { rebuilt++; return nil }, nil)
+	h := New(s, func(context.Context) error { rebuilt++; return nil }, nil)
 	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -133,7 +138,7 @@ func TestAdmin_PoolLifecycle(t *testing.T) {
 	path := "/api/pools/" + strconv.FormatUint(uint64(created.ID), 10)
 	request("GET", path, "", http.StatusOK)
 	request("PUT", path, `{"name":"relay-1","proxy_url":"https://relay-2.example.com","no_proxy":"example.com"}`, http.StatusOK)
-	got, err := s.GetPool(created.ID)
+	got, err := s.GetPool(t.Context(), created.ID)
 	if err != nil || got.ProxyURL != "https://relay-2.example.com" || got.NoProxy != "example.com" {
 		t.Fatalf("update not persisted: %v %+v", err, got)
 	}
@@ -145,16 +150,16 @@ func TestAdmin_PoolLifecycle(t *testing.T) {
 }
 
 func TestAdmin_PoolTest_DisablesDeadRelay(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	row, err := s.CreatePool(providers.ProxyPool{Name: "dead-relay", ProxyURL: "http://127.0.0.1:1", Enabled: true})
+	row, err := s.CreatePool(t.Context(), providers.ProxyPool{Name: "dead-relay", ProxyURL: "http://127.0.0.1:1", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/pools/"+strconv.FormatUint(uint64(row.ID), 10)+"/test", nil))
@@ -167,7 +172,7 @@ func TestAdmin_PoolTest_DisablesDeadRelay(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.OK {
 		t.Fatalf("expected ok=false, got %v %s", out, w.Body.String())
 	}
-	got, err := s.GetPool(row.ID)
+	got, err := s.GetPool(t.Context(), row.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,12 +184,13 @@ func TestAdmin_PoolTest_DisablesDeadRelay(t *testing.T) {
 	}
 }
 
-func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {	s, err := providers.Open(t.TempDir() + "/providers.db")
+func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 	for _, body := range []string{`{}`, `{"project_name":"relay-1"}`, `{"vercel_token":"","project_name":"relay-1"}`} {
 		w := httptest.NewRecorder()
@@ -196,12 +202,12 @@ func TestAdmin_VercelDeploy_RequiresToken(t *testing.T) {	s, err := providers.Op
 }
 
 func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
-	s, _ := providers.Open("file:admin-keepkeys?mode=memory&cache=shared")
-	row, err := s.CreateProvider(providers.Provider{Name: "keepme", BaseURL: "https://api.keep.test/v1", APIKeys: []string{"sk-live-abc"}, RefreshSec: 60, Enabled: true})
+	s, _ := providers.Open(t.Context(), "file:admin-keepkeys?mode=memory&cache=shared")
+	row, err := s.CreateProvider(t.Context(), providers.Provider{Name: "keepme", BaseURL: "https://api.keep.test/v1", APIKeys: []string{"sk-live-abc"}, RefreshSec: 60, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "keepme", "base_url": "https://api.keep.test/v1", "refresh_sec": 60, "enabled": true})
@@ -211,7 +217,7 @@ func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	raw, err := s.GetProviderRaw(row.ID)
+	raw, err := s.GetProviderRaw(t.Context(), row.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +227,8 @@ func TestAdmin_UpdateProvider_BlankKeys_KeepsExisting(t *testing.T) {
 }
 
 func TestAdmin_CreateCombo_Tiers(t *testing.T) {
-	s, _ := providers.Open("file:adcombo?mode=memory&cache=shared")
-	h := New(s, func() error { return nil }, nil)
+	s, _ := providers.Open(t.Context(), "file:adcombo?mode=memory&cache=shared")
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "hemat", "tiers": []any{
@@ -249,15 +255,15 @@ func TestAdmin_TestCombo_PerTier(t *testing.T) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"m1"},{"id":"m2"}]}`))
 	}))
 	defer srv.Close()
-	s, _ := providers.Open("file:adcombo-test?mode=memory&cache=shared")
-	if _, err := s.CreateProvider(providers.Provider{Name: "probe-me", BaseURL: srv.URL, APIKeys: []string{"sk-1"}, RefreshSec: 60, Enabled: true}); err != nil {
+	s, _ := providers.Open(t.Context(), "file:adcombo-test?mode=memory&cache=shared")
+	if _, err := s.CreateProvider(t.Context(), providers.Provider{Name: "probe-me", BaseURL: srv.URL, APIKeys: []string{"sk-1"}, RefreshSec: 60, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	combo, err := s.SaveCombo(providers.RouteCombo{Name: "mix", Tiers: []providers.ComboTier{{Provider: "custom:probe-me"}, {Provider: "opencode"}}})
+	combo, err := s.SaveCombo(t.Context(), providers.RouteCombo{Name: "mix", Tiers: []providers.ComboTier{{Provider: "custom:probe-me"}, {Provider: "opencode"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("POST", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10)+"/test", nil)
@@ -290,10 +296,10 @@ func TestAdmin_TestCombo_PerTier(t *testing.T) {
 }
 
 func TestAdmin_DeleteCombo_TriggersRebuild(t *testing.T) {
-	s, _ := providers.Open("file:admin-delcombo?mode=memory&cache=shared")
+	s, _ := providers.Open(t.Context(), "file:admin-delcombo?mode=memory&cache=shared")
 	rebuilt := 0
 	var rebuildErr error
-	h := New(s, func() error { rebuilt++; return rebuildErr }, nil)
+	h := New(s, func(context.Context) error { rebuilt++; return rebuildErr }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	body, _ := json.Marshal(map[string]any{"name": "gone", "tiers": []any{
@@ -340,18 +346,18 @@ func TestAdmin_DeleteCombo_TriggersRebuild(t *testing.T) {
 }
 
 func TestAdmin_DeleteCombo_RebuildError(t *testing.T) {
-	s, _ := providers.Open("file:admin-delcombo-err?mode=memory&cache=shared")
-	combo, err := s.SaveCombo(providers.RouteCombo{Name: "gone", Tiers: []providers.ComboTier{{Provider: "opencode"}}})
+	s, _ := providers.Open(t.Context(), "file:admin-delcombo-err?mode=memory&cache=shared")
+	combo, err := s.SaveCombo(t.Context(), providers.RouteCombo{Name: "gone", Tiers: []providers.ComboTier{{Provider: "opencode"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return errRebuildSentinel }, nil)
+	h := New(s, func(context.Context) error { return errRebuildSentinel }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("DELETE", "/api/combos/"+strconv.FormatUint(uint64(combo.ID), 10), nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
@@ -372,7 +378,7 @@ func TestAdmin_CreateProvider_WarmsCatalog(t *testing.T) {
 	}))
 	defer fake.Close()
 
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +413,7 @@ func TestAdmin_CreateProvider_WarmsCatalog(t *testing.T) {
 // seeds the live catalog: a provider added while the upstream was down
 // (empty cache) routes correctly right after a successful manual test.
 func TestAdmin_TestProvider_WarmsCatalog(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +430,7 @@ func TestAdmin_TestProvider_WarmsCatalog(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	row, err := s.GetProviderByName("late")
+	row, err := s.GetProviderByName(t.Context(), "late")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,12 +473,12 @@ func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
 	}))
 	defer fake.Close()
 
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 
 	w := httptest.NewRecorder()
@@ -492,7 +498,7 @@ func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
 	if len(models) != 2 || models[0] != "m1" || models[1] != "m2" {
 		t.Fatalf("expected [m1 m2], got %v", got["models"])
 	}
-	rows, err := s.ListProviders()
+	rows, err := s.ListProviders(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,37 +506,39 @@ func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
 		t.Fatalf("probe must not store anything, got %d providers", len(rows))
 	}
 
-	// Invalid URL is a 200 ok=false, not a 400: same contract as /test.
+	// Invalid input is rejected at the HTTP boundary before any network call.
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/providers/probe",
 		bytes.NewBufferString(`{"base_url":"not-a-url"}`)))
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	got = nil
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["ok"] != false {
-		t.Fatalf("expected ok=false, got %v", got)
+	if !strings.Contains(w.Body.String(), "validation_error") {
+		t.Fatalf("expected validation error, got %s", w.Body.String())
 	}
 }
 
 func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
-	s, err := providers.Open("file:admin-probe?mode=memory&cache=shared")
+	path := t.TempDir() + "/providers.db"
+	s, err := providers.Open(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := s.CreateProvider(providers.Provider{Name: "bad", BaseURL: "https://api.test/v1", APIKeys: []string{"sk-1"}, RefreshSec: 60, Enabled: true})
+	t.Cleanup(func() { _ = s.Close() })
+	row, err := s.CreateProvider(t.Context(), providers.Provider{Name: "bad", BaseURL: "https://api.test/v1", APIKeys: []string{"sk-1"}, RefreshSec: 60, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad, _ := s.GetProviderRaw(row.ID)
-	bad.BaseURL = "http://exa mple.com\x7f"
-	if _, err := s.UpdateProvider(row.ID, bad); err != nil {
+	raw, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil)
+	rawDB, _ := raw.DB()
+	t.Cleanup(func() { _ = rawDB.Close() })
+	if err := raw.Model(&providers.Provider{}).Where("id = ?", row.ID).Update("base_url", "http://exa mple.com\x7f").Error; err != nil {
+		t.Fatal(err)
+	}
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	req := httptest.NewRequest("POST", "/api/providers/1/test", nil)
@@ -557,15 +565,15 @@ func TestAdmin_TestProvider_BadBaseURL_ReturnsOkFalse(t *testing.T) {
 // a PUT without the models key preserves the stored selection, while an
 // explicit array (even []) overwrites it.
 func TestAdmin_UpdateProvider_OmitModels_KeepsSelection(t *testing.T) {
-	s, err := providers.Open("file:admin-omitmodels?mode=memory&cache=shared")
+	s, err := providers.Open(t.Context(), "file:admin-omitmodels?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := s.CreateProvider(providers.Provider{Name: "sel", BaseURL: "https://api.sel.test/v1", APIKeys: []string{"sk-1"}, Models: []string{"m1", "m2"}, RefreshSec: 60, Enabled: true})
+	row, err := s.CreateProvider(t.Context(), providers.Provider{Name: "sel", BaseURL: "https://api.sel.test/v1", APIKeys: []string{"sk-1"}, Models: []string{"m1", "m2"}, RefreshSec: 60, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := chi.NewRouter()
 	r.Mount("/", testRouter(h))
 	put := func(body string) {
@@ -578,7 +586,7 @@ func TestAdmin_UpdateProvider_OmitModels_KeepsSelection(t *testing.T) {
 		}
 	}
 	put(`{"name":"sel","base_url":"https://api.sel.test/v1","api_keys":["sk-1"],"refresh_sec":60,"enabled":true}`)
-	raw, err := s.GetProviderRaw(row.ID)
+	raw, err := s.GetProviderRaw(t.Context(), row.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +594,7 @@ func TestAdmin_UpdateProvider_OmitModels_KeepsSelection(t *testing.T) {
 		t.Fatalf("omitted models must be preserved, got %v", raw.Models)
 	}
 	put(`{"name":"sel","base_url":"https://api.sel.test/v1","api_keys":["sk-1"],"models":[],"refresh_sec":60,"enabled":true}`)
-	raw, err = s.GetProviderRaw(row.ID)
+	raw, err = s.GetProviderRaw(t.Context(), row.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,12 +613,12 @@ func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
 	}))
 	defer fake.Close()
 
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 
 	w := httptest.NewRecorder()
@@ -636,12 +644,12 @@ func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
 // switching to direct clears the pin, and deleting a pool resets pinned
 // providers to the global rotation.
 func TestAdmin_ProviderProxyPin(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -670,7 +678,7 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 	request("POST", "/api/providers", `{"name":"noid","base_url":"https://example.test/v1","api_keys":["k"],"proxy_mode":"pool"}`, http.StatusBadRequest)
 	path := "/api/providers/" + strconv.FormatUint(uint64(created.ID), 10)
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":"direct"}`, http.StatusOK)
-	raw, err := s.GetProviderRaw(created.ID)
+	raw, err := s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +689,7 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 	// Omitted proxy fields keep the stored pin (omit-vs-explicit contract,
 	// same as models): a partial body must not reset the pin to global.
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1"}`, http.StatusOK)
-	raw, err = s.GetProviderRaw(created.ID)
+	raw, err = s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +698,7 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 	}
 	// Explicit "" clears the pin back to global.
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":""}`, http.StatusOK)
-	raw, err = s.GetProviderRaw(created.ID)
+	raw, err = s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +708,7 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
 	poolPath := "/api/pools/" + strconv.FormatUint(uint64(pool.ID), 10)
 	request("DELETE", poolPath, "", http.StatusNoContent)
-	raw, err = s.GetProviderRaw(created.ID)
+	raw, err = s.GetProviderRaw(t.Context(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,13 +721,13 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 // defaults to global, PUT pins/validates, unknown builtins 404, and bad
 // pools 400.
 func TestAdmin_BuiltinProxy(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	rebuilt := 0
-	h := New(s, func() error { rebuilt++; return nil }, nil)
+	h := New(s, func(context.Context) error { rebuilt++; return nil }, nil)
 	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -757,7 +765,7 @@ func TestAdmin_BuiltinProxy(t *testing.T) {
 	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool","proxy_pool_id":999999}`, http.StatusBadRequest)
 	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool"}`, http.StatusBadRequest)
 	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"direct"}`, http.StatusOK)
-	got, err := s.GetBuiltinProxy("kilo")
+	got, err := s.GetBuiltinProxy(t.Context(), "kilo")
 	if err != nil || got.ProxyMode != "direct" || got.ProxyPoolID != nil {
 		t.Fatalf("direct not stored: %+v %v", got, err)
 	}
@@ -771,12 +779,12 @@ func TestAdmin_BuiltinProxy(t *testing.T) {
 // is never listed, rename/disable take effect, disabled names fail auth,
 // and delete revokes immediately.
 func TestAdmin_ClientKeys(t *testing.T) {
-	s, err := providers.Open(t.TempDir() + "/providers.db")
+	s, err := providers.Open(t.Context(), t.TempDir()+"/providers.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h := New(s, func() error { return nil }, nil)
+	h := New(s, func(context.Context) error { return nil }, nil)
 	r := testRouter(h)
 	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -798,7 +806,8 @@ func TestAdmin_ClientKeys(t *testing.T) {
 		t.Fatalf("create must return raw secret: %v %s", err, w.Body.String())
 	}
 	raw := created.APIKey
-	if !s.VerifyClientKey(raw) {
+	valid, err := s.VerifyClientKey(t.Context(), raw)
+	if err != nil || !valid {
 		t.Fatal("created key must verify")
 	}
 	w = request("GET", "/api/api-keys", "", http.StatusOK)
@@ -826,12 +835,20 @@ func TestAdmin_ClientKeys(t *testing.T) {
 	request("PUT", path, `{"name":"nope","enabled":true}`, http.StatusOK)
 	request("PUT", "/api/api-keys/999999", `{"name":"x","enabled":true}`, http.StatusNotFound)
 	request("PUT", path, `{"name":"client-1","enabled":false}`, http.StatusOK)
-	if s.VerifyClientKey(raw) {
+	valid, err = s.VerifyClientKey(t.Context(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid {
 		t.Fatal("disabled key must not verify")
 	}
 	request("DELETE", "/api/api-keys/999999", "", http.StatusNotFound)
 	request("DELETE", path, "", http.StatusNoContent)
-	if s.VerifyClientKey(raw) {
+	valid, err = s.VerifyClientKey(t.Context(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid {
 		t.Fatal("deleted key must not verify")
 	}
 }

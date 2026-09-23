@@ -44,13 +44,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv, err := server.New(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv, err := server.New(ctx, cfg)
 	if err != nil {
 		log.Fatalf("create server: %v", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	if err := srv.Run(ctx); err != nil {
 		log.Fatalf("server error: %v", err)

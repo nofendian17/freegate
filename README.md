@@ -111,7 +111,7 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `RESPONSE_MODELS` | `muse-spark,muse_spark` | Comma-separated substrings routing models to the Responses API |
 | `MESSAGE_MODELS` | `union-alpha` | Comma-separated substrings routing models to the Messages API |
 | `UPSTREAM_CAPTURE` | `false` | Log raw upstream request/response lines via slog (debug only — contains full conversation content) |
-| `PROVIDERS_DB_PATH` | `./data/providers.db` | SQLite file for custom providers, tiered combos, and seeded auth + upstream settings. Auto-created; mount a volume over `./data` in docker. |
+| `PROVIDERS_DB_PATH` | `./data/providers.db` | SQLite file for custom providers, tiered combos, and seeded auth + upstream settings. Auto-created; local files are restricted to `0600` and their directory to `0700` on startup. |
 
 Custom providers, combos, pools, and seeded auth/upstream settings live in SQLite and are managed at `/providers` or via `/api/providers`, `/api/combos`, `/api/pools` (no restart needed).
 

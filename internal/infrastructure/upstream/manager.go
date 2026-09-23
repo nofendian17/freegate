@@ -40,12 +40,14 @@ func NewProviderManager(s *providers.Store, tr *http.Transport) *ProviderManager
 
 // relayPools resolves a provider's edge-relay setting to a pool list for
 // CustomUpstream.SetRelayPools (see ResolveRelayPools).
-func (m *ProviderManager) relayPools(full providers.Provider) []RelayPool {
-	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, m.store.GetPool)
+func (m *ProviderManager) relayPools(ctx context.Context, full providers.Provider) []RelayPool {
+	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (providers.ProxyPool, error) {
+		return m.store.GetPool(ctx, id)
+	})
 }
 
-func (m *ProviderManager) Rebuild() error {
-	rows, err := m.store.ListProviders()
+func (m *ProviderManager) Rebuild(ctx context.Context) error {
+	rows, err := m.store.ListProviders(ctx)
 	if err != nil {
 		return err
 	}
@@ -55,7 +57,7 @@ func (m *ProviderManager) Rebuild() error {
 		if !r.Enabled {
 			continue
 		}
-		full, err := m.store.GetProviderRaw(r.ID)
+		full, err := m.store.GetProviderRaw(ctx, r.ID)
 		if err != nil {
 			return err
 		}
@@ -63,7 +65,7 @@ func (m *ProviderManager) Rebuild() error {
 			slog.Warn("custom provider has no models selected, it will not route", "provider", full.Name)
 		}
 		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, m.tr)
-		fresh.SetRelayPools(m.relayPools(full))
+		fresh.SetRelayPools(m.relayPools(ctx, full))
 		m.mu.RLock()
 		old := m.customs[r.Name]
 		m.mu.RUnlock()
@@ -94,14 +96,14 @@ func (m *ProviderManager) Rebuild() error {
 // tick. ListModels stores the catalog in the upstream's cache as a side
 // effect; the ComboRouter holds the same object pointers, so no further
 // rebuild is needed. Best-effort: callers log the error and continue.
-func (m *ProviderManager) Warm(name string) ([]domain.Model, error) {
+func (m *ProviderManager) Warm(ctx context.Context, name string) ([]domain.Model, error) {
 	m.mu.RLock()
 	u := m.customs[name]
 	m.mu.RUnlock()
 	if u == nil {
 		return nil, fmt.Errorf("unknown custom provider %q", name)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return u.ListModels(ctx)
 }

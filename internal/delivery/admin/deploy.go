@@ -15,10 +15,12 @@ import (
 	"freegate/internal/infrastructure/providers"
 )
 
-const (
-	vercelAPI  = "https://api.vercel.com"
-	maxBodyLen = 1 << 20
-)
+const vercelAPI = "https://api.vercel.com"
+
+type vercelDeployIn struct {
+	VercelToken string `json:"vercel_token" validate:"required,max=4096"`
+	ProjectName string `json:"project_name" validate:"omitempty,resource_name"`
+}
 
 const vercelRelayCode = `
 export const config = { runtime: "edge" };
@@ -140,19 +142,11 @@ func deployClient(h *Handler) *http.Client {
 // deployPoolToVercel deploys the edge relay function and stores the
 // resulting pool. The Vercel token is request-scoped only, never stored.
 func (h *Handler) deployPoolToVercel(w http.ResponseWriter, r *http.Request) {
-	var reqBody struct {
-		VercelToken string `json:"vercel_token"`
-		ProjectName string `json:"project_name"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&reqBody); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var reqBody vercelDeployIn
+	if !decodeInput(w, r, &reqBody) {
 		return
 	}
-	vercelToken := strings.TrimSpace(reqBody.VercelToken)
-	if vercelToken == "" {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", "Vercel API token is required")
-		return
-	}
+	vercelToken := reqBody.VercelToken
 	projectName := relayProjectName(reqBody.ProjectName)
 	client := deployClient(h)
 
@@ -217,13 +211,13 @@ func (h *Handler) deployPoolToVercel(w http.ResponseWriter, r *http.Request) {
 	urlStr, _ := ready["url"].(string)
 	deployURL := "https://" + urlStr
 
-	row, err := h.store.CreatePool(providers.ProxyPool{Name: projectName, ProxyURL: deployURL, Enabled: true})
+	row, err := h.store.CreatePool(r.Context(), providers.ProxyPool{Name: projectName, ProxyURL: deployURL, Enabled: true})
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusCreated, map[string]any{"pool": row, "deploy_url": deployURL})

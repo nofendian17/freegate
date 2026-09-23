@@ -25,6 +25,11 @@ type MetricsProvider interface {
 	Metrics() map[string]any
 }
 
+// ReadinessChecker verifies a required backing service before /ready passes.
+type ReadinessChecker interface {
+	PingContext(ctx context.Context) error
+}
+
 // Handler handles HTTP requests for the freegate proxy.
 // It supports OpenAI, Claude, and Gemini API formats through automatic
 // format detection and translation.
@@ -32,8 +37,14 @@ type Handler struct {
 	chat   ChatProxy
 	models ModelLister
 	mtr    MetricsProvider
+	ready  ReadinessChecker
 }
 
 func New(chat ChatProxy, models ModelLister, mtr MetricsProvider) *Handler {
 	return &Handler{chat: chat, models: models, mtr: mtr}
+}
+
+func (h *Handler) WithReadiness(checker ReadinessChecker) *Handler {
+	h.ready = checker
+	return h
 }
