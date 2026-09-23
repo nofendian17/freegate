@@ -80,6 +80,35 @@ func TestDashboard_ModelTestParseFailureMarksError(t *testing.T) {
 	}
 }
 
+// TestRequestsPartial_LocalTimeHook pins the timezone contract: each row
+// time is a <time> with an ISO datetime attr and data-localtime, so
+// dashboard.js can rewrite it in the viewer's timezone. The UTC fallback
+// text stays for no-JS.
+func TestRequestsPartial_LocalTimeHook(t *testing.T) {
+	h := New(&fakeData{
+		metrics: map[string]any{},
+		models:  []domain.Model{},
+		reqs: []domain.RequestLogEntry{
+			{Ts: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC), Method: "POST", Path: "/v1/chat/completions", Model: "m", Upstream: "kilo", Status: 200, DurationMs: 5, IP: "127.0.0.1"},
+		},
+		ts: nil, uptime: 1, start: time.Now().Unix(),
+	}, mustLoadTemplates(t), webStaticFS(t))
+
+	rr := serveViaRoutes(h, "GET", "/partials/requests")
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<time datetime="2026-09-22T12:00:00Z" data-localtime>`,
+		`>12:00:00</time>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("requests row missing local-time hook %q, got: %s", want, body)
+		}
+	}
+}
+
 // TestRequestsPartial_StatusToneHook pins the status tone test hook: a 200
 // row emits data-status-tone="green", which the template's {{if eq}}
 // branches map to achromatic styling (palette stays achromatic per
@@ -131,8 +160,7 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	}
 	js := readStaticFile(t, "js/providers.js")
 	for _, want := range []string{
-		"function withBusy(",      // in-flight button states
-		"function getJSON(",       // HTTP-status-checked fetch
+		"window.FG",               // shared helpers from ui.js
 		`name="tier_provider"`,    // named dynamic form fields
 		"no custom providers yet", // actionable empty state
 		"no combos yet",           // actionable empty state
@@ -141,6 +169,15 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("providers.js missing slice-2 behavior %q", want)
+		}
+	}
+	shared := readStaticFile(t, "js/ui.js")
+	for _, want := range []string{
+		"function withBusy(", // in-flight button states
+		"function getJSON(",  // HTTP-status-checked fetch
+	} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("ui.js missing shared behavior %q", want)
 		}
 	}
 }
@@ -170,6 +207,167 @@ func TestProvidersPage_PoolModalA11y(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pool modal missing accessible behavior %q", want)
+		}
+	}
+}
+
+// TestSettingsPage_ClientKeysSection pins the settings page contract:
+// API key management table, creation form, and the JS that drives them.
+// Shared fetch/DOM helpers live in ui.js; page scripts bind via window.FG.
+func TestSettingsPage_ClientKeysSection(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/settings")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="key-table"`,
+		`id="key-err"`,
+		`id="key-created"`,
+		`id="key-form"`,
+		`id="key-new"`,
+		`id="key-save"`,
+		`id="key-cancel"`,
+		`id="kf-id"`,
+		`id="kf-name"`,
+		`id="kf-enabled"`,
+		`for="kf-name"`,
+		`/api/api-keys`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings client keys missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/settings.js")
+	for _, want := range []string{
+		"window.FG", // shared helpers from ui.js
+		"loadKeys",
+		"renderKeys",
+		"keyCreated",
+		"showCreatedKey", // copyable one-time secret banner
+		"/api/api-keys/",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("settings.js missing %q", want)
+		}
+	}
+	shared := readStaticFile(t, "js/ui.js")
+	for _, want := range []string{
+		"window.FG",
+		"function esc",
+		"function show",
+		"function getJSON",
+		"function withBusy",
+	} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("ui.js missing %q", want)
+		}
+	}
+	prv := readStaticFile(t, "js/providers.js")
+	if strings.Contains(prv, "function getJSON") || strings.Contains(prv, "function withBusy") {
+		t.Errorf("providers.js must use shared ui.js helpers, not duplicate them")
+	}
+}
+
+// TestSettingsPage_Nav pins the settings nav entry (desktop + mobile).
+func TestSettingsPage_Nav(t *testing.T) {
+	h := newTestHandler(t)
+	for _, path := range []string{"/", "/providers", "/settings"} {
+		w := serveViaRoutes(h, "GET", path)
+		if w.Code != 200 {
+			t.Fatalf("%s: status = %d, want 200", path, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `href="/settings"`) {
+			t.Errorf("%s: nav missing settings entry", path)
+		}
+	}
+}
+
+// TestProvidersPage_BuiltinProxySection pins the built-in providers'
+// proxy section: one labeled dropdown per builtin plus the JS that loads
+// and saves their relay selection.
+func TestProvidersPage_BuiltinProxySection(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="builtin-table"`,
+		`id="builtin-err"`,
+		`id="builtin-proxy-opencode"`,
+		`id="builtin-proxy-kilo"`,
+		`id="builtin-proxy-llm7"`,
+		`data-builtin="opencode"`,
+		`data-builtin="kilo"`,
+		`data-builtin="llm7"`,
+		`/api/builtin-proxies`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("builtin proxy section missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/providers.js")
+	for _, want := range []string{
+		"loadBuiltinProxies",
+		"renderBuiltinProxyOptions",
+		"setBuiltinProxy",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("providers.js missing %q", want)
+		}
+	}
+}
+
+// TestProvidersPage_ProviderEditorA11y pins the provider editor's dialog
+// contract: titled role=dialog, labeled inputs, a model checklist filter,
+// and the JS behaviors behind empty-save, focus restore, header warnings,
+// and human-readable test output.
+func TestProvidersPage_ProviderEditorA11y(t *testing.T) {
+	h := newTestHandler(t)
+	w := serveViaRoutes(h, "GET", "/providers")
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`id="provider-modal"`,
+		`role="dialog"`, // titled dialog
+		`aria-labelledby="provider-modal-title"`,
+		`for="f-name"`, // labeled inputs
+		`for="f-base-url"`,
+		`for="f-api-keys"`,
+		`for="f-headers"`,
+		`for="f-refresh"`,
+		`for="f-priority"`,
+		`for="f-enabled"`,
+		`for="f-proxy"`,        // per-provider proxy dropdown
+		`inputmode="url"`,      // URL keyboard on mobile
+		`id="f-models-filter"`, // model checklist filter
+		`id="f-models-select-all"`,
+		`id="f-models-deselect-all"`,
+		`id="f-proxy"`,
+		`id="f-api-keys-label"`, // hint toggles new vs edit
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("provider editor missing %q", want)
+		}
+	}
+	js := readStaticFile(t, "js/providers.js")
+	for _, want := range []string{
+		"no models selected",   // empty-save guard on new providers
+		"restoreProviderFocus", // focus restore after save/delete
+		"testSummary",          // human-readable test output
+		"applyModelFilter",     // checklist filter behavior
+		"setModelsChecked",     // bulk select/deselect
+		"parseProxy",           // per-provider proxy selection
+		"renderProxyOptions",   // proxy dropdown options from pools
+		"line(s) without",      // malformed header warning
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("providers.js missing %q", want)
 		}
 	}
 }

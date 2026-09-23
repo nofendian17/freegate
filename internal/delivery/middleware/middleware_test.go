@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -301,6 +302,69 @@ func TestApiAuth_AdminSessionCookie(t *testing.T) {
 	if recBad.Code != 401 {
 		t.Fatalf("tampered cookie should 401, got %d", recBad.Code)
 	}
+}
+
+func TestApiAuthDB_ClientKeys(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	checker := &stubChecker{valid: map[string]bool{"fg_dbkey1": true, "fg_off": false}}
+	m := ApiAuthDB(nil, "", checker)
+
+	// enabled DB key passes and records use
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer fg_dbkey1")
+	rec := httptest.NewRecorder()
+	m(h).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("db key should pass, got %d", rec.Code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if checker.touched["fg_dbkey1"] != 1 {
+		t.Fatalf("db key use must be recorded, got %v", checker.touched)
+	}
+
+	// disabled DB key rejected
+	bad := httptest.NewRequest("GET", "/v1/models", nil)
+	bad.Header.Set("X-API-Key", "fg_off")
+	recBad := httptest.NewRecorder()
+	m(h).ServeHTTP(recBad, bad)
+	if recBad.Code != 401 {
+		t.Fatalf("disabled db key should 401, got %d", recBad.Code)
+	}
+
+	// unknown key rejected even with a checker present
+	unk := httptest.NewRequest("GET", "/v1/models", nil)
+	unk.Header.Set("X-API-Key", "nope")
+	recUnk := httptest.NewRecorder()
+	m(h).ServeHTTP(recUnk, unk)
+	if recUnk.Code != 401 {
+		t.Fatalf("unknown key should 401, got %d", recUnk.Code)
+	}
+
+	// empty key passes through to config/admin paths: with neither
+	// configured, the request is rejected (never accepted by the checker)
+	empty := httptest.NewRequest("GET", "/v1/models", nil)
+	recEmpty := httptest.NewRecorder()
+	m(h).ServeHTTP(recEmpty, empty)
+	if recEmpty.Code != 401 {
+		t.Fatalf("empty key should 401, got %d", recEmpty.Code)
+	}
+}
+
+type stubChecker struct {
+	valid   map[string]bool
+	touched map[string]int
+	mu      sync.Mutex
+}
+
+func (s *stubChecker) VerifyClientKey(raw string) bool { return s.valid[raw] }
+
+func (s *stubChecker) TouchClientKey(raw string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.touched == nil {
+		s.touched = map[string]int{}
+	}
+	s.touched[raw]++
 }
 
 func TestAdminAuth_Cookie(t *testing.T) {

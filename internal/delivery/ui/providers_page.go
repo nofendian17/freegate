@@ -7,7 +7,6 @@ type providersPageData struct {
 	Active     string
 	Meta       bool
 	Playground bool
-	Palette    bool
 	Scripts    []string
 }
 
@@ -18,8 +17,7 @@ func (h *Handler) providersPage(w http.ResponseWriter, r *http.Request) {
 		Active:     "providers",
 		Meta:       false,
 		Playground: false,
-		Palette:    true,
-		Scripts:    []string{"/static/js/providers.js"},
+		Scripts:    []string{"/static/js/ui.js", "/static/js/providers.js"},
 	}
 	if err := h.templates.ExecuteTemplate(w, "providers.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -100,6 +100,10 @@ func (o *OpenCodeUpstream) Name() string {
 	return "opencode"
 }
 
+// SetRelayPools overrides edge-relay behavior: nil follows the global
+// rotation, an empty slice means direct, otherwise pinned to the pools.
+func (o *OpenCodeUpstream) SetRelayPools(pools []RelayPool) { o.client.SetRelayPools(pools) }
+
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	// Client-version probe runs alongside the model catalog refresher so
 	// the advertised User-Agent tracks OpenCode releases. Fail-open: a

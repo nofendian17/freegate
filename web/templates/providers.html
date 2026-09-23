@@ -37,7 +37,7 @@
       </div>
 
       <!-- Provider editor -->
-      <div id="provider-modal" x-data x-show="$store.ui.providerEditor" x-cloak class="border-t border-hairline p-5">
+      <div id="provider-modal" x-data x-show="$store.ui.providerEditor" x-cloak role="dialog" aria-labelledby="provider-modal-title" class="border-t border-hairline p-5">
         <div class="mb-4 flex items-center justify-between">
           <h3 id="provider-modal-title" class="text-body font-medium text-ink">Provider</h3>
           <button id="provider-modal-close" type="button" class="rounded-2xl px-3 py-1.5 text-caption text-mid-gray transition-colors hover:bg-canvas hover:text-ink">Cancel</button>
@@ -46,38 +46,51 @@
         <div id="provider-test-out" class="mb-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
         <form id="provider-form" class="grid gap-5 sm:grid-cols-2">
           <input type="hidden" id="f-id">
-          <label class="flex flex-col gap-1.5">
+          <label class="flex flex-col gap-1.5" for="f-name">
             <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Name</span>
             <input id="f-name" required placeholder="my-provider" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
           </label>
-          <label class="flex flex-col gap-1.5">
+          <label class="flex flex-col gap-1.5" for="f-base-url">
             <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Base URL</span>
-            <input id="f-base-url" required placeholder="https://api.example.com/v1" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
+            <input id="f-base-url" required placeholder="https://api.example.com/v1" inputmode="url" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray focus:ring-1 focus:ring-hairline">
           </label>
-          <label class="flex flex-col gap-1.5 sm:col-span-2">
-            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">API keys — one per line (blank keeps existing keys)</span>
+          <label class="flex flex-col gap-1.5 sm:col-span-2" for="f-api-keys">
+            <span id="f-api-keys-label" class="text-caption uppercase tracking-[0.05em] text-mid-gray">API keys — one per line</span>
             <textarea id="f-api-keys" rows="2" placeholder="sk-…" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray"></textarea>
           </label>
-          <label class="flex flex-col gap-1.5 sm:col-span-2">
+          <label class="flex flex-col gap-1.5 sm:col-span-2" for="f-headers">
             <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Headers — KEY=Value, one per line</span>
             <textarea id="f-headers" rows="2" placeholder="X-Custom=1" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray"></textarea>
+          </label>
+          <label class="flex flex-col gap-1.5 sm:col-span-2" for="f-proxy">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Proxy</span>
+            <select id="f-proxy" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
+              <option value="">Global rotation (all active pools)</option>
+              <option value="direct">Direct — no proxy</option>
+            </select>
           </label>
           <div class="sm:col-span-2">
             <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">Models — only checked models are stored and routed</p>
             <p id="f-legacy" class="mb-2 hidden text-caption text-mid-gray">Legacy row: the whole catalog routes. Run Test, then Save to lock the selection.</p>
-            <div id="f-models" class="flex max-h-56 flex-wrap gap-x-6 gap-y-2 overflow-auto rounded-2xl bg-canvas p-3 text-caption text-mid-gray">
+            <input id="f-models-filter" type="search" hidden placeholder="Filter models…" aria-label="Filter models"
+                   class="mb-2 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none placeholder:text-mid-gray">
+            <div class="mb-2 flex flex-wrap gap-2">
+              <button id="f-models-select-all" type="button" class="rounded-2xl border border-hairline bg-paper px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-canvas">Select all</button>
+              <button id="f-models-deselect-all" type="button" class="rounded-2xl border border-hairline bg-paper px-3 py-1.5 text-caption font-medium text-ink transition-colors hover:bg-canvas">Deselect all</button>
+            </div>
+            <div id="f-models" class="flex max-h-56 flex-col gap-1 overflow-auto rounded-2xl bg-canvas p-3 text-caption text-mid-gray">
               <span>Run Test to load the model list from the upstream.</span>
             </div>
           </div>
-          <label class="flex flex-col gap-1.5">
+          <label class="flex flex-col gap-1.5" for="f-refresh">
             <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Refresh (sec)</span>
             <input id="f-refresh" type="number" min="0" value="60" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
           </label>
-          <label class="flex flex-col gap-1.5">
+          <label class="flex flex-col gap-1.5" for="f-priority">
             <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Priority</span>
             <input id="f-priority" type="number" value="0" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
           </label>
-          <label class="flex items-center gap-2 text-body sm:col-span-2">
+          <label class="flex items-center gap-2 text-body sm:col-span-2" for="f-enabled">
             <input id="f-enabled" type="checkbox" checked class="size-4 accent-[#0a0a0a]"> Enabled
           </label>
           <div class="flex flex-wrap gap-2 sm:col-span-2">
@@ -86,6 +99,48 @@
             <button id="provider-delete" type="button" class="rounded-2xl px-4 py-2 text-body font-medium text-ember transition-colors hover:bg-canvas">Delete</button>
           </div>
         </form>
+      </div>
+    </section>
+
+    <!-- Built-in Providers -->
+    <section class="mb-6 min-w-0 overflow-hidden rounded-3xl border border-hairline bg-paper shadow-card">
+      <div class="border-b border-hairline p-5">
+        <h2 class="text-body font-medium text-ink">Built-in providers</h2>
+        <p class="mt-1 text-caption text-mid-gray">Default upstreams — proxy choice applies immediately on change</p>
+      </div>
+      <div id="builtin-err" role="alert" class="mx-5 mt-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
+      <div class="overflow-auto">
+        <table class="w-full text-left text-body">
+          <thead>
+            <tr class="border-b border-hairline text-caption uppercase tracking-[0.05em] text-mid-gray">
+              <th class="px-5 py-3 font-medium">Name</th>
+              <th class="px-5 py-3 font-medium">Proxy</th>
+            </tr>
+          </thead>
+          <tbody id="builtin-table">
+            <tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
+              <td class="px-5 py-3 font-mono text-caption">opencode</td>
+              <td class="px-5 py-3"><select id="builtin-proxy-opencode" data-builtin="opencode" aria-label="Proxy for opencode" class="rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none">
+                <option value="">Global rotation (all active pools)</option>
+                <option value="direct">Direct — no proxy</option>
+              </select></td>
+            </tr>
+            <tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
+              <td class="px-5 py-3 font-mono text-caption">kilo</td>
+              <td class="px-5 py-3"><select id="builtin-proxy-kilo" data-builtin="kilo" aria-label="Proxy for kilo" class="rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none">
+                <option value="">Global rotation (all active pools)</option>
+                <option value="direct">Direct — no proxy</option>
+              </select></td>
+            </tr>
+            <tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">
+              <td class="px-5 py-3 font-mono text-caption">llm7</td>
+              <td class="px-5 py-3"><select id="builtin-proxy-llm7" data-builtin="llm7" aria-label="Proxy for llm7" class="rounded-2xl border border-hairline bg-canvas px-3 py-2 text-caption text-ink outline-none">
+                <option value="">Global rotation (all active pools)</option>
+                <option value="direct">Direct — no proxy</option>
+              </select></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -153,23 +208,6 @@
     <footer class="mt-12 border-t border-hairline pt-6 text-center text-caption text-mid-gray">freegate — configuration</footer>
   </main>
 
-  <!-- Command palette -->
-  <div id="command-palette" x-data x-show="$store.ui.palette" x-cloak
-       @keydown.escape.window="$store.ui.palette = false"
-       class="fixed inset-0 z-50 flex items-start justify-center bg-ink/40 p-4 pt-32"
-       role="dialog" aria-modal="true" aria-labelledby="palette-title">
-    <div class="w-full max-w-xl rounded-3xl border border-hairline bg-paper p-5 shadow-card" @click.outside="$store.ui.palette = false">
-      <div class="mb-4 flex items-center justify-between">
-        <span class="text-body font-medium text-ink" id="palette-title">Command palette</span>
-        <span class="text-caption text-mid-gray">Esc to close</span>
-      </div>
-      <input id="palette-input" aria-label="Command palette search" autocomplete="off"
-             placeholder="Type a command (new, test, edit, delete, toggle)…"
-             class="w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
-      <div id="palette-results" class="mt-4 flex max-h-72 flex-col gap-1 overflow-y-auto"></div>
-    </div>
-  </div>
-
   <!-- Pool modal -->
   <div id="pool-modal" x-data x-show="$store.ui.poolModal" x-cloak
        @keydown.escape.window="$store.ui.poolModal = false"
@@ -221,6 +259,6 @@
     </div>
   </div>
 
-  <span hidden data-api="/api/providers /api/combos /api/pools /api/pools/vercel-deploy"></span>
+  <span hidden data-api="/api/providers /api/combos /api/pools /api/pools/vercel-deploy /api/builtin-proxies"></span>
 </body>
 </html>

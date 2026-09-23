@@ -27,6 +27,10 @@ func (k *KiloUpstream) Name() string {
 	return "kilo"
 }
 
+// SetRelayPools overrides edge-relay behavior: nil follows the global
+// rotation, an empty slice means direct, otherwise pinned to the pools.
+func (k *KiloUpstream) SetRelayPools(pools []RelayPool) { k.client.SetRelayPools(pools) }
+
 func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	refresher := NewRefresher("kilo", func(ctx context.Context) error {
 		models, err := k.ListModels(ctx)

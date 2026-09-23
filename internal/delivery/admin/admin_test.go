@@ -630,3 +630,208 @@ func TestAdmin_Probe_ForwardsHeaders(t *testing.T) {
 		t.Fatalf("expected custom header forwarded, got %q", gotHeader)
 	}
 }
+
+// TestAdmin_ProviderProxyPin covers per-provider proxy selection over the
+// API: pinning stores mode+pool, unknown/missing pool ids fail with 400,
+// switching to direct clears the pin, and deleting a pool resets pinned
+// providers to the global rotation.
+func TestAdmin_ProviderProxyPin(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/pools", `{"name":"edge-1","proxy_url":"https://relay.example.com"}`, http.StatusCreated)
+	var pool providers.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &pool); err != nil || pool.ID == 0 {
+		t.Fatalf("create pool: %v %s", err, w.Body.String())
+	}
+	pin := `"proxy_mode":"pool","proxy_pool_id":` + strconv.FormatUint(uint64(pool.ID), 10)
+	w = request("POST", "/api/providers", `{"name":"pinned","base_url":"https://example.test/v1","api_keys":["k"],`+pin+`}`, http.StatusCreated)
+	var created providers.Provider
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ProxyMode != "pool" || created.ProxyPoolID == nil || *created.ProxyPoolID != pool.ID {
+		t.Fatalf("pin not stored: %+v", created)
+	}
+	request("POST", "/api/providers", `{"name":"badpool","base_url":"https://example.test/v1","api_keys":["k"],"proxy_mode":"pool","proxy_pool_id":999999}`, http.StatusBadRequest)
+	request("POST", "/api/providers", `{"name":"noid","base_url":"https://example.test/v1","api_keys":["k"],"proxy_mode":"pool"}`, http.StatusBadRequest)
+	path := "/api/providers/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":"direct"}`, http.StatusOK)
+	raw, err := s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeDirect || raw.ProxyPoolID != nil {
+		t.Fatalf("direct must clear pin: %+v", raw)
+	}
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
+	// Omitted proxy fields keep the stored pin (omit-vs-explicit contract,
+	// same as models): a partial body must not reset the pin to global.
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1"}`, http.StatusOK)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModePool || raw.ProxyPoolID == nil || *raw.ProxyPoolID != pool.ID {
+		t.Fatalf("omitted proxy must keep pin: %+v", raw)
+	}
+	// Explicit "" clears the pin back to global.
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":""}`, http.StatusOK)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("explicit global must clear pin: %+v", raw)
+	}
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
+	poolPath := "/api/pools/" + strconv.FormatUint(uint64(pool.ID), 10)
+	request("DELETE", poolPath, "", http.StatusNoContent)
+	raw, err = s.GetProviderRaw(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != providers.ProxyModeGlobal || raw.ProxyPoolID != nil {
+		t.Fatalf("pool delete must reset pin to global: %+v", raw)
+	}
+}
+
+// TestAdmin_BuiltinProxy covers the builtin relay-selection API: list
+// defaults to global, PUT pins/validates, unknown builtins 404, and bad
+// pools 400.
+func TestAdmin_BuiltinProxy(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	rebuilt := 0
+	h := New(s, func() error { rebuilt++; return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("GET", "/api/builtin-proxies", "", http.StatusOK)
+	var list struct {
+		Data []providers.BuiltinProxy `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Data) != 3 {
+		t.Fatalf("list builtin: %v %s", err, w.Body.String())
+	}
+	for _, b := range list.Data {
+		if providers.NormalizeProxyMode(b.ProxyMode) != providers.ProxyModeGlobal {
+			t.Fatalf("default must be global: %+v", b)
+		}
+	}
+	w = request("POST", "/api/pools", `{"name":"edge-1","proxy_url":"https://relay.example.com"}`, http.StatusCreated)
+	var pool providers.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &pool); err != nil || pool.ID == 0 {
+		t.Fatalf("create pool: %v %s", err, w.Body.String())
+	}
+	pin := `{"proxy_mode":"pool","proxy_pool_id":` + strconv.FormatUint(uint64(pool.ID), 10) + `}`
+	w = request("PUT", "/api/builtin-proxies/kilo", pin, http.StatusOK)
+	var updated providers.BuiltinProxy
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil || updated.ProxyMode != "pool" {
+		t.Fatalf("pin builtin: %v %s", err, w.Body.String())
+	}
+	request("PUT", "/api/builtin-proxies/nope", pin, http.StatusNotFound)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool","proxy_pool_id":999999}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool"}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"direct"}`, http.StatusOK)
+	got, err := s.GetBuiltinProxy("kilo")
+	if err != nil || got.ProxyMode != "direct" || got.ProxyPoolID != nil {
+		t.Fatalf("direct not stored: %+v %v", got, err)
+	}
+	if rebuilt != 3 {
+		t.Fatalf("rebuilds=%d, want 3", rebuilt)
+	}
+}
+
+// TestAdmin_ClientKeys covers the client key lifecycle over the API:
+// create returns the secret, reveal returns it again later, the raw key
+// is never listed, rename/disable take effect, disabled names fail auth,
+// and delete revokes immediately.
+func TestAdmin_ClientKeys(t *testing.T) {
+	s, err := providers.Open(t.TempDir() + "/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func() error { return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/api-keys", `{"name":"client-1"}`, http.StatusCreated)
+	var created struct {
+		ID     uint   `json:"id"`
+		Name   string `json:"name"`
+		Prefix string `json:"prefix"`
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil || created.APIKey == "" {
+		t.Fatalf("create must return raw secret: %v %s", err, w.Body.String())
+	}
+	raw := created.APIKey
+	if !s.VerifyClientKey(raw) {
+		t.Fatal("created key must verify")
+	}
+	w = request("GET", "/api/api-keys", "", http.StatusOK)
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list.Data) != 1 {
+		t.Fatalf("list: %v %s", err, w.Body.String())
+	}
+	for k := range list.Data[0] {
+		if k == "key_hash" || k == "api_key" {
+			t.Fatalf("list must not leak secret material: %v", list.Data[0])
+		}
+	}
+	path := "/api/api-keys/" + strconv.FormatUint(uint64(created.ID), 10)
+	request("POST", "/api/api-keys", `{"name":"bad name!"}`, http.StatusBadRequest)
+	w = request("POST", path+"/reveal", "", http.StatusOK)
+	var revealed struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &revealed); err != nil || revealed.APIKey != raw {
+		t.Fatalf("reveal must return the secret: %v %s", err, w.Body.String())
+	}
+	request("POST", "/api/api-keys/999999/reveal", "", http.StatusNotFound)
+	request("PUT", path, `{"name":"nope","enabled":true}`, http.StatusOK)
+	request("PUT", "/api/api-keys/999999", `{"name":"x","enabled":true}`, http.StatusNotFound)
+	request("PUT", path, `{"name":"client-1","enabled":false}`, http.StatusOK)
+	if s.VerifyClientKey(raw) {
+		t.Fatal("disabled key must not verify")
+	}
+	request("DELETE", "/api/api-keys/999999", "", http.StatusNotFound)
+	request("DELETE", path, "", http.StatusNoContent)
+	if s.VerifyClientKey(raw) {
+		t.Fatal("deleted key must not verify")
+	}
+}

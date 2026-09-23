@@ -97,6 +97,29 @@ func syncRelayPools(pstore *providers.Store) {
 	upstream.SharedRelay.SetPools(rp)
 }
 
+// applyBuiltinProxies pins the builtin upstreams (opencode, kilo, llm7) to
+// their configured pools. Unconfigured builtins follow the global
+// rotation. Runs on startup and on every rebuild so pool edits,
+// deletes, and disables take effect without a restart.
+func applyBuiltinProxies(pstore *providers.Store, opencode *upstream.OpenCodeUpstream, kilo *upstream.KiloUpstream, llm7 *upstream.LLM7Upstream) {
+	settings, err := pstore.ListBuiltinProxies()
+	if err != nil {
+		return
+	}
+	byName := make(map[string]providers.BuiltinProxy, len(settings))
+	for _, b := range settings {
+		byName[b.Name] = b
+	}
+	for name, set := range map[string]func([]upstream.RelayPool){
+		"opencode": opencode.SetRelayPools,
+		"kilo":     kilo.SetRelayPools,
+		"llm7":     llm7.SetRelayPools,
+	} {
+		b := byName[name]
+		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, pstore.GetPool))
+	}
+}
+
 // New constructs a Server from configuration. It wires all
 // dependencies (upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
@@ -126,6 +149,7 @@ func New(cfg *config.Config) (*Server, error) {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
 	syncRelayPools(pstore)
+	applyBuiltinProxies(pstore, opencode, kilo, llm7)
 	combo := upstream.NewComboRouter(infraRouter)
 	lookup := func(name string) domain.Upstream {
 		switch name {
@@ -187,7 +211,7 @@ func New(cfg *config.Config) (*Server, error) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CORS)
 
-	apiAuth := middleware.ApiAuth(cfg.APIKey, cfg.AdminToken)
+	apiAuth := middleware.ApiAuthDB(cfg.APIKey, cfg.AdminToken, pstore)
 	adminAuth := middleware.AdminAuth(cfg.AdminToken)
 
 	// Public routes — must be before admin mount so they are not shadowed.
@@ -204,6 +228,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return err
 		}
 		syncRelayPools(pstore)
+		applyBuiltinProxies(pstore, opencode, kilo, llm7)
 		rows, err := comboRows(pstore)
 		if err != nil {
 			return err

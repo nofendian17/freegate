@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"freegate/internal/domain"
 )
 
 // TestCustom_Match_ExplicitSelection verifies only curated models route
@@ -64,10 +66,36 @@ func TestCustom_ListModels_LegacyNil(t *testing.T) {
 	}
 }
 
-// TestCustom_ListModels_IntersectsSelection verifies refresh semantics:
-// fresh metadata overlays the selection, unselected catalog entries never
-// enter the cache, and selected models missing from a fetch keep their
-// entry so one bad refresh cannot drop an explicit choice.
+// TestCustom_ListModels_NewSelectedAppears is a regression test for
+// "adding new model in custom provider, not showing on list model":
+// after widening the selection (e.g. via Rebuild's keep-overwrite), a
+// newly selected ID must appear in ListModels/Models even though it was
+// absent from the pre-refresh cache.
+func TestCustom_ListModels_NewSelectedAppears(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{
+			map[string]any{"id": "acme-gpt-1", "object": "model"},
+			map[string]any{"id": "acme-new-1", "object": "model"},
+		}})
+	}))
+	defer srv.Close()
+	u := NewCustomUpstream("acme", srv.URL, []string{"k"}, nil,
+		[]string{"acme-gpt-1", "acme-new-1"}, srv.Client().Transport.(*http.Transport))
+	// Simulate manager Rebuild's keep-overwrite: only the old model survives
+	// in cache with fresh metadata, the new bare entry is wiped.
+	u.SeedModels([]domain.Model{{ID: "acme-gpt-1", Object: "model", Provider: "custom:acme"}})
+	got, err := u.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m.ID] = true
+	}
+	if !seen["acme-gpt-1"] || !seen["acme-new-1"] {
+		t.Fatalf("expected both selected models after refresh, got %v", got)
+	}
+}
 func TestCustom_ListModels_IntersectsSelection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{

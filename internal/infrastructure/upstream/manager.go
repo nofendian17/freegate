@@ -38,6 +38,12 @@ func NewProviderManager(s *providers.Store, tr *http.Transport) *ProviderManager
 	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
+// relayPools resolves a provider's edge-relay setting to a pool list for
+// CustomUpstream.SetRelayPools (see ResolveRelayPools).
+func (m *ProviderManager) relayPools(full providers.Provider) []RelayPool {
+	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, m.store.GetPool)
+}
+
 func (m *ProviderManager) Rebuild() error {
 	rows, err := m.store.ListProviders()
 	if err != nil {
@@ -57,23 +63,16 @@ func (m *ProviderManager) Rebuild() error {
 			slog.Warn("custom provider has no models selected, it will not route", "provider", full.Name)
 		}
 		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, m.tr)
+		fresh.SetRelayPools(m.relayPools(full))
 		m.mu.RLock()
 		old := m.customs[r.Name]
 		m.mu.RUnlock()
 		if old != nil {
 			// Carry over fresh metadata for still-selected models only;
 			// deselected models must not leak back in via the old cache.
-			// The constructor already seeded bare entries for the new
-			// selection, so Match works even before the next fetch.
-			keep := make([]domain.Model, 0)
-			for _, om := range old.Models() {
-				if fresh.Match(om.ID) {
-					keep = append(keep, om)
-				}
-			}
-			if len(keep) > 0 {
-				fresh.SeedModels(keep)
-			}
+			// RestoreKept merges in stored-selection order and keeps bare
+			// seeds for newly added models so they route immediately.
+			fresh.RestoreKept(old.Models())
 		}
 		next[r.Name] = fresh
 		nextIntervals[r.Name] = refreshInterval(full.RefreshSec)

@@ -29,6 +29,10 @@ func NewLLM7UpstreamWithTransport(baseURL string, tr *http.Transport) *LLM7Upstr
 
 func (u *LLM7Upstream) Name() string { return "llm7" }
 
+// SetRelayPools overrides edge-relay behavior: nil follows the global
+// rotation, an empty slice means direct, otherwise pinned to the pools.
+func (u *LLM7Upstream) SetRelayPools(pools []RelayPool) { u.client.SetRelayPools(pools) }
+
 func (u *LLM7Upstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	refresher := NewRefresher("llm7", func(ctx context.Context) error {
 		models, err := u.ListModels(ctx)

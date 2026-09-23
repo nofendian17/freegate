@@ -20,7 +20,6 @@ type pageData struct {
 	Active       string
 	Meta         bool
 	Playground   bool
-	Palette      bool
 	Scripts      []string
 	Uptime       string
 	StartedAt    string
@@ -60,7 +59,6 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		Active:     "dashboard",
 		Meta:       true,
 		Playground: true,
-		Palette:    false,
 		// chart.umd.js rides in Scripts (not a separate Chart flag) so all
 		// page scripts stay ordered before alpine.min.js in layout/head.
 		Scripts:      []string{"/static/js/chart.umd.js", "/static/js/dashboard.js", "/static/js/playground.js"},
