@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -318,7 +320,6 @@ func TestApiAuthDB_ClientKeys(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("db key should pass, got %d", rec.Code)
 	}
-	time.Sleep(50 * time.Millisecond)
 	if got := checker.touches("fg_dbkey1"); got != 1 {
 		t.Fatalf("db key use must be recorded, got %d touches", got)
 	}
@@ -390,28 +391,48 @@ func TestApiAuthDB_AdminTokenAndChecker(t *testing.T) {
 }
 
 type stubChecker struct {
-	valid   map[string]bool
-	touched map[string]int
-	mu      sync.Mutex
+	valid     map[string]bool
+	verifyErr error
+	touched   map[string]int
+	mu        sync.Mutex
 }
 
-func (s *stubChecker) VerifyClientKey(raw string) bool { return s.valid[raw] }
+func (s *stubChecker) VerifyClientKey(_ context.Context, raw string) (bool, error) {
+	return s.valid[raw], s.verifyErr
+}
 
-func (s *stubChecker) TouchClientKey(raw string) {
+func (s *stubChecker) TouchClientKey(_ context.Context, raw string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.touched == nil {
 		s.touched = map[string]int{}
 	}
 	s.touched[raw]++
+	return nil
 }
 
-// touches reads the touch counter under the lock — TouchClientKey runs on a
-// goroutine spawned by ApiAuthDB, so an unguarded map read trips -race.
 func (s *stubChecker) touches(raw string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.touched[raw]
+}
+
+func TestApiAuthDB_VerificationFailureIsUnavailable(t *testing.T) {
+	checker := &stubChecker{valid: map[string]bool{"fg_key": true}, verifyErr: errors.New("database unavailable")}
+	called := false
+	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("X-API-Key", "fg_key")
+	rec := httptest.NewRecorder()
+
+	ApiAuthDB("", checker)(h).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("verification failure status = %d, want 503", rec.Code)
+	}
+	if called {
+		t.Fatal("request reached handler after verification failure")
+	}
 }
 
 func TestAdminAuth_Cookie(t *testing.T) {

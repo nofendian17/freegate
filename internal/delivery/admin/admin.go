@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,25 +23,25 @@ import (
 
 type Handler struct {
 	store     *providers.Store
-	rebuild   func() error
+	rebuild   func(context.Context) error
 	transport *http.Transport
 	// warm synchronously loads one custom provider's model catalog so it
 	// routes immediately after add/update/test. Nil in tests that don't
 	// wire a ProviderManager; all uses are best-effort.
-	warm func(name string) ([]domain.Model, error)
+	warm func(context.Context, string) ([]domain.Model, error)
 	// inflight guards warmCache: one best-effort fetch per provider at a
 	// time, so double-click storms don't stack goroutines.
 	mu       sync.Mutex
 	inflight map[string]struct{}
 }
 
-func New(store *providers.Store, rebuild func() error, transport *http.Transport) *Handler {
+func New(store *providers.Store, rebuild func(context.Context) error, transport *http.Transport) *Handler {
 	return &Handler{store: store, rebuild: rebuild, transport: transport}
 }
 
 // WithWarmer attaches the catalog warmer (ProviderManager.Warm).
 // Follows the existing WithX setter pattern (cf. ChatService).
-func (h *Handler) WithWarmer(fn func(name string) ([]domain.Model, error)) *Handler {
+func (h *Handler) WithWarmer(fn func(context.Context, string) ([]domain.Model, error)) *Handler {
 	h.warm = fn
 	return h
 }
@@ -50,7 +51,7 @@ func (h *Handler) WithWarmer(fn func(name string) ([]domain.Model, error)) *Hand
 // upstream latency (up to Warm's 10s timeout): routing already works from
 // the stored selection, which seeds the cache synchronously at rebuild;
 // this only refreshes display metadata (object/created/owned_by).
-func (h *Handler) warmCache(name string) {
+func (h *Handler) warmCache(ctx context.Context, name string) {
 	fn := h.warm
 	if fn == nil || name == "" {
 		return
@@ -71,7 +72,7 @@ func (h *Handler) warmCache(name string) {
 			delete(h.inflight, name)
 			h.mu.Unlock()
 		}()
-		if _, err := fn(name); err != nil {
+		if _, err := fn(context.WithoutCancel(ctx), name); err != nil {
 			slog.Warn("custom provider warm failed, metadata refreshes on next tick", "provider", name, "error", err)
 		}
 	}()
@@ -110,26 +111,26 @@ func (h *Handler) Register(r chi.Router) {
 }
 
 type providerIn struct {
-	Name    string            `json:"name"`
-	BaseURL string            `json:"base_url"`
-	APIKeys []string          `json:"api_keys"`
-	Headers map[string]string `json:"headers"`
+	Name    string            `json:"name" validate:"required,resource_name"`
+	BaseURL string            `json:"base_url" validate:"required,http_url,max=2048"`
+	APIKeys []string          `json:"api_keys" validate:"omitempty,max=32,dive,required,max=4096"`
+	Headers map[string]string `json:"headers" validate:"omitempty,http_headers,max=64"`
 	// Models is the explicit curated selection (checkboxes in the
 	// dashboard, populated from the probe). Only these route here.
 	// Pointer so omit-vs-clear stays distinct: absent keeps the stored
 	// selection (nil preserves a legacy whole-catalog row), present
 	// (even []) overwrites it.
-	Models     *[]string `json:"models"`
-	RefreshSec int       `json:"refresh_sec"`
+	Models     *[]string `json:"models" validate:"omitempty,max=64,dive,max=256"`
+	RefreshSec int       `json:"refresh_sec" validate:"min=10,max=3600"`
 	Priority   int       `json:"priority"`
 	Enabled    bool      `json:"enabled"`
 	// ProxyMode selects edge-relay behavior: "" follows the global pool
 	// rotation, "direct" skips all relays, "pool" pins to ProxyPoolID.
 	// Pointer so omit-vs-explicit stays distinct like Models: absent keeps
 	// the stored selection, present (even "") overwrites it.
-	ProxyMode *string `json:"proxy_mode"`
+	ProxyMode *string `json:"proxy_mode" validate:"proxy_mode"`
 	// ProxyPoolID pins the provider to one pool when ProxyMode is "pool".
-	ProxyPoolID *uint `json:"proxy_pool_id"`
+	ProxyPoolID *uint `json:"proxy_pool_id" validate:"omitempty,min=1"`
 }
 
 // resolveProxy validates a provider's proxy selection and resolves it to
@@ -137,17 +138,20 @@ type providerIn struct {
 // global rotation, empty means direct, otherwise the pinned pool. It also
 // returns the pinned pool row (nil unless mode is pool) so callers needing
 // pool details don't query twice.
-func (h *Handler) resolveProxy(mode string, poolID *uint) (pools []upstream.RelayPool, pool *providers.ProxyPool, err error) {
+func (h *Handler) resolveProxy(ctx context.Context, mode string, poolID *uint) (pools []upstream.RelayPool, pool *providers.ProxyPool, err error) {
 	switch providers.NormalizeProxyMode(mode) {
 	case providers.ProxyModeDirect:
 		return []upstream.RelayPool{}, nil, nil
 	case providers.ProxyModePool:
 		if poolID == nil {
-			return nil, nil, fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", providers.ErrInvalidArgument)
 		}
-		p, err := h.store.GetPool(*poolID)
+		p, err := h.store.GetPool(ctx, *poolID)
 		if err != nil {
-			return nil, nil, fmt.Errorf("proxy pool %d not found", *poolID)
+			if errors.Is(err, providers.ErrNotFound) {
+				return nil, nil, fmt.Errorf("%w: proxy pool %d: %w", providers.ErrInvalidArgument, *poolID, providers.ErrNotFound)
+			}
+			return nil, nil, err
 		}
 		pool = &p
 		return []upstream.RelayPool{{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy}}, pool, nil
@@ -156,30 +160,18 @@ func (h *Handler) resolveProxy(mode string, poolID *uint) (pools []upstream.Rela
 	}
 }
 
-// nonEmpty drops blank keys; an update with no keys keeps existing ones.
-func nonEmpty(keys []string) []string {
-	var out []string
-	for _, k := range keys {
-		if strings.TrimSpace(k) != "" {
-			out = append(out, k)
-		}
-	}
-	return out
-}
-
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListProviders()
+	rows, err := h.store.ListProviders(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
 }
 
 func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
-	in := providerIn{Enabled: true}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	in := providerIn{Enabled: true, RefreshSec: 60}
+	if !decodeInput(w, r, &in) {
 		return
 	}
 	var models []string
@@ -190,28 +182,28 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	if in.ProxyMode != nil {
 		mode = *in.ProxyMode
 	}
-	if _, _, err := h.resolveProxy(mode, in.ProxyPoolID); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+	if _, _, err := h.resolveProxy(r.Context(), mode, in.ProxyPoolID); err != nil {
+		respondStoreError(w, err)
 		return
 	}
-	row, err := h.store.CreateProvider(providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: in.ProxyPoolID})
+	row, err := h.store.CreateProvider(r.Context(), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: in.ProxyPoolID})
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
-	h.warmCache(in.Name)
+	h.warmCache(r.Context(), in.Name)
 	respond.JSON(w, http.StatusCreated, row)
 }
 
 func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	row, err := h.store.GetProvider(uint(id))
+	row, err := h.store.GetProvider(r.Context(), uint(id))
 	if err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "provider not found")
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, row)
@@ -219,15 +211,14 @@ func (h *Handler) getProvider(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	var in providerIn
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	in := providerIn{RefreshSec: 60}
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	keys := nonEmpty(in.APIKeys)
-	cur, err := h.store.GetProviderRaw(uint(id))
+	keys := in.APIKeys
+	cur, err := h.store.GetProviderRaw(r.Context(), uint(id))
 	if err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "provider not found")
+		respondStoreError(w, err)
 		return
 	}
 	if len(keys) == 0 {
@@ -247,31 +238,31 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		mode = *in.ProxyMode
 		poolID = in.ProxyPoolID
 	}
-	if _, _, err := h.resolveProxy(mode, poolID); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+	if _, _, err := h.resolveProxy(r.Context(), mode, poolID); err != nil {
+		respondStoreError(w, err)
 		return
 	}
-	row, err := h.store.UpdateProvider(uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: poolID})
+	row, err := h.store.UpdateProvider(r.Context(), uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: poolID})
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
-	h.warmCache(in.Name)
+	h.warmCache(r.Context(), in.Name)
 	respond.JSON(w, http.StatusOK, row)
 }
 
 func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	if err := h.store.DeleteProvider(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+	if err := h.store.DeleteProvider(r.Context(), uint(id)); err != nil {
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -279,16 +270,16 @@ func (h *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	row, err := h.store.GetProviderRaw(uint(id))
+	row, err := h.store.GetProviderRaw(r.Context(), uint(id))
 	if err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "provider not found")
+		respondStoreError(w, err)
 		return
 	}
 	// Test travels the same relay path as production traffic for this
 	// provider (pinned pool, direct, or global rotation).
-	sel, err := h.selectorForTest(row.ProxyMode, row.ProxyPoolID)
+	sel, err := h.selectorForTest(r.Context(), row.ProxyMode, row.ProxyPoolID)
 	if err != nil {
-		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": probeErrorMessage(err)})
 		return
 	}
 	ids, status, latencyMs, err := h.probeCatalog(r.Context(), row.BaseURL, row.APIKeys, row.Headers, sel)
@@ -301,7 +292,7 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 	// probe never stores the selection itself: only models the user
 	// checks are saved.
 	if status < 300 {
-		h.warmCache(row.Name)
+		h.warmCache(r.Context(), row.Name)
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": status < 300, "modelCount": len(ids), "models": ids, "latencyMs": latencyMs, "status": status})
 }
@@ -310,27 +301,16 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 // storing anything, so a new provider's model checklist can be filled
 // before the first save.
 func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		BaseURL     string            `json:"base_url"`
-		APIKeys     []string          `json:"api_keys"`
-		Headers     map[string]string `json:"headers"`
-		ProxyMode   string            `json:"proxy_mode"`
-		ProxyPoolID *uint             `json:"proxy_pool_id"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var in providerProbeIn
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	if u := strings.ToLower(strings.TrimSpace(in.BaseURL)); !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
-		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": "base_url must be http(s) URL"})
-		return
-	}
-	sel, err := h.selectorForTest(in.ProxyMode, in.ProxyPoolID)
+	sel, err := h.selectorForTest(r.Context(), in.ProxyMode, in.ProxyPoolID)
 	if err != nil {
-		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": probeErrorMessage(err)})
 		return
 	}
-	ids, status, latencyMs, err := h.probeCatalog(r.Context(), strings.TrimSpace(in.BaseURL), nonEmpty(in.APIKeys), in.Headers, sel)
+	ids, status, latencyMs, err := h.probeCatalog(r.Context(), in.BaseURL, in.APIKeys, in.Headers, sel)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -344,8 +324,8 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 // selected pool. A missing or disabled pinned pool is an explicit error
 // so the editor surfaces the misconfiguration instead of testing a
 // different path than production would use.
-func (h *Handler) selectorForTest(mode string, poolID *uint) (*upstream.RelaySelector, error) {
-	relays, pool, err := h.resolveProxy(mode, poolID)
+func (h *Handler) selectorForTest(ctx context.Context, mode string, poolID *uint) (*upstream.RelaySelector, error) {
+	relays, pool, err := h.resolveProxy(ctx, mode, poolID)
 	if err != nil {
 		return nil, err
 	}
@@ -354,10 +334,10 @@ func (h *Handler) selectorForTest(mode string, poolID *uint) (*upstream.RelaySel
 		return nil, nil
 	case providers.ProxyModePool:
 		if pool == nil {
-			return nil, fmt.Errorf("proxy_pool_id is required when proxy_mode is pool")
+			return nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", providers.ErrInvalidArgument)
 		}
 		if !pool.Enabled {
-			return nil, fmt.Errorf("proxy pool %q is disabled", pool.Name)
+			return nil, fmt.Errorf("%w: proxy pool %q is disabled", providers.ErrInvalidArgument, pool.Name)
 		}
 		sel := upstream.NewRelaySelector()
 		sel.SetPools(relays)
@@ -434,32 +414,39 @@ func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []strin
 }
 
 func (h *Handler) listCombos(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListCombos()
+	rows, err := h.store.ListCombos(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
 }
 
 type comboIn struct {
-	Name  string                `json:"name"`
-	Tiers []providers.ComboTier `json:"tiers"`
+	Name  string                `json:"name" validate:"required,resource_name"`
+	Tiers []providers.ComboTier `json:"tiers" validate:"required,min=1,max=32,dive"`
+}
+
+type providerProbeIn struct {
+	BaseURL     string            `json:"base_url" validate:"required,http_url,max=2048"`
+	APIKeys     []string          `json:"api_keys" validate:"omitempty,max=32,dive,required,max=4096"`
+	Headers     map[string]string `json:"headers" validate:"omitempty,http_headers,max=64"`
+	ProxyMode   string            `json:"proxy_mode" validate:"proxy_mode"`
+	ProxyPoolID *uint             `json:"proxy_pool_id" validate:"omitempty,min=1"`
 }
 
 func (h *Handler) createCombo(w http.ResponseWriter, r *http.Request) {
 	var in comboIn
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.SaveCombo(providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
+	row, err := h.store.SaveCombo(r.Context(), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusCreated, row)
@@ -468,17 +455,16 @@ func (h *Handler) createCombo(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) updateCombo(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
 	var in comboIn
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.UpdateCombo(uint(id), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
+	row, err := h.store.UpdateCombo(r.Context(), uint(id), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, row)
@@ -486,12 +472,12 @@ func (h *Handler) updateCombo(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteCombo(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	if err := h.store.DeleteCombo(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+	if err := h.store.DeleteCombo(r.Context(), uint(id)); err != nil {
+		respondStoreError(w, err)
 		return
 	}
-	if err := h.rebuild(); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "rebuild_error", err.Error())
+	if err := h.rebuild(r.Context()); err != nil {
+		respondRebuildError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -499,9 +485,9 @@ func (h *Handler) deleteCombo(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	combos, err := h.store.ListCombos()
+	combos, err := h.store.ListCombos(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	var combo *providers.RouteCombo
@@ -515,9 +501,9 @@ func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 		respond.JSONError(w, http.StatusNotFound, "not_found", "combo not found")
 		return
 	}
-	rows, err := h.store.ListProviders()
+	rows, err := h.store.ListProviders(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	byName := make(map[string]uint, len(rows))
@@ -550,7 +536,7 @@ func (h *Handler) probeTier(r *http.Request, client *http.Client, byName map[str
 	if !strings.HasPrefix(provider, "custom:") || !ok {
 		return map[string]any{"provider": provider, "ok": false, "error": "unknown provider"}
 	}
-	row, err := h.store.GetProviderRaw(pid)
+	row, err := h.store.GetProviderRaw(r.Context(), pid)
 	if err != nil {
 		return map[string]any{"provider": provider, "ok": false, "error": "unknown provider"}
 	}

@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,21 @@ import (
 
 	"freegate/internal/infrastructure/providers"
 )
+
+func TestManager_RebuildPropagatesContextCancellation(t *testing.T) {
+	store, err := providers.Open(t.Context(), "file:manager-cancel?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	manager := NewProviderManager(store, http.DefaultTransport.(*http.Transport).Clone())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := manager.Rebuild(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Rebuild error = %v, want context.Canceled", err)
+	}
+}
 
 func mgrModelsServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,15 +56,15 @@ func TestManager_RebuildSecondGenerationRefreshes(t *testing.T) {
 	srv := mgrModelsServer()
 	defer srv.Close()
 	dsn := fmt.Sprintf("file:mgr-rebuild-%d?mode=memory&cache=shared", time.Now().UnixNano())
-	store, err := providers.Open(dsn)
+	store, err := providers.Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if _, err := store.CreateProvider(providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1"}, RefreshSec: 10, Enabled: true}); err != nil {
+	if _, err := store.CreateProvider(t.Context(), providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1"}, RefreshSec: 10, Enabled: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	mgr := NewProviderManager(store, srv.Client().Transport.(*http.Transport))
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(t.Context()); err != nil {
 		t.Fatalf("rebuild1: %v", err)
 	}
 	if len(mgr.All()) != 1 {
@@ -61,7 +77,7 @@ func TestManager_RebuildSecondGenerationRefreshes(t *testing.T) {
 	first := mgr.All()[0]
 	waitModels(t, first, "first generation")
 
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(t.Context()); err != nil {
 		t.Fatalf("rebuild2: %v", err)
 	}
 	second := mgr.All()[0]
@@ -84,25 +100,25 @@ func TestManager_RebuildWidensSelection(t *testing.T) {
 	}))
 	defer srv.Close()
 	dsn := fmt.Sprintf("file:mgr-widen-%d?mode=memory&cache=shared", time.Now().UnixNano())
-	store, err := providers.Open(dsn)
+	store, err := providers.Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	row, err := store.CreateProvider(providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1"}, RefreshSec: 10, Enabled: true})
+	row, err := store.CreateProvider(t.Context(), providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1"}, RefreshSec: 10, Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	mgr := NewProviderManager(store, srv.Client().Transport.(*http.Transport))
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(t.Context()); err != nil {
 		t.Fatalf("rebuild1: %v", err)
 	}
-	if _, err := mgr.Warm("acme"); err != nil {
+	if _, err := mgr.Warm(t.Context(), "acme"); err != nil {
 		t.Fatalf("warm1: %v", err)
 	}
-	if _, err := store.UpdateProvider(row.ID, providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1", "acme-new-1"}, RefreshSec: 10, Enabled: true}); err != nil {
+	if _, err := store.UpdateProvider(t.Context(), row.ID, providers.Provider{Name: "acme", BaseURL: srv.URL, APIKeys: []string{"k"}, Models: []string{"acme-gpt-1", "acme-new-1"}, RefreshSec: 10, Enabled: true}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(t.Context()); err != nil {
 		t.Fatalf("rebuild2: %v", err)
 	}
 	second := mgr.All()[0]
@@ -113,7 +129,7 @@ func TestManager_RebuildWidensSelection(t *testing.T) {
 	if !seen["acme-new-1"] {
 		t.Fatalf("new model missing right after rebuild, got %v", second.Models())
 	}
-	got, err := mgr.Warm("acme")
+	got, err := mgr.Warm(t.Context(), "acme")
 	if err != nil {
 		t.Fatalf("warm2: %v", err)
 	}
@@ -152,26 +168,26 @@ func TestManager_PinnedPoolRoutesThroughRelay(t *testing.T) {
 	}))
 	defer relaySrv.Close()
 	dsn := fmt.Sprintf("file:mgr-relay-%d?mode=memory&cache=shared", time.Now().UnixNano())
-	store, err := providers.Open(dsn)
+	store, err := providers.Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	pool, err := store.CreatePool(providers.ProxyPool{Name: "edge-1", ProxyURL: relaySrv.URL, Enabled: true})
+	pool, err := store.CreatePool(t.Context(), providers.ProxyPool{Name: "edge-1", ProxyURL: relaySrv.URL, Enabled: true})
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
 	poolID := pool.ID
-	if _, err := store.CreateProvider(providers.Provider{Name: "pinned", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-relay"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModePool, ProxyPoolID: &poolID}); err != nil {
+	if _, err := store.CreateProvider(t.Context(), providers.Provider{Name: "pinned", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-relay"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModePool, ProxyPoolID: &poolID}); err != nil {
 		t.Fatalf("create pinned: %v", err)
 	}
-	if _, err := store.CreateProvider(providers.Provider{Name: "plain", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-direct"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModeDirect}); err != nil {
+	if _, err := store.CreateProvider(t.Context(), providers.Provider{Name: "plain", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-direct"}, RefreshSec: 10, Enabled: true, ProxyMode: providers.ProxyModeDirect}); err != nil {
 		t.Fatalf("create direct: %v", err)
 	}
 	mgr := NewProviderManager(store, upstreamSrv.Client().Transport.(*http.Transport))
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(t.Context()); err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
-	got, err := mgr.Warm("pinned")
+	got, err := mgr.Warm(t.Context(), "pinned")
 	if err != nil {
 		t.Fatalf("warm pinned: %v", err)
 	}
@@ -184,7 +200,7 @@ func TestManager_PinnedPoolRoutesThroughRelay(t *testing.T) {
 	if gotTarget != upstreamSrv.URL || gotPath != "/models" {
 		t.Fatalf("relay headers: target=%q path=%q", gotTarget, gotPath)
 	}
-	got, err = mgr.Warm("plain")
+	got, err = mgr.Warm(t.Context(), "plain")
 	if err != nil {
 		t.Fatalf("warm direct: %v", err)
 	}

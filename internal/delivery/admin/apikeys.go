@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -10,12 +9,21 @@ import (
 	"freegate/internal/delivery/respond"
 )
 
+type clientKeyIn struct {
+	Name string `json:"name" validate:"required,resource_name"`
+}
+
+type clientKeyUpdateIn struct {
+	Name    string `json:"name" validate:"omitempty,resource_name"`
+	Enabled *bool  `json:"enabled"`
+}
+
 // listClientKeys returns all client API keys (hashes never leave the store).
 // No rebuild: keys are read live from the DB on every /v1/* request.
 func (h *Handler) listClientKeys(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListClientKeys()
+	rows, err := h.store.ListClientKeys(r.Context())
 	if err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
@@ -23,16 +31,13 @@ func (h *Handler) listClientKeys(w http.ResponseWriter, r *http.Request) {
 
 // createClientKey mints a key and returns the row plus the raw secret.
 func (h *Handler) createClientKey(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var in clientKeyIn
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, raw, err := h.store.CreateClientKey(in.Name)
+	row, raw, err := h.store.CreateClientKey(r.Context(), in.Name)
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusCreated, map[string]any{
@@ -46,17 +51,13 @@ func (h *Handler) createClientKey(w http.ResponseWriter, r *http.Request) {
 // changes (delete + create to rotate).
 func (h *Handler) updateClientKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	var in struct {
-		Name    string `json:"name"`
-		Enabled *bool  `json:"enabled"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+	var in clientKeyUpdateIn
+	if !decodeInput(w, r, &in) {
 		return
 	}
-	cur, err := h.store.GetClientKey(uint(id))
+	cur, err := h.store.GetClientKey(r.Context(), uint(id))
 	if err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "api key not found")
+		respondStoreError(w, err)
 		return
 	}
 	name := cur.Name
@@ -67,9 +68,9 @@ func (h *Handler) updateClientKey(w http.ResponseWriter, r *http.Request) {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	row, err := h.store.UpdateClientKey(uint(id), name, enabled)
+	row, err := h.store.UpdateClientKey(r.Context(), uint(id), name, enabled)
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "validation_error", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, row)
@@ -81,13 +82,9 @@ func (h *Handler) updateClientKey(w http.ResponseWriter, r *http.Request) {
 // the rest of /api/*.
 func (h *Handler) revealClientKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	if _, err := h.store.GetClientKey(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "api key not found")
-		return
-	}
-	raw, err := h.store.RevealClientKey(uint(id))
+	raw, err := h.store.RevealClientKey(r.Context(), uint(id))
 	if err != nil {
-		respond.JSONError(w, http.StatusBadRequest, "unavailable", err.Error())
+		respondStoreError(w, err)
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"id": id, "api_key": raw})
@@ -97,12 +94,8 @@ func (h *Handler) revealClientKey(w http.ResponseWriter, r *http.Request) {
 // verification reads the DB live).
 func (h *Handler) deleteClientKey(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
-	if _, err := h.store.GetClientKey(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusNotFound, "not_found", "api key not found")
-		return
-	}
-	if err := h.store.DeleteClientKey(uint(id)); err != nil {
-		respond.JSONError(w, http.StatusInternalServerError, "store_error", err.Error())
+	if err := h.store.DeleteClientKey(r.Context(), uint(id)); err != nil {
+		respondStoreError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

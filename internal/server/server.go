@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,19 +41,19 @@ const (
 // Server owns the freegate HTTP server: configuration, dependencies,
 // and lifecycle. Build it with New, then call Run.
 type Server struct {
-	cfg         *config.Config
-	httpSrv     *http.Server
-	Handler     http.Handler
-	logger      *slog.Logger
-	opencode    *upstream.OpenCodeUpstream
-	kilo        *upstream.KiloUpstream
-	llm7        *upstream.LLM7Upstream
-	pstore      *providers.Store
-	manager     *upstream.ProviderManager
-	combo       *upstream.ComboRouter
-	rec         *recorder.Recorder
-	rateLimit   *middleware.RateLimiter
-	wg          sync.WaitGroup // tracks background workers
+	cfg       *config.Config
+	httpSrv   *http.Server
+	Handler   http.Handler
+	logger    *slog.Logger
+	opencode  *upstream.OpenCodeUpstream
+	kilo      *upstream.KiloUpstream
+	llm7      *upstream.LLM7Upstream
+	pstore    *providers.Store
+	manager   *upstream.ProviderManager
+	combo     *upstream.ComboRouter
+	rec       *recorder.Recorder
+	rateLimit *middleware.RateLimiter
+	wg        sync.WaitGroup // tracks background workers
 }
 
 // upstreamToDomain flattens custom providers into the domain upstream list.
@@ -68,8 +69,8 @@ func upstreamToDomain(all []*upstream.CustomUpstream) []domain.Upstream {
 	return out
 }
 
-func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
-	rows, err := pstore.ListCombos()
+func comboRows(ctx context.Context, pstore *providers.Store) ([]upstream.ComboTierRow, error) {
+	rows, err := pstore.ListCombos(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -82,10 +83,10 @@ func comboRows(pstore *providers.Store) ([]upstream.ComboTierRow, error) {
 
 // syncRelayPools loads enabled proxy pools into the shared edge-relay
 // selector so upstream requests route via the Vercel relay.
-func syncRelayPools(pstore *providers.Store) {
-	pools, err := pstore.ListPools()
+func syncRelayPools(ctx context.Context, pstore *providers.Store) error {
+	pools, err := pstore.ListPools(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	rp := make([]upstream.RelayPool, 0, len(pools))
 	for _, p := range pools {
@@ -95,16 +96,17 @@ func syncRelayPools(pstore *providers.Store) {
 		rp = append(rp, upstream.RelayPool{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy})
 	}
 	upstream.SharedRelay.SetPools(rp)
+	return nil
 }
 
 // applyBuiltinProxies pins the builtin upstreams (opencode, kilo, llm7) to
 // their configured pools. Unconfigured builtins follow the global
 // rotation. Runs on startup and on every rebuild so pool edits,
 // deletes, and disables take effect without a restart.
-func applyBuiltinProxies(pstore *providers.Store, opencode *upstream.OpenCodeUpstream, kilo *upstream.KiloUpstream, llm7 *upstream.LLM7Upstream) {
-	settings, err := pstore.ListBuiltinProxies()
+func applyBuiltinProxies(ctx context.Context, pstore *providers.Store, opencode *upstream.OpenCodeUpstream, kilo *upstream.KiloUpstream, llm7 *upstream.LLM7Upstream) error {
+	settings, err := pstore.ListBuiltinProxies(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	byName := make(map[string]providers.BuiltinProxy, len(settings))
 	for _, b := range settings {
@@ -116,15 +118,18 @@ func applyBuiltinProxies(pstore *providers.Store, opencode *upstream.OpenCodeUps
 		"llm7":     llm7.SetRelayPools,
 	} {
 		b := byName[name]
-		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, pstore.GetPool))
+		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (providers.ProxyPool, error) {
+			return pstore.GetPool(ctx, id)
+		}))
 	}
+	return nil
 }
 
 // New constructs a Server from configuration. It wires all
 // dependencies (upstreams, application services, recorder, UI,
 // HTTP router) but does not start listening or background workers.
 // Use Run for that.
-func New(cfg *config.Config) (*Server, error) {
+func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLevel(cfg.LogLevel),
 	}))
@@ -140,16 +145,26 @@ func New(cfg *config.Config) (*Server, error) {
 
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
-	pstore, err := providers.Open(cfg.ProvidersDBPath)
+	pstore, err := providers.Open(ctx, cfg.ProvidersDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}
+	storeOpen := true
+	defer func() {
+		if storeOpen {
+			_ = pstore.Close()
+		}
+	}()
 	mgr := upstream.NewProviderManager(pstore, sharedTr)
-	if err := mgr.Rebuild(); err != nil {
+	if err := mgr.Rebuild(ctx); err != nil {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
-	syncRelayPools(pstore)
-	applyBuiltinProxies(pstore, opencode, kilo, llm7)
+	if err := syncRelayPools(ctx, pstore); err != nil {
+		logger.Warn("relay pool sync failed", "error", err)
+	}
+	if err := applyBuiltinProxies(ctx, pstore, opencode, kilo, llm7); err != nil {
+		logger.Warn("builtin proxy sync failed", "error", err)
+	}
 	combo := upstream.NewComboRouter(infraRouter)
 	lookup := func(name string) domain.Upstream {
 		switch name {
@@ -170,7 +185,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return nil
 		}
 	}
-	rows, err := comboRows(pstore)
+	rows, err := comboRows(ctx, pstore)
 	if err != nil {
 		logger.Warn("combo rows load failed, keeping empty registry", "error", err)
 	} else {
@@ -202,7 +217,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// models (e.g. union-alpha via /zen/v1/messages per 9router PR #4111).
 	handler.SetResponseModels(cfg.ResponseModels)
 	handler.SetMessageModels(cfg.MessageModels)
-	apiHandler := handler.New(cs, ms, m)
+	apiHandler := handler.New(cs, ms, m).WithReadiness(pstore)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
 	r := chi.NewRouter()
@@ -223,13 +238,17 @@ func New(cfg *config.Config) (*Server, error) {
 	// It only reveals models-loaded state, same class as /api/health.
 	r.With(rl.Middleware).Get("/ready", apiHandler.Ready)
 
-	rebuild := func() error {
-		if err := mgr.Rebuild(); err != nil {
+	rebuild := func(ctx context.Context) error {
+		if err := mgr.Rebuild(ctx); err != nil {
 			return err
 		}
-		syncRelayPools(pstore)
-		applyBuiltinProxies(pstore, opencode, kilo, llm7)
-		rows, err := comboRows(pstore)
+		if err := syncRelayPools(ctx, pstore); err != nil {
+			return err
+		}
+		if err := applyBuiltinProxies(ctx, pstore, opencode, kilo, llm7); err != nil {
+			return err
+		}
+		rows, err := comboRows(ctx, pstore)
 		if err != nil {
 			return err
 		}
@@ -265,20 +284,22 @@ func New(cfg *config.Config) (*Server, error) {
 		IdleTimeout:       serverIdleTimeout,
 	}
 
-	return &Server{
-		cfg:         cfg,
-		httpSrv:     httpSrv,
-		Handler:     r,
-		logger:      logger,
-		opencode:    opencode,
-		kilo:        kilo,
-		llm7:        llm7,
-		pstore:      pstore,
-		manager:     mgr,
-		combo:       combo,
-		rec:         rec,
-		rateLimit:   rl,
-	}, nil
+	server := &Server{
+		cfg:       cfg,
+		httpSrv:   httpSrv,
+		Handler:   r,
+		logger:    logger,
+		opencode:  opencode,
+		kilo:      kilo,
+		llm7:      llm7,
+		pstore:    pstore,
+		manager:   mgr,
+		combo:     combo,
+		rec:       rec,
+		rateLimit: rl,
+	}
+	storeOpen = false
+	return server, nil
 }
 
 // Run starts background workers (upstream refreshers, recorder sampler)
@@ -324,10 +345,10 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			cancelBG()
 			s.manager.Stop()
-			_ = s.pstore.Close()
+			storeErr := s.pstore.Close()
 			s.wg.Wait()
 			s.rateLimit.Stop()
-			return fmt.Errorf("server failed: %w", err)
+			return errors.Join(fmt.Errorf("server failed: %w", err), storeErr)
 		}
 	}
 
@@ -342,16 +363,19 @@ func (s *Server) Run(ctx context.Context) error {
 	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
-		_ = s.pstore.Close()
+		storeErr := s.pstore.Close()
 		s.rateLimit.Stop()
-		return err
+		return errors.Join(err, storeErr)
 	}
 
 	// Wait for background workers to complete
 	s.wg.Wait()
 
-	_ = s.pstore.Close()
+	storeErr := s.pstore.Close()
 	s.rateLimit.Stop()
+	if storeErr != nil {
+		return storeErr
+	}
 
 	s.logger.Info("server stopped gracefully")
 	return nil

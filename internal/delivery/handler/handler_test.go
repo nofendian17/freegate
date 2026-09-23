@@ -47,7 +47,13 @@ type mockMetrics struct {
 	data map[string]any
 }
 
+type mockReadiness struct {
+	err error
+}
+
 func (m *mockMetrics) Metrics() map[string]any { return m.data }
+
+func (m *mockReadiness) PingContext(context.Context) error { return m.err }
 
 func newMockHandler() (*Handler, *mockChat, *mockModels, *mockMetrics) {
 	chat := &mockChat{}
@@ -89,6 +95,20 @@ func TestHandler_Ready_Ready(t *testing.T) {
 
 func TestHandler_Ready_NotReady(t *testing.T) {
 	h, _, _, _ := newMockHandler()
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+
+	testRouter(h).ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", w.Code)
+	}
+}
+
+func TestHandler_Ready_DatabaseUnavailable(t *testing.T) {
+	h, _, models, _ := newMockHandler()
+	models.ready = true
+	h.WithReadiness(&mockReadiness{err: context.DeadlineExceeded})
 	req := httptest.NewRequest("GET", "/ready", nil)
 	w := httptest.NewRecorder()
 

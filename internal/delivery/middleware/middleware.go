@@ -1,11 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -132,9 +134,9 @@ func ApiAuth(adminToken string) func(http.Handler) http.Handler {
 // providers store; kept as an interface so middleware stays decoupled.
 type ClientKeyChecker interface {
 	// VerifyClientKey reports whether raw is an enabled client key.
-	VerifyClientKey(raw string) bool
-	// TouchClientKey records one use (best-effort, never fails).
-	TouchClientKey(raw string)
+	VerifyClientKey(ctx context.Context, raw string) (bool, error)
+	// TouchClientKey queues one use for durable background persistence.
+	TouchClientKey(ctx context.Context, raw string) error
 }
 
 // ApiAuthDB is ApiAuth plus DB-managed client keys: the admin token works
@@ -157,10 +159,23 @@ func ApiAuthDB(adminToken string, checker ClientKeyChecker) func(http.Handler) h
 				next.ServeHTTP(w, r)
 				return
 			}
-			if checker != nil && key != "" && checker.VerifyClientKey(key) {
-				go checker.TouchClientKey(key)
-				next.ServeHTTP(w, r)
-				return
+			if checker != nil && key != "" {
+				valid, err := checker.VerifyClientKey(r.Context(), key)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					slog.Error("client key verification failed", "error", err)
+					respond.JSONError(w, http.StatusServiceUnavailable, "auth_unavailable", "authentication service unavailable")
+					return
+				}
+				if valid {
+					if err := checker.TouchClientKey(r.Context(), key); err != nil && !errors.Is(err, context.Canceled) {
+						slog.Warn("client key usage enqueue failed", "error", err)
+					}
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 			// Admin session cookie (set by POST /login) also grants /v1 —
 			// the dashboard playground and model-test buttons fetch /v1/*
