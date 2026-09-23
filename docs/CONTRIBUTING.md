@@ -177,7 +177,7 @@ make test-race     # run with -race if you touched any concurrency code
 
 This proxy is anonymous-by-design but ships with sensible defaults:
 
-- `ADMIN_TOKEN` is required (dashboard login + admin superset for `/v1/*`). `API_KEY` is comma-separated for external clients; empty keeps `/v1/*` admin-gated. Set both before exposing past `127.0.0.1`.
+- `ADMIN_TOKEN` is required (dashboard login + admin superset for `/v1/*`). Client API keys are DB-managed (`POST /api/api-keys`); without one, `/v1/*` stays admin-gated. Set `ADMIN_TOKEN` and create client keys before exposing past `127.0.0.1`.
 - Rate limiter is per-IP, in-memory; it does not survive restart.
 - Upstream responses (including 429) are passed through to the client unchanged; the operator manages exit IPs via proxy pools (`/providers` → Proxy Pools).
 - The proxy is a pass-through — it does not persist request bodies, but it does log request IDs, IPs, models, and status codes. Do not log full prompt/response content.

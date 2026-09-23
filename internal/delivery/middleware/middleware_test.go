@@ -258,22 +258,23 @@ func TestLogger_SkipsDashboardAndProbeNoise(t *testing.T) {
 	}
 }
 
-func TestApiAuth_MultiKey(t *testing.T) {
+func TestApiAuth_AdminTokenSuperset(t *testing.T) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	m := ApiAuth([]string{"k1", "k2"}, "admin12345678901234")
-	for _, k := range []string{"k1", "k2"} {
-		req := httptest.NewRequest("GET", "/v1/models", nil)
-		req.Header.Set("X-API-Key", k)
-		rec := httptest.NewRecorder()
-		m(h).ServeHTTP(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("key %s should pass, got %d", k, rec.Code)
-		}
-	}
-	// admin superset via Bearer
+	m := ApiAuth("admin12345678901234")
+
+	// admin superset via X-API-Key
 	req := httptest.NewRequest("GET", "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer admin12345678901234")
+	req.Header.Set("X-API-Key", "admin12345678901234")
 	rec := httptest.NewRecorder()
+	m(h).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("admin key should pass, got %d", rec.Code)
+	}
+
+	// admin superset via Bearer
+	req = httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer admin12345678901234")
+	rec = httptest.NewRecorder()
 	m(h).ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("admin should pass api, got %d", rec.Code)
@@ -283,7 +284,7 @@ func TestApiAuth_MultiKey(t *testing.T) {
 func TestApiAuth_AdminSessionCookie(t *testing.T) {
 	admin := "0123456789abcdef0123456789abcdef"
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	m := ApiAuth([]string{"k1"}, admin)
+	m := ApiAuth(admin)
 
 	// valid fg_admin cookie (set by POST /login) grants /v1 without headers
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -307,7 +308,7 @@ func TestApiAuth_AdminSessionCookie(t *testing.T) {
 func TestApiAuthDB_ClientKeys(t *testing.T) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	checker := &stubChecker{valid: map[string]bool{"fg_dbkey1": true, "fg_off": false}}
-	m := ApiAuthDB(nil, "", checker)
+	m := ApiAuthDB("", checker)
 
 	// enabled DB key passes and records use
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -318,8 +319,8 @@ func TestApiAuthDB_ClientKeys(t *testing.T) {
 		t.Fatalf("db key should pass, got %d", rec.Code)
 	}
 	time.Sleep(50 * time.Millisecond)
-	if checker.touched["fg_dbkey1"] != 1 {
-		t.Fatalf("db key use must be recorded, got %v", checker.touched)
+	if got := checker.touches("fg_dbkey1"); got != 1 {
+		t.Fatalf("db key use must be recorded, got %d touches", got)
 	}
 
 	// disabled DB key rejected
@@ -350,6 +351,44 @@ func TestApiAuthDB_ClientKeys(t *testing.T) {
 	}
 }
 
+// Admin token and DB keys are both configured in production: a bogus key must
+// still 401 (and never reach the checker), while both valid credentials pass.
+func TestApiAuthDB_AdminTokenAndChecker(t *testing.T) {
+	admin := "0123456789abcdef0123456789abcdef"
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	checker := &stubChecker{valid: map[string]bool{"fg_dbkey1": true}}
+	m := ApiAuthDB(admin, checker)
+
+	bad := httptest.NewRequest("GET", "/v1/models", nil)
+	bad.Header.Set("X-API-Key", "nope")
+	recBad := httptest.NewRecorder()
+	m(h).ServeHTTP(recBad, bad)
+	if recBad.Code != 401 {
+		t.Fatalf("bogus key should 401 with admin token set, got %d", recBad.Code)
+	}
+	if got := checker.touches("nope"); got != 0 {
+		t.Fatalf("rejected key must not be recorded, got %d touches", got)
+	}
+
+	cases := []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{"admin bearer", "Authorization", "Bearer " + admin},
+		{"db key", "X-API-Key", "fg_dbkey1"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest("GET", "/v1/models", nil)
+		req.Header.Set(tc.header, tc.value)
+		rec := httptest.NewRecorder()
+		m(h).ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s should pass, got %d", tc.name, rec.Code)
+		}
+	}
+}
+
 type stubChecker struct {
 	valid   map[string]bool
 	touched map[string]int
@@ -365,6 +404,14 @@ func (s *stubChecker) TouchClientKey(raw string) {
 		s.touched = map[string]int{}
 	}
 	s.touched[raw]++
+}
+
+// touches reads the touch counter under the lock — TouchClientKey runs on a
+// goroutine spawned by ApiAuthDB, so an unguarded map read trips -race.
+func (s *stubChecker) touches(raw string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.touched[raw]
 }
 
 func TestAdminAuth_Cookie(t *testing.T) {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"strings"
 	"testing"
@@ -107,26 +109,49 @@ func TestEnvSlice_EmptyItem(t *testing.T) {
 	}
 }
 
-func TestConfig_Load_MultiAPIKey(t *testing.T) {
-	t.Setenv("API_KEY", "key1, key2, key3")
+func TestConfig_Load_AdminToken(t *testing.T) {
 	t.Setenv("ADMIN_TOKEN", "0123456789abcdef0123456789abcdef")
 	cfg := Load()
-	if len(cfg.APIKey) != 3 || cfg.APIKey[0] != "key1" || cfg.APIKey[1] != "key2" || cfg.APIKey[2] != "key3" {
-		t.Fatalf("APIKey split failed: %+v", cfg.APIKey)
-	}
 	if cfg.AdminToken != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("AdminToken failed: %s", cfg.AdminToken)
 	}
 }
 
+// The API_KEY env var was removed in favour of DB-managed client keys; a
+// stale value must produce a startup warning instead of failing silently.
+func TestConfig_Load_APIKeyDeprecationWarning(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"unset", "", false},
+		{"stale value", "legacy-key", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("API_KEY", tt.value)
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			Load()
+
+			if got := strings.Contains(buf.String(), "API_KEY is no longer supported"); got != tt.want {
+				t.Fatalf("warning = %v, want %v (output %q)", got, tt.want, buf.String())
+			}
+		})
+	}
+}
+
 func TestConfig_Validate_AdminRequired(t *testing.T) {
-	cfg := &Config{AdminToken: "", APIKey: []string{"a"}, Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "", Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ADMIN_TOKEN") {
 		t.Fatalf("expected ADMIN_TOKEN required error, got %v", err)
 	}
 }
 func TestConfig_Validate_AdminTokenTooShort(t *testing.T) {
-	cfg := &Config{AdminToken: "short", APIKey: []string{"a"}, Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
+	cfg := &Config{AdminToken: "short", Port: 1234, RateLimit: 60, UpstreamURLOpenCode: "u", UpstreamURLKilo: "u", UpstreamURLLLM7: "u"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at least 6") {
 		t.Fatalf("expected ADMIN_TOKEN length error, got %v", err)
 	}
@@ -150,11 +175,10 @@ func TestLoad_ProvidersDBPath_Custom(t *testing.T) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Port:                  1234,
-		AdminToken:            "0123456789abcdef0123456789abcdef",
-		APIKey:                []string{"test-key"},
-		LogLevel:              "info",
-		RateLimit:             60,
+		Port:       1234,
+		AdminToken: "0123456789abcdef0123456789abcdef",
+		LogLevel:   "info",
+		RateLimit:  60,
 
 		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
 		UpstreamKeyOpenCode:           []string{"public"},

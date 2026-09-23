@@ -121,8 +121,11 @@ func HmacForToken(token string) string {
 
 func hmacForToken(token string) string { return HmacForToken(token) }
 
-func ApiAuth(apiKeys []string, adminToken string) func(http.Handler) http.Handler {
-	return ApiAuthDB(apiKeys, adminToken, nil)
+// ApiAuth gates /v1/* on the admin token alone — the no-DB variant, used by
+// embedders and tests. server.go wires ApiAuthDB, which adds DB-managed
+// client keys on top of the same admin-token superset.
+func ApiAuth(adminToken string) func(http.Handler) http.Handler {
+	return ApiAuthDB(adminToken, nil)
 }
 
 // ClientKeyChecker verifies DB-managed client keys. Implemented by the
@@ -134,14 +137,13 @@ type ClientKeyChecker interface {
 	TouchClientKey(raw string)
 }
 
-// ApiAuthDB is ApiAuth plus DB-managed client keys: config keys and the
-// admin token keep working (superset), and a valid enabled DB key is
-// accepted with its usage recorded asynchronously so accounting adds no
-// latency to the request.
-func ApiAuthDB(apiKeys []string, adminToken string, checker ClientKeyChecker) func(http.Handler) http.Handler {
+// ApiAuthDB is ApiAuth plus DB-managed client keys: the admin token works
+// as superset, and a valid enabled DB key is accepted with its usage
+// recorded asynchronously so accounting adds no latency to the request.
+func ApiAuthDB(adminToken string, checker ClientKeyChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if len(apiKeys) == 0 && adminToken == "" && checker == nil {
+			if adminToken == "" && checker == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -149,12 +151,6 @@ func ApiAuthDB(apiKeys []string, adminToken string, checker ClientKeyChecker) fu
 			if key == "" {
 				if auth := r.Header.Get("Authorization"); len(auth) > 7 && auth[:7] == "Bearer " {
 					key = auth[7:]
-				}
-			}
-			for _, k := range apiKeys {
-				if subtle.ConstantTimeCompare([]byte(key), []byte(k)) == 1 {
-					next.ServeHTTP(w, r)
-					return
 				}
 			}
 			if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {

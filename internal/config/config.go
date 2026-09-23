@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -11,7 +12,6 @@ type Config struct {
 	Port       int
 	LogLevel   string
 	AdminToken string
-	APIKey     []string
 	RateLimit  int
 
 	// TrustProxyHeaders enables honoring X-Forwarded-For / X-Real-IP when
@@ -58,7 +58,6 @@ func Load() *Config {
 		Port:       envInt("PORT", 1234),
 		LogLevel:   envStr("LOG_LEVEL", "info"),
 		AdminToken: envStr("ADMIN_TOKEN", ""),
-		APIKey:     envSlice("API_KEY", ""),
 		RateLimit:  envInt("RATE_LIMIT", 60),
 
 		TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
@@ -86,6 +85,13 @@ func Load() *Config {
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
 
+	// API_KEY was removed in favour of DB-managed client keys. Warn loudly so
+	// an operator upgrading with a stale .env does not silently lose /v1/*
+	// access — the server would start fine and every request would 401.
+	if os.Getenv("API_KEY") != "" {
+		log.Printf("warn: API_KEY is no longer supported; create client keys at /settings or POST /api/api-keys")
+	}
+
 	return cfg
 }
 
@@ -96,12 +102,6 @@ func (c *Config) Validate() error {
 		errs = append(errs, "ADMIN_TOKEN is required")
 	} else if len(c.AdminToken) < 6 {
 		errs = append(errs, "ADMIN_TOKEN must be at least 6 characters")
-	}
-	for _, k := range c.APIKey {
-		if strings.TrimSpace(k) == "" {
-			errs = append(errs, "API_KEY entries must be non-empty")
-			break
-		}
 	}
 
 	if c.UpstreamURLOpenCode == "" {

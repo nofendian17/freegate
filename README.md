@@ -14,7 +14,7 @@ freegate proxies `/v1/chat/completions`, `/v1/messages` (Anthropic-native), `/v1
 - **Format translation** — accepts OpenAI, Claude (`/v1/messages`), and Gemini request formats, plus the Responses API (`/v1/responses`); detects and translates requests to the upstream OpenAI format, then translates responses back
 - **Token counting** — prompt/completion/total tokens extracted from upstream responses, displayed in dashboard
 - **Rate limiting** — per-IP rate limiter, configurable via env
-- **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts any comma-separated `API_KEY` entry, the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
+- **Admin + API auth** — dashboard requires `ADMIN_TOKEN` (login form / cookie or header); `/v1/*` accepts a DB-managed client key (created at `/settings` or `POST /api/api-keys`), the admin token, or the admin login cookie (`Authorization: Bearer <key>` / `X-API-Key: <key>` / cookie)
 - **Custom providers** — any OpenAI-compatible base URL + keys in SQLite (`PROVIDERS_DB_PATH`), managed at `/providers` or `/api/providers` (keys masked, test probe, live rebuild, no restart)
 - **Tiered combos** — combos are virtual models: `model=hemat` tries Tier1→Tier2→Tier3 in order, failing over on transport errors, 429s, 5xx, and free-tier rejections (one same-tier retry first); managed at `/providers` or `/api/combos`, listed in `/v1/models` as `combo:<name>`
 - **Terminal-style dashboard** — HTMX + Chart.js monitoring UI at `http://localhost:1234/` with a phosphor-green-on-black aesthetic, JetBrains Mono typeface, and purposeful zero-radius design
@@ -96,7 +96,6 @@ All settings are environment variables (`internal/config/config.go:Load` is sour
 | `PORT` | `1234` | Server port |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `ADMIN_TOKEN` | — | **Required** (>=6 chars). Admin password: gates the dashboard (login form at `/login`, cookie `fg_admin` or `X-Admin-Token`/`Bearer` header) and also works as a superset key for `/v1/*`. Generate: `openssl rand -hex 32` |
-| `API_KEY` | (empty) | Comma-separated keys for `/v1/*` (`X-API-Key` / Bearer); any entry valid, admin token is superset. **Empty = `/v1/*` stays admin-gated** (login cookie or admin token header only — no open API) |
 | `RATE_LIMIT` | `60` | Requests per minute per IP |
 | `TRUST_PROXY_HEADERS` | `false` | Honor `X-Forwarded-For` / `X-Real-IP` for client IP (rate limiting, logs). Leave `false` when exposed directly — forwarded headers are spoofable. Set `true` only behind a reverse proxy that overwrites them. |
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode upstream URL |
@@ -200,6 +199,8 @@ The dashboard follows the **TerminalUI** design system:
 | Path | Description |
 |------|-------------|
 | `GET /` | HTML dashboard (server-rendered initial state) |
+| `GET /providers` | HTML providers / combos / proxy-pool admin page |
+| `GET /settings` | HTML client API key management page |
 | `GET /partials/stats` | HTMX partial: 4 metric cards (requests, errors, input/output tokens) |
 | `GET /partials/requests` | HTMX partial: last 100 proxied requests table |
 | `GET /partials/models` | HTMX partial: free-models table with provider filter |
@@ -213,6 +214,7 @@ The dashboard follows the **TerminalUI** design system:
 - **Admin login required.** The dashboard is behind `ADMIN_TOKEN` (`/login`). The Docker compose file binds the proxy port to `127.0.0.1:1234` so it is not exposed to the network by default; `GET /ready` stays public for health probes.
 - **In-memory only (metrics).** All counters and request history are lost on restart. The ring buffers hold at most 100 recent requests and 360 timeseries samples (1 hour at 10s cadence).
 - **SQLite persistence (config).** Custom providers, tiered combos, and seeded auth + upstream settings persist in `PROVIDERS_DB_PATH` (default `./data/providers.db`). Mount a volume over `./data` in docker or the file is lost with the container.
+- **Client keys replaced `API_KEY`.** `/v1/*` credentials are DB-managed: create them at `/settings` (or `POST /api/api-keys`). The `API_KEY` env var was **removed** — a stale value in `.env` is ignored (the server logs `warn: API_KEY is no longer supported` on boot) and keys from it no longer authenticate, so create a client key at `/settings` before upgrading clients.
 
 ## Playground
 
@@ -224,7 +226,7 @@ The dashboard includes an embedded **chat playground** — a modal chat UI serve
 - **Multi-turn thread** — keep the conversation going; full history is sent with each request
 - **Persistence** — the thread survives page reloads via `localStorage` (key: `freegate.playground.v1`); "clear" wipes it
 - **Shortcuts** — `Enter` sends, `Shift+Enter` inserts a newline
-- **Admin-only dashboard** — the dashboard requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use any `API_KEY` entry or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
+- **Admin-only dashboard** — the dashboard requires `ADMIN_TOKEN` login. The playground calls `/v1/chat/completions` with the same credentials: after dashboard login the `fg_admin` cookie authorizes it automatically; external clients use a DB client key (created at `/settings` or `POST /api/api-keys`) or the admin token via `Authorization: Bearer <key>` / `X-API-Key: <key>`
 
 Internally the dashboard polls HTMX fragments (`/partials/stats`, `/partials/upstreams`, `/partials/requests`, `/partials/models`) while Alpine owns interactive state: modals, the model-test flow, the playground chat component, and the providers admin client. The playground send path uses **fetch directly**: streaming mode consumes the OpenAI SSE response with a ReadableStream reader and appends delta text incrementally, with automatic fallback to buffered rendering when SSE or streams are unavailable; non-streaming mode waits for the full JSON. The modal markup lives in `web/templates/partials/playground_modal.html` (rendered into `dashboard.html` via a `{{template}}` directive), the Alpine component in `web/static/js/playground.js`, and the model picker loads `/v1/models` as JSON.
 

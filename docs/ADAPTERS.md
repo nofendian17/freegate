@@ -6,7 +6,7 @@ How to use freegate as the API backend for Claude Code and Codex CLI.
 
 - freegate running and accessible (default: `http://localhost:1234`)
 - Models loaded (check `http://localhost:1234/ready` returns 200, or visit the dashboard at `http://localhost:1234/`)
-- If `API_KEY` is set, note the key for authentication
+- A client API key (created at `/settings` or `POST /api/api-keys`) or the `ADMIN_TOKEN` for authentication
 
 ---
 
@@ -20,7 +20,7 @@ freegate exposes `/v1/messages` which accepts the Claude Messages API format and
 # Base URL — no /v1 suffix, freegate handles routing
 export ANTHROPIC_BASE_URL="http://localhost:1234"
 
-# Auth token — any `API_KEY` entry, or the ADMIN_TOKEN itself
+# Auth token — a DB client key (created at `/settings` or `POST /api/api-keys`), or the ADMIN_TOKEN itself
 export ANTHROPIC_AUTH_TOKEN="your-api-key"
 
 # Model mapping — tell Claude Code which free model to use for each tier
@@ -98,7 +98,7 @@ openai_base_url = "http://localhost:1234/v1"
 model = "deepseek-v4-flash-free"
 ```
 
-This changes the base URL for the built-in OpenAI provider. If freegate has `API_KEY` set, pass it as an env var on each run:
+This changes the base URL for the built-in OpenAI provider. Pass your client key as an env var on each run:
 
 ```bash
 OPENAI_API_KEY=your-key codex
@@ -167,14 +167,14 @@ Codex CLI sends OpenAI Chat Completions format; freegate proxies it directly to 
 
 ## Authentication
 
-If freegate is configured with `API_KEY`, both Claude Code and Codex CLI must include it:
+Both Claude Code and Codex CLI must send a freegate credential:
 
 | Tool | How to pass |
 |------|-------------|
 | **Claude Code** | `ANTHROPIC_AUTH_TOKEN` env var |
 | **Codex CLI** | `OPENAI_API_KEY` env var (or the `env_key` configured in `[model_providers]`) |
 
-`/v1/*` always requires auth: pass any `API_KEY` entry, or the `ADMIN_TOKEN`. If `API_KEY` is empty (default), use the `ADMIN_TOKEN` as the bearer — there is no open API. The dashboard at `/` requires admin login (`ADMIN_TOKEN`) regardless.
+`/v1/*` always requires auth: pass a DB client key, or the `ADMIN_TOKEN`. Without a client key, use the `ADMIN_TOKEN` as the bearer — there is no open API. The dashboard at `/` requires admin login (`ADMIN_TOKEN`) regardless.
 
 ---
 
@@ -184,7 +184,7 @@ If freegate is configured with `API_KEY`, both Claude Code and Codex CLI must in
 The upstream catalogs haven't loaded yet. Wait a few seconds and check the dashboard at `http://localhost:1234/`.
 
 **"401 Unauthorized"**
-freegate has `API_KEY` set but the tool isn't sending it. Set the auth env var (see table above).
+The tool isn't sending a credential. Set the auth env var (see table above).
 
 **Claude Code shows "model not found"**
 Model discovery is off by default (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`). Either enable it or set `ANTHROPIC_DEFAULT_*_MODEL` to a model ID from `GET /v1/models`.

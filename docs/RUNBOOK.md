@@ -21,13 +21,12 @@ docker compose build
 # 2. Configure (.env at repo root or in the shell)
 cat > .env <<EOF
 ADMIN_TOKEN=$(openssl rand -hex 32)
-API_KEY=$(openssl rand -hex 32),$(openssl rand -hex 32)
 LOG_LEVEL=info
 RATE_LIMIT=60
 EOF
 # ADMIN_TOKEN is required, >=6 chars (user-defined password) — protects dashboard (/, /partials/*, /api/*) and is also valid for /v1/* (superset).
-# API_KEY is comma-separated, e.g. key1,key2 — any entry valid for /v1/*.
-# Empty = /v1/* stays admin-gated (fg_admin login cookie or raw ADMIN_TOKEN header only) — no open API.
+# Client API keys are DB-managed: create them at /settings or POST /api/api-keys after first login.
+# Without a client key, /v1/* stays admin-gated (fg_admin login cookie or raw ADMIN_TOKEN header only) — no open API.
 
 # 3. Start
 docker compose up -d
@@ -57,12 +56,12 @@ The service is `restart: unless-stopped`.
 The default port binding is local-only. To expose:
 
 1. Edit `docker-compose.yml` and change the `ports:` mapping to your public interface (or remove `127.0.0.1:` prefix)
-2. Set `ADMIN_TOKEN` in `.env` (required, >=6 chars, user-defined password, e.g. `openssl rand -hex 32`) — **the dashboard (`/`, `/partials/*`, `/api/*`) is always admin-only** (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`). For API access set `API_KEY` as comma-separated list, e.g. `key1,key2` — any entry valid for `/v1/*`; `ADMIN_TOKEN` also valid there (superset).
+2. Set `ADMIN_TOKEN` in `.env` (required, >=6 chars, user-defined password, e.g. `openssl rand -hex 32`) — **the dashboard (`/`, `/partials/*`, `/api/*`) is always admin-only** (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`). For API access create a client key at `/settings` or `POST /api/api-keys` after first login; `ADMIN_TOKEN` also valid there (superset). **Upgrading from a release that used `API_KEY`:** the env var was removed — a stale value is ignored (boot logs `warn: API_KEY is no longer supported`) and those keys now return `401`, so create a client key at `/settings` before pointing clients at the new build.
 3. Put a reverse proxy (Caddy, nginx, traefik) in front for TLS (cookie `Secure` when `X-Forwarded-Proto: https` or `r.TLS != nil`, `SameSite=Lax`, `HttpOnly`)
 
 ## Health checks
 
-Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/ready` public — no token, Docker HEALTHCHECK target; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/pools` require `AdminAuth` cookie/header; `/v1/*` requires `ApiAuth` API key list or `ADMIN_TOKEN` superset):
+Three layered endpoints, all `GET` (auth: `/login`, `/logout`, `/static/*`, `/ready` public — no token, Docker HEALTHCHECK target; dashboard `/`, `/api/health`, `/api/timeseries`, `/partials/*`, `/api/pools` require `AdminAuth` cookie/header; `/v1/*` requires `ApiAuthDB` DB client key or `ADMIN_TOKEN` superset):
 
 | Endpoint | Used by | Returns |
 |----------|---------|---------|
@@ -86,8 +85,8 @@ curl -s -H "X-Admin-Token: $ADMIN_TOKEN" http://localhost:1234/api/health | jq
 # Login via curl (sets cookie):
 curl -i -X POST -d "admin_token=$ADMIN_TOKEN" http://localhost:1234/login
 
-# API requires API_KEY list or ADMIN_TOKEN (superset):
-curl -s -H "X-API-Key: key1" http://localhost:1234/v1/models | jq '.data | length'  # any of key1,key2
+# API requires a DB client key (/settings or POST /api/api-keys) or ADMIN_TOKEN (superset):
+curl -s -H "X-API-Key: fg_<key>" http://localhost:1234/v1/models | jq '.data | length'
 curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:1234/v1/models | jq '.data | length'
 # /ready is public — no token needed:
 curl -s http://localhost:1234/ready | jq
@@ -280,7 +279,7 @@ docker compose up -d
 ## Security checklist (production)
 
 - [ ] `ADMIN_TOKEN` is set (required, >=6 chars, user-defined password, e.g. `openssl rand -hex 32`) — dashboard (`/`, `/partials/*`, `/api/*`) is admin-only via `AdminAuth` (cookie `fg_admin` HMAC or header `X-Admin-Token`/`Bearer`)
-- [ ] `API_KEY` is comma-separated high-entropy values (e.g. `key1,key2`) for external clients — leaving it empty keeps `/v1/*` admin-gated (login cookie or `ADMIN_TOKEN` header only, no open API); do not log tokens or cookie values
+- [ ] Client API keys are DB-managed high-entropy values (created at `/settings` or `POST /api/api-keys`) — without one, `/v1/*` stays admin-gated (login cookie or `ADMIN_TOKEN` header only, no open API); do not log tokens or cookie values
 - [ ] Port `1234` is bound to `127.0.0.1` or behind a reverse proxy with TLS (cookie `Secure` when TLS, `HttpOnly`, `SameSite=Lax`)
 - [ ] `LOG_LEVEL` is `info` (not `debug`) in production
 - [ ] Docker socket is not mounted into either container

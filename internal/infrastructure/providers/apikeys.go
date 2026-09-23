@@ -15,7 +15,6 @@ import (
 // can be shown again later via RevealClientKey. List/get/update responses
 // never carry the secret — only the explicit reveal path returns it, and
 // that route is admin-only like the rest of /api/*.
-// Config API_KEY entries keep working alongside these (superset).
 type ClientKey struct {
 	ID        uint       `gorm:"primaryKey" json:"id"`
 	Name      string     `gorm:"uniqueIndex;not null" json:"name"`
