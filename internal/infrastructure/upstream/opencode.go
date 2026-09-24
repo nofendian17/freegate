@@ -178,9 +178,9 @@ func (o *OpenCodeUpstream) Models() []domain.Model {
 func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*domain.UpstreamResponse, error) {
 	model := extractOpencodeModel(body)
 	endpoint := o.buildURL(model, body)
-	out := body
+	out := stripNoneReasoningEffort(body)
 	if o.isMessagesModel(model) {
-		out = ensureMessagesMaxTokens(body)
+		out = ensureMessagesMaxTokens(out)
 	}
 	// Anonymous free-tier requests without tools are rejected with 403
 	// FreeTierError on every endpoint (verified live); a non-empty tools
@@ -408,6 +408,60 @@ func extractOpencodeModel(body []byte) string {
 		return ""
 	}
 	return probe.Model
+}
+
+// stripNoneReasoningEffort drops top-level reasoning_effort/reasoning
+// effort 'none' before hitting Console upstreams (e.g. muse-spark rejects
+// 'none' with 400; supported: minimal/low/medium/high/xhigh/max).
+// Covers direct passthrough paths (OpenAI→OpenAI, Responses→Responses)
+// that bypass the translators. Returns the original body when nothing
+// needs stripping.
+func stripNoneReasoningEffort(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	if !bytes.Contains(body, []byte(`"none"`)) {
+		return body
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return body
+	}
+	changed := false
+	if s, ok := raw["reasoning_effort"].(string); ok && strings.ToLower(strings.TrimSpace(s)) == "none" {
+		delete(raw, "reasoning_effort")
+		changed = true
+	}
+	if r, ok := raw["reasoning"].(map[string]any); ok {
+		if eff, ok := r["effort"].(string); ok && strings.ToLower(strings.TrimSpace(eff)) == "none" {
+			delete(raw, "reasoning")
+			changed = true
+		}
+	} else if s, ok := raw["reasoning"].(string); ok && strings.ToLower(strings.TrimSpace(s)) == "none" {
+		delete(raw, "reasoning")
+		changed = true
+	}
+	// Claude-native hint: output_config.effort 'none' would otherwise
+	// become reasoning_effort 'none' downstream.
+	if oc, ok := raw["output_config"].(map[string]any); ok {
+		if eff, ok := oc["effort"].(string); ok && strings.ToLower(strings.TrimSpace(eff)) == "none" {
+			delete(oc, "effort")
+			if len(oc) == 0 {
+				delete(raw, "output_config")
+			} else {
+				raw["output_config"] = oc
+			}
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // ensureMessagesMaxTokens defaults max_tokens to 4096 for Messages API

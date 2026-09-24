@@ -144,10 +144,13 @@ func copyThinking(claude, openai map[string]any) {
 // mapEffort passes OpenAI-spec reasoning_effort values through verbatim
 // (see https://developers.openai.com/api/docs/guides/reasoning) and
 // returns "" for anything else so unknown hints are dropped rather than
-// invented.
+// invented. "none" is deliberately excluded: Console upstreams (e.g.
+// muse-spark) reject reasoning_effort 'none' with 400 — supported values
+// are [minimal, low, medium, high, xhigh, max]. Stripping "none" matches
+// the Claude/Gemini targets where none maps to "omit thinking".
 func mapEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+	case "minimal", "low", "medium", "high", "xhigh", "max":
 		return strings.ToLower(strings.TrimSpace(effort))
 	default:
 		return ""
