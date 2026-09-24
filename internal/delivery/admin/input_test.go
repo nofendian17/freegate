@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 func TestDecodeInputSanitizesBeforeValidation(t *testing.T) {
@@ -111,7 +111,7 @@ func TestInputValidation(t *testing.T) {
 			name: "combo",
 			value: comboIn{
 				Name:  "bad name",
-				Tiers: []providers.ComboTier{{Provider: ""}},
+				Tiers: []registry.ComboTier{{Provider: ""}},
 			},
 		},
 		{

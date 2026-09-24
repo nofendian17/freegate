@@ -25,8 +25,8 @@ import (
 	"freegate/internal/domain"
 	"freegate/internal/httputil"
 	"freegate/internal/infrastructure/metrics"
-	"freegate/internal/infrastructure/providers"
 	"freegate/internal/infrastructure/recorder"
+	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream"
 	"freegate/web"
 )
@@ -48,7 +48,7 @@ type Server struct {
 	opencode  *upstream.OpenCodeUpstream
 	kilo      *upstream.KiloUpstream
 	llm7      *upstream.LLM7Upstream
-	pstore    *providers.Store
+	pstore    *registry.Store
 	manager   *upstream.ProviderManager
 	combo     *upstream.ComboRouter
 	rec       *recorder.Recorder
@@ -69,7 +69,7 @@ func upstreamToDomain(all []*upstream.CustomUpstream) []domain.Upstream {
 	return out
 }
 
-func comboRows(ctx context.Context, pstore *providers.Store) ([]upstream.ComboTierRow, error) {
+func comboRows(ctx context.Context, pstore *registry.Store) ([]upstream.ComboTierRow, error) {
 	rows, err := pstore.ListCombos(ctx)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func comboRows(ctx context.Context, pstore *providers.Store) ([]upstream.ComboTi
 
 // syncRelayPools loads enabled proxy pools into the shared edge-relay
 // selector so upstream requests route via the Vercel relay.
-func syncRelayPools(ctx context.Context, pstore *providers.Store) error {
+func syncRelayPools(ctx context.Context, pstore *registry.Store) error {
 	pools, err := pstore.ListPools(ctx)
 	if err != nil {
 		return err
@@ -103,12 +103,12 @@ func syncRelayPools(ctx context.Context, pstore *providers.Store) error {
 // their configured pools. Unconfigured builtins follow the global
 // rotation. Runs on startup and on every rebuild so pool edits,
 // deletes, and disables take effect without a restart.
-func applyBuiltinProxies(ctx context.Context, pstore *providers.Store, opencode *upstream.OpenCodeUpstream, kilo *upstream.KiloUpstream, llm7 *upstream.LLM7Upstream) error {
+func applyBuiltinProxies(ctx context.Context, pstore *registry.Store, opencode *upstream.OpenCodeUpstream, kilo *upstream.KiloUpstream, llm7 *upstream.LLM7Upstream) error {
 	settings, err := pstore.ListBuiltinProxies(ctx)
 	if err != nil {
 		return err
 	}
-	byName := make(map[string]providers.BuiltinProxy, len(settings))
+	byName := make(map[string]registry.BuiltinProxy, len(settings))
 	for _, b := range settings {
 		byName[b.Name] = b
 	}
@@ -118,7 +118,7 @@ func applyBuiltinProxies(ctx context.Context, pstore *providers.Store, opencode 
 		"llm7":     llm7.SetRelayPools,
 	} {
 		b := byName[name]
-		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (providers.ProxyPool, error) {
+		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
 			return pstore.GetPool(ctx, id)
 		}))
 	}
@@ -145,7 +145,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
 
-	pstore, err := providers.Open(ctx, cfg.ProvidersDBPath)
+	pstore, err := registry.Open(ctx, cfg.ProvidersDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}

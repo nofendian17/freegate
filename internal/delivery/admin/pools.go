@@ -11,7 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 type poolIn struct {
@@ -36,7 +36,7 @@ func (h *Handler) createPool(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.CreatePool(r.Context(), providers.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
+	row, err := h.store.CreatePool(r.Context(), registry.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -64,7 +64,7 @@ func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.UpdatePool(r.Context(), uint(id), providers.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
+	row, err := h.store.UpdatePool(r.Context(), uint(id), registry.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -137,8 +137,8 @@ func (h *Handler) testPool(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": ok, "status": resp.StatusCode, "error": lastErr, "elapsedMs": elapsed})
 }
 
-func (h *Handler) persistPoolFailure(ctx context.Context, row providers.ProxyPool, lastErr string) {
-	if _, err := h.store.UpdatePool(ctx, row.ID, providers.ProxyPool{Name: row.Name, ProxyURL: row.ProxyURL, NoProxy: row.NoProxy, StrictProxy: row.StrictProxy, Enabled: false}); err != nil {
+func (h *Handler) persistPoolFailure(ctx context.Context, row registry.ProxyPool, lastErr string) {
+	if _, err := h.store.UpdatePool(ctx, row.ID, registry.ProxyPool{Name: row.Name, ProxyURL: row.ProxyURL, NoProxy: row.NoProxy, StrictProxy: row.StrictProxy, Enabled: false}); err != nil {
 		slog.Warn("failed to disable failed pool", "pool_id", row.ID, "error", err)
 	}
 	if err := h.store.MarkPoolTest(ctx, row.ID, false, lastErr); err != nil {

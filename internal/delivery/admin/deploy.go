@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 const vercelAPI = "https://api.vercel.com"
@@ -211,7 +211,7 @@ func (h *Handler) deployPoolToVercel(w http.ResponseWriter, r *http.Request) {
 	urlStr, _ := ready["url"].(string)
 	deployURL := "https://" + urlStr
 
-	row, err := h.store.CreatePool(r.Context(), providers.ProxyPool{Name: projectName, ProxyURL: deployURL, Enabled: true})
+	row, err := h.store.CreatePool(r.Context(), registry.ProxyPool{Name: projectName, ProxyURL: deployURL, Enabled: true})
 	if err != nil {
 		respondStoreError(w, err)
 		return

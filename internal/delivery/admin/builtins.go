@@ -6,7 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 type builtinProxyIn struct {
@@ -30,7 +30,7 @@ func (h *Handler) listBuiltinProxies(w http.ResponseWriter, r *http.Request) {
 // the given pool. Triggers a rebuild so the live upstream picks it up.
 func (h *Handler) updateBuiltinProxy(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	if !providers.IsBuiltin(name) {
+	if !registry.IsBuiltin(name) {
 		respond.JSONError(w, http.StatusNotFound, "not_found", "unknown builtin provider")
 		return
 	}

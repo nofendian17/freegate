@@ -177,6 +177,16 @@
           else this.sendOnce();
         },
 
+        // Enter sends, Shift+Enter falls through to the browser default
+        // (newline). Kept as a method because the vendored Alpine has no
+        // `.exact` modifier — it would treat "exact" as an extra required
+        // key and drop the handler entirely.
+        onEnter: function (e) {
+          if (e.shiftKey) return;
+          e.preventDefault();
+          this.send();
+        },
+
         scroll: function () {
           var self = this;
           this.$nextTick(function () {

@@ -123,6 +123,7 @@ func TestPlaygroundAlpineComponent(t *testing.T) {
 		"loadModels",               // /v1/models fetch
 		"new AbortController",      // stop/abort wiring
 		"pushAssistant",            // assistant bubble finalize
+		"onEnter",                  // Enter-to-send vs Shift+Enter newline
 		"alpine:init",
 	}
 	for _, want := range must {
@@ -151,17 +152,17 @@ func TestPlaygroundModalUsesHTMX(t *testing.T) {
 	body := string(data)
 
 	must := []string{
-		`x-data="playground()"`,      // Alpine owns modal state
-		`@submit.prevent="send()"`,   // form submit goes to the component
-		`@click="close()"`,           // close trigger
-		`@click="clear()"`,           // clear trigger
-		`@keydown.enter.exact`,       // Enter-to-send
-		`x-model="model"`,            // model picker binding
-		`x-model="stream"`,           // stream checkbox binding
-		`x-model="system"`,           // system prompt binding
-		`x-model="input"`,            // input binding
-		`@click="stop()"`,            // stop button
-		`x-for="(m, i) in messages"`, // thread rendering
+		`x-data="playground()"`,            // Alpine owns modal state
+		`@submit.prevent="send()"`,         // form submit goes to the component
+		`@click="close()"`,                 // close trigger
+		`@click="clear()"`,                 // clear trigger
+		`@keydown.enter="onEnter($event)"`, // Enter-to-send (Shift+Enter = newline)
+		`x-model="model"`,                  // model picker binding
+		`x-model="stream"`,                 // stream checkbox binding
+		`x-model="system"`,                 // system prompt binding
+		`x-model="input"`,                  // input binding
+		`@click="stop()"`,                  // stop button
+		`x-for="(m, i) in messages"`,       // thread rendering
 	}
 	for _, want := range must {
 		if !strings.Contains(body, want) {

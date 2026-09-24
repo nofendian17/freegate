@@ -11,7 +11,7 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"freegate/internal/delivery/respond"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 	appvalidation "freegate/internal/validation"
 )
 
@@ -110,7 +110,7 @@ func (input *providerIn) Sanitize() {
 	input.APIKeys = sanitizeTokens(input.APIKeys)
 	input.Headers = sanitizeHeaders(input.Headers)
 	if input.Models != nil {
-		models := providers.NormalizeModels(*input.Models)
+		models := registry.NormalizeModels(*input.Models)
 		input.Models = &models
 	}
 	if input.ProxyMode != nil {

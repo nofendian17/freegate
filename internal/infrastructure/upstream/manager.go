@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 func refreshInterval(sec int) time.Duration {
@@ -22,7 +22,7 @@ func refreshInterval(sec int) time.Duration {
 
 type ProviderManager struct {
 	mu        sync.RWMutex
-	store     *providers.Store
+	store     *registry.Store
 	tr        *http.Transport
 	customs   map[string]*CustomUpstream
 	intervals map[string]time.Duration
@@ -34,14 +34,14 @@ type ProviderManager struct {
 	wg sync.WaitGroup
 }
 
-func NewProviderManager(s *providers.Store, tr *http.Transport) *ProviderManager {
+func NewProviderManager(s *registry.Store, tr *http.Transport) *ProviderManager {
 	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
 // relayPools resolves a provider's edge-relay setting to a pool list for
 // CustomUpstream.SetRelayPools (see ResolveRelayPools).
-func (m *ProviderManager) relayPools(ctx context.Context, full providers.Provider) []RelayPool {
-	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (providers.ProxyPool, error) {
+func (m *ProviderManager) relayPools(ctx context.Context, full registry.Provider) []RelayPool {
+	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
 		return m.store.GetPool(ctx, id)
 	})
 }
