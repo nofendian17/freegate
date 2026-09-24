@@ -40,10 +40,13 @@ func ToOpenAI(body []byte) ([]byte, error) {
 			out["max_tokens"] = v
 		}
 	}
-	// reasoning.effort -> reasoning_effort
+	// reasoning.effort -> reasoning_effort ("none" is stripped: Console
+	// upstreams such as muse-spark reject effort 'none' with 400).
 	if r, ok := raw["reasoning"].(map[string]any); ok {
 		if eff, ok := r["effort"].(string); ok && eff != "" {
-			out["reasoning_effort"] = eff
+			if !isNoneEffort(eff) {
+				out["reasoning_effort"] = eff
+			}
 		}
 	}
 
@@ -583,10 +586,14 @@ func FromOpenAI(body []byte) ([]byte, error) {
 		out["max_output_tokens"] = v
 	}
 	if v, ok := raw["reasoning"]; ok {
-		out["reasoning"] = v
+		if !isNoneReasoning(v) {
+			out["reasoning"] = v
+		}
 	} else if v, ok := raw["reasoning_effort"]; ok {
 		if s, ok := v.(string); ok {
-			out["reasoning"] = map[string]any{"effort": s, "summary": "auto"}
+			if s != "" && !isNoneEffort(s) {
+				out["reasoning"] = map[string]any{"effort": s, "summary": "auto"}
+			}
 		}
 	}
 
@@ -651,6 +658,27 @@ func strOr(v any, def string) string {
 		return s
 	}
 	return def
+}
+
+// isNoneEffort reports whether an effort string means "no reasoning".
+// Console upstreams (e.g. muse-spark) reject 'none' with 400, so callers
+// strip it instead of forwarding verbatim.
+func isNoneEffort(s string) bool {
+	return strings.ToLower(strings.TrimSpace(s)) == "none"
+}
+
+// isNoneReasoning reports whether a Responses reasoning value carries
+// effort 'none' (map form {"effort":"none",...} or plain string "none").
+func isNoneReasoning(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return isNoneEffort(t)
+	case map[string]any:
+		if eff, ok := t["effort"].(string); ok {
+			return isNoneEffort(eff)
+		}
+	}
+	return false
 }
 
 func buildReasoningInput(msg map[string]any) map[string]any {
