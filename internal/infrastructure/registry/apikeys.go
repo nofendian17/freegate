@@ -71,6 +71,9 @@ func (s *Store) CreateClientKey(ctx context.Context, name string) (ClientKey, st
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return ClientKey{}, "", wrapStoreError("create client key", err)
 	}
+	if s.verifyCache != nil {
+		s.verifyCache.invalidate(hash)
+	}
 	return row, raw, nil
 }
 
@@ -137,6 +140,9 @@ func (s *Store) UpdateClientKey(ctx context.Context, id uint, name string, enabl
 	if result.RowsAffected == 0 {
 		return ClientKey{}, fmt.Errorf("update client key %d: %w", id, ErrNotFound)
 	}
+	if s.verifyCache != nil {
+		s.verifyCache.invalidateAll()
+	}
 	return s.GetClientKey(ctx, id)
 }
 
@@ -149,24 +155,42 @@ func (s *Store) DeleteClientKey(ctx context.Context, id uint) error {
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("delete client key %d: %w", id, ErrNotFound)
 	}
+	if s.verifyCache != nil {
+		s.verifyCache.invalidateAll()
+	}
 	return nil
 }
 
-// VerifyClientKey reports whether raw is an enabled client key.
+// VerifyClientKey reports whether raw is an enabled client key. Positive and
+// negative results are cached in memory for clientKeyVerifyTTL so hot /v1/*
+// traffic does not hit SQLite on every request. Update and delete paths
+// invalidate the cache so revokes take effect on the next request.
 func (s *Store) VerifyClientKey(ctx context.Context, raw string) (bool, error) {
 	if raw == "" {
 		return false, nil
 	}
+	hash := hashClientKey(raw)
+	if s.verifyCache != nil {
+		if valid, ok := s.verifyCache.get(hash); ok {
+			return valid, nil
+		}
+	}
 	var row ClientKey
 	err := s.db.WithContext(ctx).
 		Select("enabled").
-		Where("key_hash = ?", hashClientKey(raw)).
+		Where("key_hash = ?", hash).
 		First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if s.verifyCache != nil {
+			s.verifyCache.set(hash, false)
+		}
 		return false, nil
 	}
 	if err != nil {
 		return false, wrapStoreError("verify client key", err)
+	}
+	if s.verifyCache != nil {
+		s.verifyCache.set(hash, row.Enabled)
 	}
 	return row.Enabled, nil
 }

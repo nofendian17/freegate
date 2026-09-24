@@ -17,17 +17,17 @@ import (
 )
 
 const (
-	maxOpenConnections = 4
-	maxIdleConnections = 4
+	maxOpenConnections = 16
+	maxIdleConnections = 8
 	connectionLifetime = 30 * time.Minute
 	connectionIdleTime = 5 * time.Minute
-	sqlitePragmas      = "_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
 )
 
 type Store struct {
-	db    *gorm.DB
-	sqlDB *sql.DB
-	usage *clientKeyUsageRecorder
+	db          *gorm.DB
+	sqlDB       *sql.DB
+	usage       *clientKeyUsageRecorder
+	verifyCache *clientKeyVerifyCache
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -56,7 +56,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, errors.Join(fmt.Errorf("access providers database: %w", err), closeSQLDB(db))
 	}
 	maxOpen, maxIdle := maxOpenConnections, maxIdleConnections
-	if path == ":memory:" {
+	if isMemoryDB(path) {
 		maxOpen, maxIdle = 1, 1
 	}
 	sqlDB.SetMaxOpenConns(maxOpen)
@@ -70,7 +70,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, errors.Join(fmt.Errorf("migrate providers database: %w", err), closeSQLDB(db))
 	}
 	storeLogger := slog.Default()
-	s := &Store{db: db, sqlDB: sqlDB}
+	s := &Store{db: db, sqlDB: sqlDB, verifyCache: newClientKeyVerifyCache()}
 	s.usage = newClientKeyUsageRecorder(db, storeLogger)
 	return s, nil
 }
@@ -104,7 +104,19 @@ func sqliteDSN(path string) string {
 	if strings.Contains(path, "?") {
 		separator = "&"
 	}
-	return path + separator + sqlitePragmas
+	pragmas := "_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)&_txlock=immediate"
+	if !isMemoryDB(path) {
+		pragmas += "&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	}
+	return path + separator + pragmas
+}
+
+func isMemoryDB(path string) bool {
+	if path == ":memory:" {
+		return true
+	}
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "mode=memory")
 }
 
 func closeSQLDB(db *gorm.DB) error {

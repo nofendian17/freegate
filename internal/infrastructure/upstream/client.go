@@ -101,8 +101,8 @@ func NewTransport() *http.Transport {
 		// response headers within seconds (streaming), so 30s is ample
 		// headroom without parking a request for a minute on a dead tier.
 		ResponseHeaderTimeout: 30 * time.Second,
-		MaxIdleConns:          50,
-		MaxIdleConnsPerHost:   20,
+		MaxIdleConns:          256,
+		MaxIdleConnsPerHost:   64,
 		// Must stay below the model refresh cadence (60s): a pooled
 		// connection blackholed mid-flight (e.g. an h2 session with
 		// a stream in flight during CloseIdleConnections, which
