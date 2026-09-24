@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 type tierStub struct {
@@ -367,7 +367,7 @@ func TestComboRouter_Rebuild_PreservesTierModels(t *testing.T) {
 	cr := NewComboRouter(NewRouter(def))
 	cr.RebuildCombos([]ComboTierRow{{
 		Name: "sparky",
-		Tiers: []providers.ComboTier{
+		Tiers: []registry.ComboTier{
 			{Provider: "opencode", Model: "muse-spark-1.3-contributor-free"},
 		},
 	}}, func(name string) domain.Upstream { return def })

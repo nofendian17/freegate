@@ -44,7 +44,7 @@
           class="mt-2 w-full resize-y rounded-2xl border border-hairline bg-canvas p-2.5 text-body text-ink outline-none placeholder:text-mid-gray"></textarea>
       </div>
       <form id="pg-form" @submit.prevent="send()" class="flex items-stretch gap-2">
-        <textarea id="pg-input" x-ref="input" x-model="input" rows="3" @keydown.enter.exact.prevent="send()"
+        <textarea id="pg-input" x-ref="input" x-model="input" rows="3" @keydown.enter="onEnter($event)"
           placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
           class="min-h-16 flex-1 resize-y rounded-2xl border border-hairline bg-canvas p-2.5 text-body text-ink outline-none placeholder:text-mid-gray"></textarea>
         <button id="pg-send" type="submit" :disabled="busy"

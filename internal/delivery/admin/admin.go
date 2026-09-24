@@ -17,12 +17,12 @@ import (
 
 	"freegate/internal/delivery/respond"
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream"
 )
 
 type Handler struct {
-	store     *providers.Store
+	store     *registry.Store
 	rebuild   func(context.Context) error
 	transport *http.Transport
 	// warm synchronously loads one custom provider's model catalog so it
@@ -35,7 +35,7 @@ type Handler struct {
 	inflight map[string]struct{}
 }
 
-func New(store *providers.Store, rebuild func(context.Context) error, transport *http.Transport) *Handler {
+func New(store *registry.Store, rebuild func(context.Context) error, transport *http.Transport) *Handler {
 	return &Handler{store: store, rebuild: rebuild, transport: transport}
 }
 
@@ -138,18 +138,18 @@ type providerIn struct {
 // global rotation, empty means direct, otherwise the pinned pool. It also
 // returns the pinned pool row (nil unless mode is pool) so callers needing
 // pool details don't query twice.
-func (h *Handler) resolveProxy(ctx context.Context, mode string, poolID *uint) (pools []upstream.RelayPool, pool *providers.ProxyPool, err error) {
-	switch providers.NormalizeProxyMode(mode) {
-	case providers.ProxyModeDirect:
+func (h *Handler) resolveProxy(ctx context.Context, mode string, poolID *uint) (pools []upstream.RelayPool, pool *registry.ProxyPool, err error) {
+	switch registry.NormalizeProxyMode(mode) {
+	case registry.ProxyModeDirect:
 		return []upstream.RelayPool{}, nil, nil
-	case providers.ProxyModePool:
+	case registry.ProxyModePool:
 		if poolID == nil {
-			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", providers.ErrInvalidArgument)
+			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)
 		}
 		p, err := h.store.GetPool(ctx, *poolID)
 		if err != nil {
-			if errors.Is(err, providers.ErrNotFound) {
-				return nil, nil, fmt.Errorf("%w: proxy pool %d: %w", providers.ErrInvalidArgument, *poolID, providers.ErrNotFound)
+			if errors.Is(err, registry.ErrNotFound) {
+				return nil, nil, fmt.Errorf("%w: proxy pool %d: %w", registry.ErrInvalidArgument, *poolID, registry.ErrNotFound)
 			}
 			return nil, nil, err
 		}
@@ -186,7 +186,7 @@ func (h *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 		respondStoreError(w, err)
 		return
 	}
-	row, err := h.store.CreateProvider(r.Context(), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: in.ProxyPoolID})
+	row, err := h.store.CreateProvider(r.Context(), registry.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: in.APIKeys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: in.ProxyPoolID})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -242,7 +242,7 @@ func (h *Handler) updateProvider(w http.ResponseWriter, r *http.Request) {
 		respondStoreError(w, err)
 		return
 	}
-	row, err := h.store.UpdateProvider(r.Context(), uint(id), providers.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: poolID})
+	row, err := h.store.UpdateProvider(r.Context(), uint(id), registry.Provider{Name: in.Name, BaseURL: in.BaseURL, APIKeys: keys, Headers: in.Headers, Models: models, RefreshSec: in.RefreshSec, Priority: in.Priority, Enabled: in.Enabled, ProxyMode: mode, ProxyPoolID: poolID})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -329,15 +329,15 @@ func (h *Handler) selectorForTest(ctx context.Context, mode string, poolID *uint
 	if err != nil {
 		return nil, err
 	}
-	switch providers.NormalizeProxyMode(mode) {
-	case providers.ProxyModeDirect:
+	switch registry.NormalizeProxyMode(mode) {
+	case registry.ProxyModeDirect:
 		return nil, nil
-	case providers.ProxyModePool:
+	case registry.ProxyModePool:
 		if pool == nil {
-			return nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", providers.ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)
 		}
 		if !pool.Enabled {
-			return nil, fmt.Errorf("%w: proxy pool %q is disabled", providers.ErrInvalidArgument, pool.Name)
+			return nil, fmt.Errorf("%w: proxy pool %q is disabled", registry.ErrInvalidArgument, pool.Name)
 		}
 		sel := upstream.NewRelaySelector()
 		sel.SetPools(relays)
@@ -423,8 +423,8 @@ func (h *Handler) listCombos(w http.ResponseWriter, r *http.Request) {
 }
 
 type comboIn struct {
-	Name  string                `json:"name" validate:"required,resource_name"`
-	Tiers []providers.ComboTier `json:"tiers" validate:"required,min=1,max=32,dive"`
+	Name  string               `json:"name" validate:"required,resource_name"`
+	Tiers []registry.ComboTier `json:"tiers" validate:"required,min=1,max=32,dive"`
 }
 
 type providerProbeIn struct {
@@ -440,7 +440,7 @@ func (h *Handler) createCombo(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.SaveCombo(r.Context(), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
+	row, err := h.store.SaveCombo(r.Context(), registry.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -458,7 +458,7 @@ func (h *Handler) updateCombo(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.UpdateCombo(r.Context(), uint(id), providers.RouteCombo{Name: in.Name, Tiers: in.Tiers})
+	row, err := h.store.UpdateCombo(r.Context(), uint(id), registry.RouteCombo{Name: in.Name, Tiers: in.Tiers})
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -490,7 +490,7 @@ func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 		respondStoreError(w, err)
 		return
 	}
-	var combo *providers.RouteCombo
+	var combo *registry.RouteCombo
 	for i := range combos {
 		if combos[i].ID == uint(id) {
 			combo = &combos[i]
@@ -528,7 +528,7 @@ func (h *Handler) testCombo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) probeTier(r *http.Request, client *http.Client, byName map[string]uint, provider string) map[string]any {
-	if providers.IsBuiltin(provider) {
+	if registry.IsBuiltin(provider) {
 		return map[string]any{"provider": provider, "ok": true, "skipped": true, "note": "builtin, see provider health"}
 	}
 	name := strings.TrimPrefix(provider, "custom:")

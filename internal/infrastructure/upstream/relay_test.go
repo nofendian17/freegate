@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 func TestRelayRewrite(t *testing.T) {
@@ -134,17 +134,17 @@ func TestRelayStrictFallback(t *testing.T) {
 }
 
 func TestResolveRelayPools(t *testing.T) {
-	pool := providers.ProxyPool{ProxyURL: "https://relay.test", NoProxy: "example.com", StrictProxy: true, Enabled: true}
+	pool := registry.ProxyPool{ProxyURL: "https://relay.test", NoProxy: "example.com", StrictProxy: true, Enabled: true}
 	disabled := pool
 	disabled.Enabled = false
-	get := func(id uint) (providers.ProxyPool, error) {
+	get := func(id uint) (registry.ProxyPool, error) {
 		switch id {
 		case 1:
 			return pool, nil
 		case 2:
 			return disabled, nil
 		default:
-			return providers.ProxyPool{}, fmt.Errorf("not found")
+			return registry.ProxyPool{}, fmt.Errorf("not found")
 		}
 	}
 	if got := ResolveRelayPools("u", "", nil, get); got != nil {

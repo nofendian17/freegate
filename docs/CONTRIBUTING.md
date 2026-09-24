@@ -104,7 +104,7 @@ Templates and static files are loaded via `go:embed` (`web/embed.go`). After any
 | `internal/translate/internal/prepost` | thinking normalization, max-tokens adjustment, history sanitization, id/role fixing |
 | `internal/infrastructure/proxy` | response normalization, `reasoning_content` collapse, SSE line handling |
 | `internal/infrastructure/upstream` | client, model cache, relay pools, Kilo/OpenCode parsing |
-| `internal/infrastructure/providers` | SQLite store (providers, combos, pools) |
+| `internal/infrastructure/registry` | SQLite store (providers, combos, pools, client keys) |
 | `internal/infrastructure/recorder` | ring buffer + timeseries sampler |
 | `internal/infrastructure/metrics` | counter / snapshot |
 | `internal/infrastructure/ringbuffer` | generic typed ring buffer |

@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"freegate/internal/domain"
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 type ComboRouter struct {
@@ -22,7 +22,7 @@ func NewComboRouter(legacy *Router) *ComboRouter {
 type ComboTierRow struct {
 	Name      string
 	Providers []string
-	Tiers     []providers.ComboTier
+	Tiers     []registry.ComboTier
 }
 
 func (c *ComboRouter) RebuildCombos(rows []ComboTierRow, lookup func(string) domain.Upstream) {
@@ -33,7 +33,7 @@ func (c *ComboRouter) RebuildCombos(rows []ComboTierRow, lookup func(string) dom
 		}
 		if len(r.Tiers) == 0 && len(r.Providers) > 0 {
 			for _, p := range r.Providers {
-				r.Tiers = append(r.Tiers, providers.ComboTier{Provider: p})
+				r.Tiers = append(r.Tiers, registry.ComboTier{Provider: p})
 			}
 		}
 		var tiers []ComboTier

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"freegate/internal/infrastructure/providers"
+	"freegate/internal/infrastructure/registry"
 )
 
 // ResolveRelayPools maps a proxy setting to a pool list for SetRelayPools:
@@ -17,11 +17,11 @@ import (
 // the pinned pool. A missing or disabled pinned pool falls back to global
 // with a warning so routing never breaks on a stale reference. owner is
 // the upstream name used in the warning (e.g. "opencode", "custom:acme").
-func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (providers.ProxyPool, error)) []RelayPool {
-	switch providers.NormalizeProxyMode(mode) {
-	case providers.ProxyModeDirect:
+func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (registry.ProxyPool, error)) []RelayPool {
+	switch registry.NormalizeProxyMode(mode) {
+	case registry.ProxyModeDirect:
 		return []RelayPool{}
-	case providers.ProxyModePool:
+	case registry.ProxyModePool:
 		if poolID == nil {
 			return nil
 		}
