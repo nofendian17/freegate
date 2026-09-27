@@ -25,9 +25,9 @@
   }
 
   // Splits an SSE buffer on '\n\n' boundaries; returns the unconsumed tail.
-  // onDelta receives (content, reasoning): upstreams spell the reasoning
-  // trace either `reasoning` or `reasoning_content`, and freegate mirrors
-  // both — prefer whichever is non-empty.
+  // onDelta receives (content, reasoning): freegate emits the single
+  // canonical `reasoning` field; `reasoning_content` is accepted as a
+  // fallback for old cached threads / raw upstream bodies.
   function parseSSEChunks(buffer, onDelta, onEvent) {
     var parts = buffer.split('\n\n');
     var remaining = parts.pop();
@@ -69,7 +69,8 @@
     return remaining;
   }
 
-  // Reasoning text off a non-streaming message, tolerating both field names.
+  // Reasoning text off a non-streaming message. Canonical `reasoning`
+  // first; `reasoning_content` fallback covers old cached threads.
   function msgReasoning(msg) {
     if (!msg) return '';
     if (typeof msg.reasoning === 'string' && msg.reasoning) return msg.reasoning;
