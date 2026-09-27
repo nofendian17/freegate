@@ -782,3 +782,23 @@ func TestPassThroughDomainError_ContentLengthNotCopied(t *testing.T) {
 		t.Fatalf("expected error body passthrough, got %q", body)
 	}
 }
+
+// benchOpenAIStream is a 200-chunk plain-content stream plus terminal usage
+// chunk, representative of a typical completion on the hot path.
+var benchOpenAIStream = func() string {
+	var sb strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&sb, "data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"token %d \"},\"finish_reason\":null}]}\n\n", i)
+	}
+	sb.WriteString("data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":200,\"total_tokens\":210}}\n\n")
+	sb.WriteString("data: [DONE]\n\n")
+	return sb.String()
+}()
+
+func BenchmarkNormalizeOpenAIStream(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		rd := bufio.NewReader(strings.NewReader(benchOpenAIStream))
+		normalizeOpenAIStreamWithMeta(context.Background(), io.Discard, rd, "m", "req")
+	}
+}

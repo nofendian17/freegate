@@ -130,7 +130,11 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 			continue
 		}
 
-		usage = extractUsageFromSSE(line, usage)
+		// Usage rides on rare terminal chunks only: skip the typed decode
+		// for content/tool deltas (the key is literally present or not).
+		if strings.Contains(line, `"usage"`) {
+			usage = extractUsageFromSSE(line, usage)
+		}
 
 		if !strings.HasPrefix(trimmed, "data: ") {
 			// Non-data line (blank, comments, event: markers) — pass through.

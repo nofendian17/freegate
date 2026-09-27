@@ -63,6 +63,23 @@ func (s *Store) GetPool(ctx context.Context, id uint) (ProxyPool, error) {
 	return p, nil
 }
 
+// GetPools fetches multiple pools in one query for rebuild paths that
+// previously paid one GetPool per provider (N+1).
+func (s *Store) GetPools(ctx context.Context, ids []uint) (map[uint]ProxyPool, error) {
+	out := make(map[uint]ProxyPool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []ProxyPool
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, wrapStoreError("get pools", err)
+	}
+	for _, p := range rows {
+		out[p.ID] = p
+	}
+	return out, nil
+}
+
 func (s *Store) UpdatePool(ctx context.Context, id uint, p ProxyPool) (ProxyPool, error) {
 	if err := p.Validate(); err != nil {
 		return ProxyPool{}, err

@@ -46,28 +46,56 @@ func (m *ProviderManager) relayPools(ctx context.Context, full registry.Provider
 	})
 }
 
+// relayPoolsCached is the batched Rebuild variant: pool rows are already
+// fetched in one GetPools call, so no per-provider query occurs.
+func (m *ProviderManager) relayPoolsCached(full registry.Provider, poolsByID map[uint]registry.ProxyPool) []RelayPool {
+	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
+		if p, ok := poolsByID[id]; ok {
+			return p, nil
+		}
+		return registry.ProxyPool{}, registry.ErrNotFound
+	})
+}
+
 func (m *ProviderManager) Rebuild(ctx context.Context) error {
-	rows, err := m.store.ListProviders(ctx)
+	// Single query with raw keys (no per-row GetProviderRaw N+1).
+	rows, err := m.store.ListProvidersRaw(ctx)
 	if err != nil {
 		return err
 	}
-	next := map[string]*CustomUpstream{}
-	nextIntervals := map[string]time.Duration{}
+	// Batch pool pins: one GetPools for all distinct pool IDs instead of
+	// one GetPool per provider.
+	poolIDs := make([]uint, 0)
+	seenPools := make(map[uint]struct{})
 	for _, r := range rows {
-		if !r.Enabled {
+		if !r.Enabled || r.ProxyPoolID == nil || registry.NormalizeProxyMode(r.ProxyMode) != registry.ProxyModePool {
 			continue
 		}
-		full, err := m.store.GetProviderRaw(ctx, r.ID)
+		if _, ok := seenPools[*r.ProxyPoolID]; !ok {
+			seenPools[*r.ProxyPoolID] = struct{}{}
+			poolIDs = append(poolIDs, *r.ProxyPoolID)
+		}
+	}
+	poolsByID := map[uint]registry.ProxyPool{}
+	if len(poolIDs) > 0 {
+		poolsByID, err = m.store.GetPools(ctx, poolIDs)
 		if err != nil {
 			return err
+		}
+	}
+	next := map[string]*CustomUpstream{}
+	nextIntervals := map[string]time.Duration{}
+	for _, full := range rows {
+		if !full.Enabled {
+			continue
 		}
 		if full.Models != nil && len(full.Models) == 0 {
 			slog.Warn("custom provider has no models selected, it will not route", "provider", full.Name)
 		}
 		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, m.tr)
-		fresh.SetRelayPools(m.relayPools(ctx, full))
+		fresh.SetRelayPools(m.relayPoolsCached(full, poolsByID))
 		m.mu.RLock()
-		old := m.customs[r.Name]
+		old := m.customs[full.Name]
 		m.mu.RUnlock()
 		if old != nil {
 			// Carry over fresh metadata for still-selected models only;
@@ -76,8 +104,8 @@ func (m *ProviderManager) Rebuild(ctx context.Context) error {
 			// seeds for newly added models so they route immediately.
 			fresh.RestoreKept(old.Models())
 		}
-		next[r.Name] = fresh
-		nextIntervals[r.Name] = refreshInterval(full.RefreshSec)
+		next[full.Name] = fresh
+		nextIntervals[full.Name] = refreshInterval(full.RefreshSec)
 	}
 	m.mu.Lock()
 	m.customs = next

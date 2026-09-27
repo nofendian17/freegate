@@ -16,6 +16,10 @@ import (
 
 // Domain-aware variants — decouple application from net/http.
 
+// maxNonStreamingBodySize caps the buffered non-streaming body (mirrors
+// upstream.MaxResponseBodySize); defined locally to avoid a package cycle.
+const maxNonStreamingBodySize = 10 << 20 // 10 MB
+
 func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter, resp *domain.UpstreamResponse) (TokenUsage, error) {
 	ct := resp.Header.Get("Content-Type")
 	isStreaming := strings.Contains(ct, "text/event-stream")
@@ -37,8 +41,9 @@ func copyNormalizedDomainWithContext(ctx context.Context, w http.ResponseWriter,
 		return normalizeOpenAIStreamWithMeta(ctx, w, rd, model, reqID), nil
 	}
 	// For non-streaming, peek body to detect Responses API JSON.
-	// We need to read without losing data; buffer it.
-	bodyBytes, err := io.ReadAll(resp.Body)
+	// We need to read without losing data; buffer it. Capped so a
+	// misbehaving upstream cannot blow memory under concurrency.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxNonStreamingBodySize+1))
 	if err != nil {
 		return TokenUsage{}, err
 	}
@@ -169,7 +174,12 @@ func copyPassthroughClaudeStream(ctx context.Context, dst io.Writer, src *bufio.
 				}
 				line := lineBuf[:idx]
 				lineBuf = lineBuf[idx+1:]
-				usage = extractClaudeUsageFromSSELine(string(line), usage)
+				// Only message_start/message_delta carry usage, and both
+				// embed the literal "usage" key: skip decode for all
+				// content-block deltas on this zero-transform path.
+				if bytes.Contains(line, []byte(`"usage"`)) {
+					usage = extractClaudeUsageFromSSELine(string(line), usage)
+				}
 			}
 		}
 		if err == io.EOF {

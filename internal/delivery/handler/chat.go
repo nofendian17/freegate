@@ -88,8 +88,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect format from body (OpenAI, Claude, Gemini, Responses)
-	format := translate.DetectByPath(r.URL.Path, body)
+	// Detect format and model from the body in a single JSON pass
+	// (OpenAI, Claude, Gemini, Responses).
+	format, modelID := translate.ProbeByPath(r.URL.Path, body)
 
 	// The URL path disambiguates when body-based detection is ambiguous:
 	// POST /v1/messages is always Claude, POST /v1/chat/completions is always OpenAI.
@@ -105,8 +106,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		format = translate.FormatOpenAIResponses
 	}
 
-	// Extract model ID (works for OpenAI, Claude; Gemini may need fallback)
-	modelID := translate.ExtractModelID(body)
+	// ProbeByPath already extracted the model; the struct fallback below
+	// only re-parses when it is missing so the error shape stays identical.
 	if modelID == "" {
 		id, err := extractModelID(body)
 		if err != nil {

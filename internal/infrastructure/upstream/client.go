@@ -59,7 +59,7 @@ func (c *HTTPClient) relayOrShared() *RelaySelector {
 }
 
 type keyCooldown struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	until map[string]time.Time
 	ttl   time.Duration
 }
@@ -75,10 +75,23 @@ func (k *keyCooldown) mark(key string) {
 }
 
 func (k *keyCooldown) isLimited(key string) bool {
+	// Fast path under RLock: steady-state checks never write. Only an
+	// expired entry upgrades to a write lock for the lazy delete.
+	k.mu.RLock()
+	until, ok := k.until[key]
+	if !ok {
+		k.mu.RUnlock()
+		return false
+	}
+	if time.Now().Before(until) {
+		k.mu.RUnlock()
+		return true
+	}
+	k.mu.RUnlock()
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	until, ok := k.until[key]
-	if !ok || time.Now().After(until) {
+	// Re-check under the write lock: a concurrent mark may have renewed it.
+	if until, ok := k.until[key]; !ok || time.Now().After(until) {
 		delete(k.until, key)
 		return false
 	}
@@ -155,17 +168,16 @@ func (c *HTTPClient) PostWithHeaders(ctx context.Context, path string, body []by
 	if err != nil {
 		return nil, fmt.Errorf("strip n: %w", err)
 	}
+	// Probe stream once up front instead of re-unmarshalling on every
+	// retry attempt (429 key rotation rebuilds the request).
+	isStream := isStreamBody(cleaned)
 	return c.doWithHeaders(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewReader(cleaned))
 		if err != nil {
 			return nil, fmt.Errorf("build POST request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		var probe struct {
-			Stream *bool `json:"stream"`
-		}
-		_ = json.Unmarshal(cleaned, &probe)
-		if probe.Stream != nil && *probe.Stream {
+		if isStream {
 			req.Header.Set("Accept", "text/event-stream")
 		}
 		return req, nil
@@ -299,6 +311,10 @@ func (c *HTTPClient) currentKey() string {
 // stripN removes the "n" field from a JSON request body if present.
 // freegate only uses the first choice; most providers reject n > 1 with 422.
 func stripN(body []byte) ([]byte, error) {
+	// Fast path: the vast majority of bodies have no "n" key.
+	if !bytes.Contains(body, []byte(`"n"`)) {
+		return body, nil
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return body, nil // not JSON, pass through

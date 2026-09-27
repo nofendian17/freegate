@@ -52,9 +52,12 @@ func ShouldBypassNoProxy(targetURL, noProxy string) bool {
 	if err != nil {
 		return false
 	}
-	host := strings.ToLower(parsed.Hostname())
+	return shouldBypassHost(strings.ToLower(parsed.Hostname()), strings.ToLower(targetURL), noProxy)
+}
+
+func shouldBypassHost(host, fallback, noProxy string) bool {
 	if host == "" {
-		host = strings.ToLower(targetURL)
+		host = fallback
 	}
 	for _, p := range strings.Split(noProxy, ",") {
 		p = strings.ToLower(strings.TrimSpace(p))
@@ -164,16 +167,29 @@ func (s *RelaySelector) ApplyStrict(req *http.Request) (strict, applied bool) {
 		return false, false
 	}
 	relayURL := strings.TrimSpace(pool.URL)
-	if relayURL == "" || ShouldBypassNoProxy(req.URL.String(), pool.NoProxy) {
+	if relayURL == "" {
+		return false, false
+	}
+	// Single parse of each side: reuse req.URL directly instead of
+	// req.URL.String() + re-parse in both the bypass check and header
+	// builder. The empty-host fallback matches ShouldBypassNoProxy.
+	if pool.NoProxy != "" && shouldBypassHost(strings.ToLower(req.URL.Hostname()), strings.ToLower(req.URL.String()), strings.TrimSpace(pool.NoProxy)) {
 		return false, false
 	}
 	parsed, err := url.Parse(relayURL)
 	if err != nil {
 		return false, false
 	}
-	for k, v := range BuildEdgeRelayHeaders(req.URL.String(), nil) {
-		req.Header.Set(k, v)
+	target := req.URL.Scheme + "://" + req.URL.Host
+	path := req.URL.Path
+	if path == "" {
+		path = "/"
 	}
+	if req.URL.RawQuery != "" {
+		path += "?" + req.URL.RawQuery
+	}
+	req.Header.Set("x-relay-target", target)
+	req.Header.Set("x-relay-path", path)
 	req.URL.Scheme = parsed.Scheme
 	req.URL.Host = parsed.Host
 	req.URL.Path = parsed.Path

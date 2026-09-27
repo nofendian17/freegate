@@ -468,6 +468,10 @@ func stripNoneReasoningEffort(body []byte) []byte {
 // models when neither max_tokens nor max_output_tokens is set. Mirrors
 // 9router: Anthropic rejects Messages requests without a max token budget.
 func ensureMessagesMaxTokens(body []byte) []byte {
+	// Fast path: budget already present, skip unmarshal + remarshal.
+	if bytes.Contains(body, []byte(`"max_tokens"`)) || bytes.Contains(body, []byte(`"max_output_tokens"`)) {
+		return body
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return body
@@ -520,6 +524,9 @@ func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
 }
 
 func isStreamBody(body []byte) bool {
+	if !bytes.Contains(body, []byte(`"stream"`)) {
+		return false
+	}
 	var probe struct {
 		Stream *bool `json:"stream"`
 	}
