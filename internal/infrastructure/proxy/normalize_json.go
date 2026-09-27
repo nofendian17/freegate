@@ -237,10 +237,19 @@ func syncMessageReasoning(resp map[string]any) {
 // encoder emits the key.
 func syncReasoning(m map[string]any) {
 	rc, hasRC := m["reasoning_content"]
-	_, hasR := m["reasoning"]
+	r, hasR := m["reasoning"]
 
 	if hasRC && !hasR {
 		m["reasoning"] = rc
+	}
+	if hasRC && hasR {
+		// Both names present (old double-emit, mixed upstreams): keep the
+		// canonical field and log when values diverge so the drop is visible.
+		if rcStr, ok := rc.(string); ok {
+			if rStr, ok := r.(string); ok && rcStr != rStr && rcStr != "" && rStr != "" {
+				slog.Warn("dropping divergent reasoning_content, keeping reasoning")
+			}
+		}
 	}
 	delete(m, "reasoning_content")
 	if !hasRC && !hasR {

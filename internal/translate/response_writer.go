@@ -505,7 +505,8 @@ func (rw *ResponseWriter) streamResponsesToClaude(p []byte) (int, error) {
 		rw.state.oaiToClaude = claude.NewStreamState()
 	}
 	respState := rw.state.responsesToOAI
-	respState.SetModel(rw.modelID)
+	// No SetModel here: the intermediate OpenAI chunks are translated
+	// straight to Claude events, which carry no model field.
 	claudeState := rw.state.oaiToClaude
 	blocks := respState.Feed(p)
 	for _, block := range blocks {

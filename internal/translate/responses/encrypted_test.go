@@ -72,6 +72,36 @@ func TestJSONToResponses_NoEncryptedStaysUnchanged(t *testing.T) {
 	}
 }
 
+func TestJSONToResponses_CanonicalReasoningBecomesReasoningItem(t *testing.T) {
+	body := `{"id":"chatcmpl-1","created":1,"model":"x","choices":
+		[{"message":{"reasoning":"why","content":"hi"}}]}`
+	out, err := JSONToResponses([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range raw["output"].([]any) {
+		m := it.(map[string]any)
+		if m["type"] == "reasoning" {
+			found = true
+			summary, _ := m["summary"].([]any)
+			if len(summary) != 1 {
+				t.Fatalf("summary=%v, want 1 item", m["summary"])
+			}
+			if txt, _ := summary[0].(map[string]any)["text"].(string); txt != "why" {
+				t.Fatalf("summary text=%q, want why", txt)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("canonical reasoning must produce a reasoning item, got %s", out)
+	}
+}
+
 func TestStream_EncryptedContentAccumulatesToDone(t *testing.T) {
 	s := NewStreamState()
 	var events []string

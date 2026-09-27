@@ -223,11 +223,19 @@ func JSONToResponses(body []byte) ([]byte, error) {
 	// reasoning -> reasoning item, preserving any encrypted blob so the
 	// client can send it back for continuity (xAI-style encrypted
 	// reasoning: only returned when requested, must round-trip verbatim).
-	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+	// Canonical `reasoning` first; `reasoning_content` kept as fallback for
+	// raw DeepSeek-style upstream bodies.
+	reasoningText := ""
+	if r, ok := msg["reasoning"].(string); ok && r != "" {
+		reasoningText = r
+	} else if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+		reasoningText = rc
+	}
+	if reasoningText != "" {
 		item := map[string]any{
 			"type":    "reasoning",
 			"id":      "rs_0",
-			"summary": []any{map[string]any{"type": "summary_text", "text": rc}},
+			"summary": []any{map[string]any{"type": "summary_text", "text": reasoningText}},
 		}
 		if enc, ok := msg["encrypted_content"].(string); ok && enc != "" {
 			item["encrypted_content"] = enc

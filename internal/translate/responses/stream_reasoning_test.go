@@ -8,7 +8,7 @@ import (
 
 // Reasoning deltas normalize to the single canonical `delta.reasoning`
 // field (reasoning_content is DeepSeek-only and stripped everywhere).
-func TestStream_ResponsesToOpenAI_ReasoningDeltaCarriesBothKeys(t *testing.T) {
+func TestStream_ResponsesToOpenAI_ReasoningDeltaEmitsOnlyReasoning(t *testing.T) {
 	s := NewStreamState()
 	events := s.ResponsesEventToOpenAI("response.reasoning_summary_text.delta", map[string]any{
 		"item_id": "rs_1", "output_index": float64(0), "summary_index": float64(0),
@@ -86,7 +86,7 @@ func TestStream_ResponsesToOpenAI_ModelFallback(t *testing.T) {
 
 // Parity guard: the non-streaming direction must also emit only the
 // single canonical key.
-func TestStream_NonStreamingMessageSetsBothReasoningKeys(t *testing.T) {
+func TestStream_NonStreamingMessageEmitsOnlyReasoning(t *testing.T) {
 	in := []byte(`{"id":"resp_1","output":[
 		{"type":"reasoning","summary":[{"type":"summary_text","text":"because"}]},
 		{"type":"message","content":[{"type":"output_text","text":"42"}]}
