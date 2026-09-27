@@ -170,7 +170,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// For mismatched formats, wrap the response writer to translate
 	// the upstream's target response back to the client's source format
 	if format != targetFormat {
-		wr := translate.NewResponseWriterWithDst(w, targetFormat, format)
+		wr := translate.NewResponseWriterWithDst(w, targetFormat, format).WithModel(modelID)
 		defer wr.Close()
 		setNormalizedHeader(wr, applied)
 		if err := h.chat.ProxyChat(r.Context(), wr, r, modelID, body); err != nil {

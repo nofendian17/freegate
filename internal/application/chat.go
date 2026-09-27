@@ -229,7 +229,7 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 	if source := translate.Format(resp.Format); source != "" {
 		target := translate.RequestFormat(ctx, body)
 		if source != target {
-			wr := translate.NewResponseWriterWithDst(w, source, target)
+			wr := translate.NewResponseWriterWithDst(w, source, target).WithModel(modelID)
 			defer wr.Close()
 			w = wr
 		}

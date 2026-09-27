@@ -47,6 +47,24 @@ func TestResponseWriter_ResponsesToOpenAI_Stream(t *testing.T) {
 	}
 }
 
+func TestResponseWriter_ResponsesToOpenAI_StreamEchoesModel(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rw := NewResponseWriterWithDst(rec, FormatOpenAIResponses, FormatOpenAI).WithModel("custom-model-free")
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.WriteHeader(200)
+	event := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\n\n"
+	if _, err := rw.Write([]byte(event)); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"model":"custom-model-free"`) {
+		t.Errorf("expected request model echoed, got %q", body)
+	}
+	if strings.Contains(body, `"model":"muse-spark"`) {
+		t.Errorf("hardcoded placeholder must not appear, got %q", body)
+	}
+}
+
 func TestResponseWriter_OpenAIToResponses_JSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rw := NewResponseWriterWithDst(rec, FormatOpenAIResponses, FormatOpenAI)
