@@ -25,7 +25,10 @@
   }
 
   // Splits an SSE buffer on '\n\n' boundaries; returns the unconsumed tail.
-  function parseSSEChunks(buffer, onChunk, onEvent) {
+  // onDelta receives (content, reasoning): upstreams spell the reasoning
+  // trace either `reasoning` or `reasoning_content`, and freegate mirrors
+  // both — prefer whichever is non-empty.
+  function parseSSEChunks(buffer, onDelta, onEvent) {
     var parts = buffer.split('\n\n');
     var remaining = parts.pop();
     for (var i = 0; i < parts.length; i++) {
@@ -43,7 +46,16 @@
               var parsed = JSON.parse(payload);
               if (parsed.choices && parsed.choices[0]) {
                 var delta = parsed.choices[0].delta;
-                if (delta && typeof delta.content === 'string' && onChunk) onChunk(delta.content);
+                if (delta && onDelta) {
+                  var content = typeof delta.content === 'string' ? delta.content : '';
+                  var reasoning = '';
+                  if (typeof delta.reasoning === 'string' && delta.reasoning) {
+                    reasoning = delta.reasoning;
+                  } else if (typeof delta.reasoning_content === 'string') {
+                    reasoning = delta.reasoning_content;
+                  }
+                  if (content || reasoning) onDelta(content, reasoning);
+                }
               }
               if (parsed.usage && typeof parsed.usage === 'object' && onEvent) {
                 onEvent({ type: 'usage', usage: parsed.usage });
@@ -57,6 +69,14 @@
     return remaining;
   }
 
+  // Reasoning text off a non-streaming message, tolerating both field names.
+  function msgReasoning(msg) {
+    if (!msg) return '';
+    if (typeof msg.reasoning === 'string' && msg.reasoning) return msg.reasoning;
+    if (typeof msg.reasoning_content === 'string') return msg.reasoning_content;
+    return '';
+  }
+
   document.addEventListener('alpine:init', function () {
     Alpine.data('playground', function () {
       return {
@@ -66,9 +86,15 @@
         system: '',
         showSystem: false,
         stream: true,
+        // Reasoning effort. 'off' sends no reasoning field at all: freegate
+        // only forwards a reasoning object when the client asks for one
+        // (responses.FromOpenAI), and upstreams then return an empty
+        // summary even though they still spend reasoning tokens.
+        reasoning: 'off',
         input: '',
         messages: [],
         draft: '',
+        draftReason: '',
         streaming: false,
         busy: false,
         abort: null,
@@ -88,6 +114,7 @@
             if (typeof parsed.model === 'string') this.model = parsed.model;
             if (typeof parsed.system === 'string') this.system = parsed.system;
             this.stream = parsed.stream !== false;
+            if (typeof parsed.reasoning === 'string') this.reasoning = parsed.reasoning;
             if (Array.isArray(parsed.messages)) {
               this.messages = parsed.messages.filter(validMessage);
               if (this.messages.length && this.messages[this.messages.length - 1].role === 'user') {
@@ -103,6 +130,7 @@
               model: this.model,
               system: this.system,
               stream: this.stream,
+              reasoning: this.reasoning,
               messages: this.messages,
             });
             if (payload.length > MAX_THREAD_BYTES) this.messages = [];
@@ -110,6 +138,7 @@
               model: this.model,
               system: this.system,
               stream: this.stream,
+              reasoning: this.reasoning,
               messages: this.messages,
             }));
           } catch (e) { /* quota or privacy mode — thread just won't persist */ }
@@ -162,6 +191,12 @@
           }
           var body = { model: this.model, messages: msgs, stream: this.stream };
           if (this.stream) body.stream_options = { include_usage: true };
+          // Sent only when the user asked for reasoning — see the note on
+          // the `reasoning` state. 'none' is never sent: freegate strips it
+          // because several upstreams reject it with a 400.
+          if (this.reasoning && this.reasoning !== 'off') {
+            body.reasoning_effort = this.reasoning;
+          }
           return body;
         },
 
@@ -201,6 +236,7 @@
           this.messages.push({
             role: 'assistant',
             content: content,
+            reasoning: opts.reasoning || '',
             ts: Date.now(),
             model: this.model,
             ms: opts.ms,
@@ -234,6 +270,7 @@
                 var data = JSON.parse(r.body);
                 var msg = data.choices && data.choices[0] && data.choices[0].message;
                 self.pushAssistant((msg && msg.content) || '', {
+                  reasoning: msgReasoning(msg),
                   ms: ms,
                   tok: data.usage && typeof data.usage.total_tokens === 'number' ? data.usage.total_tokens : undefined,
                 });
@@ -251,6 +288,7 @@
           var self = this;
           this.streaming = true;
           this.draft = '';
+          this.draftReason = '';
           this.usage = null;
           this.t0 = performance.now();
           var controller = new AbortController();
@@ -281,7 +319,10 @@
                     try {
                       var data = JSON.parse(text);
                       var msg = data.choices && data.choices[0] && data.choices[0].message;
-                      self.pushAssistant((msg && msg.content) || '', { ms: ms });
+                      self.pushAssistant((msg && msg.content) || '', {
+                        reasoning: msgReasoning(msg),
+                        ms: ms,
+                      });
                     } catch (e) {
                       self.pushAssistant('! error: invalid response ' + truncate(text, 200), { ms: ms, err: true });
                     }
@@ -296,24 +337,28 @@
               var pump = function () {
                 return reader.read().then(function (result) {
                   if (result.done) {
-                    parseSSEChunks(buf + decoder.decode(), function (c) {
+                    parseSSEChunks(buf + decoder.decode(), function (c, r) {
                       self.draft += c;
+                      self.draftReason += r;
                       self.scroll();
                     }, function (evt) {
                       if (evt.type === 'usage') self.usage = evt.usage;
                     });
                     var ms = Math.round(performance.now() - self.t0);
                     self.pushAssistant(self.draft, {
+                      reasoning: self.draftReason,
                       ms: ms,
                       tok: self.usage && self.usage.total_tokens ? self.usage.total_tokens : undefined,
                     });
                     self.draft = '';
+                    self.draftReason = '';
                     self.streaming = false;
                     self.abort = null;
                     return;
                   }
-                  buf = parseSSEChunks(buf + decoder.decode(result.value, { stream: true }), function (c) {
+                  buf = parseSSEChunks(buf + decoder.decode(result.value, { stream: true }), function (c, r) {
                     self.draft += c;
+                    self.draftReason += r;
                     var list = document.getElementById('pg-list');
                     if (list) list.scrollTop = list.scrollHeight;
                   }, function (evt) {
@@ -327,11 +372,12 @@
             .catch(function (err) {
               var ms = Math.round(performance.now() - self.t0);
               if (err && err.name === 'AbortError') {
-                self.pushAssistant(self.draft + '\n! stopped', { ms: ms, err: true });
+                self.pushAssistant(self.draft + '\n! stopped', { reasoning: self.draftReason, ms: ms, err: true });
               } else {
-                self.pushAssistant((self.draft ? self.draft + '\n' : '') + '! error: ' + (err && err.message ? err.message : String(err)), { ms: ms, err: true });
+                self.pushAssistant((self.draft ? self.draft + '\n' : '') + '! error: ' + (err && err.message ? err.message : String(err)), { reasoning: self.draftReason, ms: ms, err: true });
               }
               self.draft = '';
+              self.draftReason = '';
               self.streaming = false;
               self.abort = null;
             });
