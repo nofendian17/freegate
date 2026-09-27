@@ -163,23 +163,24 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 		state.MarkStartSent()
 	}
 
-	// Handle reasoning_content (Claude thinking) — prefer reasoning_content;
-	// fall back to reasoning only when reasoning_content is absent.
+	// Handle reasoning (Claude thinking) — prefer the canonical reasoning
+	// field; fall back to reasoning_content only for raw upstream bodies
+	// and old clients that still send it.
 	// Free-tier models (notably DeepSeek) echo agentic scaffolding
 	// (<system-reminder>, <feature-flag>, DSML tags) into text; strip it
 	// so Claude Code never displays the leak.
 	if !state.finishSent {
-		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+		if r, ok := delta["reasoning"].(string); ok && r != "" {
 			// Drain held text first (recovery scans text only, never
 			// reasoning: an orphan invoke drafted in thinking is not a
 			// tool call, per the official fix).
 			events = append(events, flushHold(state, true, false)...)
-			if cleaned := SanitizeAssistantText(rc); cleaned != "" {
+			if cleaned := SanitizeAssistantText(r); cleaned != "" {
 				events = append(events, handleReasoningContent(cleaned, state)...)
 			}
-		} else if r, ok := delta["reasoning"].(string); ok && r != "" {
+		} else if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
 			events = append(events, flushHold(state, true, false)...)
-			if cleaned := SanitizeAssistantText(r); cleaned != "" {
+			if cleaned := SanitizeAssistantText(rc); cleaned != "" {
 				events = append(events, handleReasoningContent(cleaned, state)...)
 			}
 		}

@@ -38,7 +38,13 @@ type StreamState struct {
 	funcItemDone       map[int]bool
 
 	// responses -> openai
-	chatID            string
+	chatID string
+	// model is the client-facing model name echoed in emitted OpenAI
+	// chunks. Threaded per-request from the handler (the translator
+	// otherwise never sees the model ID); falls back to the family
+	// name when unset so unit tests and unknown paths still emit
+	// something plausible.
+	model             string
 	toolCallIndex     int
 	currentToolCallID string
 	finishSent        bool
@@ -71,6 +77,23 @@ func NewStreamState() *StreamState {
 		respIdxByItem:   make(map[string]int),
 		respIdxByCall:   make(map[string]int),
 	}
+}
+
+// SetModel records the client-facing model name for subsequently emitted
+// OpenAI chunks. Empty is ignored so a zero value never clobbers a set one.
+func (s *StreamState) SetModel(m string) {
+	if m != "" {
+		s.model = m
+	}
+}
+
+// openAIModel returns the model name for emitted OpenAI chunks, falling
+// back to the family name when the request model was never threaded in.
+func (s *StreamState) openAIModel() string {
+	if s.model != "" {
+		return s.model
+	}
+	return "muse-spark"
 }
 
 // Feed splits SSE buffer into complete blocks (delimited by \n\n)
@@ -166,11 +189,11 @@ func (s *StreamState) OpenAIChunkToResponses(chunk map[string]any) []string {
 		}))
 	}
 
-	// reasoning
-	if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+	// reasoning (canonical first, reasoning_content as fallback)
+	if rc, ok := delta["reasoning"].(string); ok && rc != "" {
 		events = append(events, s.startReasoning(idx)...)
 		events = append(events, s.emitReasoningDelta(rc)...)
-	} else if rc, ok := delta["reasoning"].(string); ok && rc != "" {
+	} else if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
 		events = append(events, s.startReasoning(idx)...)
 		events = append(events, s.emitReasoningDelta(rc)...)
 	}
@@ -430,13 +453,17 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		if delta == "" {
 			return nil
 		}
-		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{"content": delta}, "")}
+		return []string{formatOpenAIChunk(s.chatID, s.created, s.openAIModel(), map[string]any{"content": delta}, "")}
 	case "response.reasoning_summary_text.delta":
 		delta, _ := data["delta"].(string)
 		if delta == "" {
 			return nil
 		}
-		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{"reasoning_content": delta}, "")}
+		// Single canonical field (see response.go): everything
+		// normalizes to `delta.reasoning`.
+		return []string{formatOpenAIChunk(s.chatID, s.created, s.openAIModel(), map[string]any{
+			"reasoning": delta,
+		}, "")}
 	case "response.output_item.added":
 		item, _ := data["item"].(map[string]any)
 		if item == nil {
@@ -453,7 +480,7 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 			}
 			s.currentToolCallID = callID
 			name, _ := item["name"].(string)
-			return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{
+			return []string{formatOpenAIChunk(s.chatID, s.created, s.openAIModel(), map[string]any{
 				"tool_calls": []any{map[string]any{"index": idx, "id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": ""}}},
 			}, "")}
 		}
@@ -465,7 +492,7 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		itemID, _ := data["item_id"].(string)
 		outputIdx, hasOutputIdx := responseOutputIndex(data)
 		idx := s.respToolIndex(outputIdx, hasOutputIdx, itemID, "", true)
-		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{
+		return []string{formatOpenAIChunk(s.chatID, s.created, s.openAIModel(), map[string]any{
 			"tool_calls": []any{map[string]any{"index": idx, "function": map[string]any{"arguments": delta}}},
 		}, "")}
 	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
@@ -511,7 +538,7 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 			"id":      s.chatID,
 			"object":  "chat.completion.chunk",
 			"created": s.created,
-			"model":   "muse-spark",
+			"model":   s.openAIModel(),
 			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}},
 		}
 		if usage != nil {
@@ -548,7 +575,7 @@ func (s *StreamState) ResponsesEventToOpenAI(eventName string, data map[string]a
 		if msg == "" {
 			msg = "upstream error"
 		}
-		return []string{formatOpenAIChunk(s.chatID, s.created, "muse-spark", map[string]any{"content": "[Error] " + msg}, "stop")}
+		return []string{formatOpenAIChunk(s.chatID, s.created, s.openAIModel(), map[string]any{"content": "[Error] " + msg}, "stop")}
 	}
 	return nil
 }

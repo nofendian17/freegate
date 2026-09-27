@@ -68,22 +68,23 @@ func orphanCallsFor(text string) []OrphanToolCall {
 func convertOpenAIMessage(msg map[string]any) []any {
 	var content []any
 
-	// Add thinking block first (reasoning_content preferred over reasoning).
+	// Add thinking block first (canonical reasoning field preferred;
+	// reasoning_content kept as fallback for raw upstream bodies).
 	// Real Anthropic thinking blocks carry a "signature" used to verify
 	// integrity on replay; OpenAI upstreams never provide one, so a
 	// placeholder is synthesized to keep the block shape compatible with
 	// clients that expect the field to be present (see the streaming
 	// counterpart in stream.go's closeThinkingBlock).
-	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
-		if cleaned := SanitizeAssistantText(rc); cleaned != "" {
+	if r, ok := msg["reasoning"].(string); ok && r != "" {
+		if cleaned := SanitizeAssistantText(r); cleaned != "" {
 			content = append(content, map[string]any{
 				"type":      "thinking",
 				"thinking":  cleaned,
 				"signature": "unsigned",
 			})
 		}
-	} else if r, ok := msg["reasoning"].(string); ok && r != "" {
-		if cleaned := SanitizeAssistantText(r); cleaned != "" {
+	} else if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+		if cleaned := SanitizeAssistantText(rc); cleaned != "" {
 			content = append(content, map[string]any{
 				"type":      "thinking",
 				"thinking":  cleaned,

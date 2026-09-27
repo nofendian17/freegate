@@ -260,8 +260,8 @@ func TestGeminiToOpenAIStream_Thought(t *testing.T) {
 	var got map[string]any
 	_ = json.Unmarshal([]byte(strings.TrimPrefix(events[0], "data: ")), &got)
 	delta := got["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
-	if delta["reasoning_content"] != "thinking..." {
-		t.Errorf("expected reasoning_content=thinking..., got %+v", delta)
+	if delta["reasoning"] != "thinking..." {
+		t.Errorf("expected reasoning=thinking..., got %+v", delta)
 	}
 }
 

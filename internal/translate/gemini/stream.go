@@ -58,10 +58,12 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 	// Surface reasoning/thinking tokens as Gemini thought parts (kept out
 	// of the visible text buffer — Gemini renders thought parts separately).
 	var newThought string
-	if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
-		newThought = rc
-	} else if r, ok := delta["reasoning"].(string); ok && r != "" {
+	// Canonical field first; reasoning_content kept as fallback for raw
+	// upstream bodies and old clients that still send it.
+	if r, ok := delta["reasoning"].(string); ok && r != "" {
 		newThought = r
+	} else if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+		newThought = rc
 	}
 	if newThought != "" {
 		state.textBuffer += newThought

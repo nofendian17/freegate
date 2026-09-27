@@ -38,6 +38,7 @@ type ResponseWriter struct {
 	inner         http.ResponseWriter
 	src           Format
 	dst           Format
+	modelID       string
 	isStream      bool
 	statusCode    int
 	buf           bytes.Buffer // for non-streaming buffering
@@ -53,6 +54,18 @@ func NewResponseWriterWithDst(w http.ResponseWriter, src, dst Format) *ResponseW
 		src:   src,
 		dst:   dst,
 	}
+}
+
+// WithModel records the request's model ID so streaming translators that
+// synthesize protocol fields (e.g. Responses → OpenAI chunks, which must
+// echo a model name the translator otherwise never sees) emit the real
+// model instead of a hardcoded family placeholder. Chainable; empty is
+// ignored.
+func (rw *ResponseWriter) WithModel(id string) *ResponseWriter {
+	if id != "" {
+		rw.modelID = id
+	}
+	return rw
 }
 
 func (rw *ResponseWriter) Header() http.Header {
@@ -380,6 +393,7 @@ func (rw *ResponseWriter) streamResponsesToOpenAI(p []byte) (int, error) {
 		rw.state.responsesToOAI = responses.NewStreamState()
 	}
 	state := rw.state.responsesToOAI
+	state.SetModel(rw.modelID)
 	blocks := state.Feed(p)
 	for _, block := range blocks {
 		// block contains event: xxx\ndata: {...}
@@ -491,6 +505,7 @@ func (rw *ResponseWriter) streamResponsesToClaude(p []byte) (int, error) {
 		rw.state.oaiToClaude = claude.NewStreamState()
 	}
 	respState := rw.state.responsesToOAI
+	respState.SetModel(rw.modelID)
 	claudeState := rw.state.oaiToClaude
 	blocks := respState.Feed(p)
 	for _, block := range blocks {
