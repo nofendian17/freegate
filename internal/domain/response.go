@@ -81,10 +81,14 @@ func IsFreeTierRejection(resp *UpstreamResponse) bool {
 	if err != nil {
 		return false
 	}
-	if hasFreeTierMarker(peek) {
+	// Substring scan covers both JSON envelopes and non-JSON bodies, and
+	// also succeeds on truncated large bodies where json.Unmarshal would
+	// fail on the cut-off tail. Keep the structured parse as a complement
+	// for escaped/odd encodings, but never let it veto a direct hit.
+	if bytes.Contains(peek, []byte("FreeTierError")) {
 		return true
 	}
-	return bytes.Contains(peek, []byte("FreeTierError"))
+	return hasFreeTierMarker(peek)
 }
 
 // hasFreeTierMarker parses envelope shapes the gateway emits:
@@ -106,6 +110,9 @@ func hasFreeTierMarker(peek []byte) bool {
 // upstream candidate: transport-level retryables (429/5xx) plus free-tier
 // access rejections, which are scoped to a specific upstream rather than the
 // request as a whole. Nil-safe: a nil response counts as retryable.
+//
+// The free-tier probe peeks at most 8KB and rewinds the body; the marker
+// scan inside IsFreeTierRejection fast-paths on substring before JSON.
 func IsRetryableStatus(rsp *UpstreamResponse) bool {
 	if rsp == nil {
 		return true

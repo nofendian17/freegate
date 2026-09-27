@@ -234,12 +234,21 @@ func newClientKeyUsageRecorder(db *gorm.DB, logger *slog.Logger) *clientKeyUsage
 	return recorder
 }
 
-func (r *clientKeyUsageRecorder) Enqueue(ctx context.Context, hash string) error {
+func (r *clientKeyUsageRecorder) Enqueue(ctx context.Context, hash string) (err error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	closed := r.closed
+	r.mu.RUnlock()
+	if closed {
 		return ErrStoreClosed
 	}
+	// Recover a send-on-closed race with Close(): check-then-send is
+	// inherently racy, so a concurrent Close that wins reports closed
+	// instead of panicking the request goroutine.
+	defer func() {
+		if recover() != nil {
+			err = ErrStoreClosed
+		}
+	}()
 	select {
 	case r.queue <- hash:
 		return nil
@@ -301,18 +310,25 @@ func (r *clientKeyUsageRecorder) run() {
 }
 
 func (r *clientKeyUsageRecorder) flush(ctx context.Context, pending map[string]clientKeyUsage) error {
-	var errs []error
-	for hash, usage := range pending {
-		result := r.db.WithContext(ctx).
-			Model(&ClientKey{}).
-			Where("key_hash = ?", hash).
-			Updates(map[string]any{
-				"use_count":    gorm.Expr("use_count + ?", usage.count),
-				"last_used_at": usage.lastUsed,
-			})
-		if result.Error != nil {
-			errs = append(errs, wrapStoreError("persist client key usage", result.Error))
-		}
+	if len(pending) == 0 {
+		return nil
 	}
-	return errors.Join(errs...)
+	// One transaction for the whole batch: N autocommit UPDATEs fsync
+	// SQLite N times, a single txn fsyncs once.
+	return wrapStoreError("persist client key usage", r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var errs []error
+		for hash, usage := range pending {
+			result := tx.
+				Model(&ClientKey{}).
+				Where("key_hash = ?", hash).
+				Updates(map[string]any{
+					"use_count":    gorm.Expr("use_count + ?", usage.count),
+					"last_used_at": usage.lastUsed,
+				})
+			if result.Error != nil {
+				errs = append(errs, result.Error)
+			}
+		}
+		return errors.Join(errs...)
+	}))
 }

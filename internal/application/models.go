@@ -34,19 +34,27 @@ func (s *ModelService) AddRouter(r RouterRegistry) {
 }
 
 // AllModels returns the deduplicated union of models from all routers.
+// Each router is queried once (not twice for sizing then merging), and the
+// router list itself is copied under lock so aggregation runs lock-free:
+// hot /v1/models polls no longer block AddRouter/Rebuild writers while
+// copying full catalog slices.
 func (s *ModelService) AllModels() []domain.Model {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	routers := make([]RouterRegistry, len(s.routers))
+	copy(routers, s.routers)
+	s.mu.RUnlock()
 
-	// Count total models across all routers to pre-allocate
+	snapshots := make([][]domain.Model, 0, len(routers))
 	total := 0
-	for _, r := range s.routers {
-		total += len(r.AllModels())
+	for _, r := range routers {
+		models := r.AllModels()
+		snapshots = append(snapshots, models)
+		total += len(models)
 	}
 	seen := make(map[string]bool, total)
 	out := make([]domain.Model, 0, total)
-	for _, r := range s.routers {
-		for _, m := range r.AllModels() {
+	for _, models := range snapshots {
+		for _, m := range models {
 			if !seen[m.ID] {
 				seen[m.ID] = true
 				out = append(out, m)

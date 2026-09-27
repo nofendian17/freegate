@@ -2,7 +2,6 @@ package helpers
 
 import (
 	"crypto/rand"
-	"math/big"
 	"strings"
 )
 
@@ -36,24 +35,28 @@ func AsInt64(v any) (int64, bool) {
 
 // AsInt coerces a JSON numeric value to int; non-numeric values yield 0.
 func AsInt(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case int64:
-		return int(n)
-	}
-	return 0
+	n, _ := AsInt64(v)
+	return int(n)
 }
 
 // RandomID returns n lowercase-alphanumeric random characters.
+// A single rand.Read fills the buffer instead of one CSPRNG call per char.
 func RandomID(n int) string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	if n <= 0 {
+		return ""
+	}
+	raw := make([]byte, n)
+	if _, err := rand.Read(raw); err != nil {
+		// Fallback: zero buffer still maps deterministically; callers only
+		// need uniqueness-shaped IDs, not secrecy, in this path.
+		for i := range raw {
+			raw[i] = byte(i)
+		}
+	}
 	b := make([]byte, n)
-	for i := range b {
-		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
-		b[i] = chars[idx.Int64()]
+	for i, v := range raw {
+		b[i] = chars[int(v)%len(chars)]
 	}
 	return string(b)
 }

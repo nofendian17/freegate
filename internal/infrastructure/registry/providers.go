@@ -56,6 +56,17 @@ func (s *Store) ListProviders(ctx context.Context) ([]Provider, error) {
 	return out, nil
 }
 
+// ListProvidersRaw returns providers with raw (unmasked) API keys in a
+// single query. Internal-only: for ProviderManager.Rebuild, which needs the
+// real keys and previously paid one ListProviders + N GetProviderRaw.
+func (s *Store) ListProvidersRaw(ctx context.Context) ([]Provider, error) {
+	var out []Provider
+	if err := s.db.WithContext(ctx).Order("priority asc, name asc").Find(&out).Error; err != nil {
+		return nil, wrapStoreError("list providers", err)
+	}
+	return out, nil
+}
+
 func (s *Store) GetProvider(ctx context.Context, id uint) (Provider, error) {
 	p, err := s.GetProviderRaw(ctx, id)
 	if err != nil {

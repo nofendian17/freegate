@@ -139,3 +139,70 @@ func TestDetect_Responses_EmptyArray(t *testing.T) {
 		t.Errorf("expected openai-responses for empty input, got %s", f)
 	}
 }
+
+func TestProbeBodyMatchesDetect(t *testing.T) {
+	bodies := []string{
+		`{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true}`,
+		`{"model":"gpt-4","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}`,
+		`{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-sonnet-4","system":"You are helpful","messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-sonnet-4","system":[{"type":"text","text":"You are helpful"}],"messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"/9j/4AAQ"}}]}]}`,
+		`{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"get_weather","input":{"city":"NYC"}}]}]}`,
+		`{"model":"claude-sonnet-4","max_tokens":100,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"sunny"}]}]}`,
+		`{"anthropic_version":"bedrock-2023-05-31","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`,
+		`{"contents":[{"parts":[{"text":"hi"}],"role":"user"}]}`,
+		`{"contents":[{"parts":[{"text":"hello"}],"role":"user"}],"generationConfig":{"temperature":0.7}}`,
+		`{"model":"muse-spark-1.2-contributor-free","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`,
+		`{"model":"muse-spark-1.2-contributor-free","input":"hello"}`,
+		`{"model":"muse-spark-1.2-contributor-free","input":[]}`,
+		`{"model":"gpt-4"}`,
+		`{"contents":[{"parts":[{"text":"hi"}]}]}`,
+		`{}`,
+		``,
+		`not json`,
+		`{"model":"x","messages":[],"system":"s"}`,
+		`{"model":"x","messages":null}`,
+		`{"model":"x","input":null}`,
+		`{"model":"x","system":42,"messages":[{"role":"user","content":"hi"}]}`,
+	}
+	for _, tc := range bodies {
+		body := []byte(tc)
+		wantFormat := Detect(body)
+		wantModel := ExtractModelID(body)
+		gotFormat, gotModel := ProbeBody(body)
+		if gotFormat != wantFormat || gotModel != wantModel {
+			t.Errorf("ProbeBody(%q) = (%s,%q), want (%s,%q)", tc, gotFormat, gotModel, wantFormat, wantModel)
+		}
+	}
+}
+
+func TestProbeByPath(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if f, m := ProbeByPath("/v1/responses", body); f != FormatOpenAIResponses || m != "m" {
+		t.Errorf("responses path = (%s,%q)", f, m)
+	}
+	if f, m := ProbeByPath("/v1/messages", body); f != FormatClaude || m != "m" {
+		t.Errorf("messages path = (%s,%q)", f, m)
+	}
+	if f, m := ProbeByPath("/v1/chat/completions", body); f != FormatOpenAI || m != "m" {
+		t.Errorf("chat path = (%s,%q)", f, m)
+	}
+}
+
+var benchOpenAIBody = []byte(`{"model":"gpt-4o","messages":[{"role":"system","content":"You are helpful"},{"role":"user","content":"Explain allocation reuse in Go slice appends with an example"}],"temperature":0.7,"stream":true}`)
+
+func BenchmarkDetectPlusExtract(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = Detect(benchOpenAIBody)
+		_ = ExtractModelID(benchOpenAIBody)
+	}
+}
+
+func BenchmarkProbeBody(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = ProbeBody(benchOpenAIBody)
+	}
+}
