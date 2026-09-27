@@ -8,9 +8,11 @@ services:
     container_name: fg-proxy
     ports:
       - "127.0.0.1:1234:1234"
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
+    # No dns: override on purpose. Pinning 1.1.1.1/1.0.0.1 here made every
+    # upstream lookup fail ("lookup opencode.ai on 127.0.0.11:53: i/o
+    # timeout") on hosts whose router blocks outbound UDP/53 from the docker
+    # bridge. Docker's embedded resolver already forwards to the host
+    # resolver, which works.
     environment:
       - PORT=1234
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -26,6 +28,9 @@ services:
       - UPSTREAM_REFRESH_KILO=${UPSTREAM_REFRESH_KILO:-60}
       - UPSTREAM_URL_LLM7=${UPSTREAM_URL_LLM7:-https://api.llm7.io/v1}
       - UPSTREAM_REFRESH_LLM7=${UPSTREAM_REFRESH_LLM7:-300}
+      # Was missing: UPSTREAM_DEFAULT is read by config.Load, so without this
+      # line editing it in .env had no effect on the container.
+      - UPSTREAM_DEFAULT=${UPSTREAM_DEFAULT:-opencode}
       # Direct config for Responses API models (comma-separated substrings, e.g. muse-spark)
       - RESPONSE_MODELS=${RESPONSE_MODELS:-muse-spark,muse_spark}
       # Direct config for Messages API models (comma-separated substrings, e.g. union-alpha via /zen/v1/messages)
