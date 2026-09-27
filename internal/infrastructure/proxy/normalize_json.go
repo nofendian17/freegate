@@ -109,7 +109,7 @@ func isEmptyJSONCompletion(resp map[string]any) bool {
 		if tc, has := msg["tool_calls"].([]any); has && len(tc) > 0 {
 			return false
 		}
-		if r, _ := msg["reasoning_content"].(string); r != "" {
+		if r, _ := msg["reasoning"].(string); r != "" {
 			return false
 		}
 	}
@@ -224,12 +224,14 @@ func syncMessageReasoning(resp map[string]any) {
 	}
 }
 
-// syncReasoning copies `reasoning_content` into `reasoning` when the
-// latter is absent, so clients that only read the `reasoning` field
-// still get the text. `reasoning_content` is preserved because
-// providers like DeepSeek require it to be passed back through
-// conversation history in thinking mode; stripping it causes
-// subsequent requests to be rejected.
+// syncReasoning normalizes every reasoning shape down to the single
+// `reasoning` field: `reasoning_content` (DeepSeek-style upstreams such as
+// opencode) is folded into `reasoning` (Kilo-style, e.g. mimo) when the
+// latter is absent, then `reasoning_content` is always stripped from
+// client-facing responses. `reasoning_content` exists only for DeepSeek
+// thinking mode, and the request pipeline re-injects it on the way out
+// (prepare_upstream, normalize_deepseek, normalize_request_reasoning), so
+// history replay keeps working without ever exposing the second name.
 //
 // If neither field is present, `reasoning` is set to nil so the JSON
 // encoder emits the key.
@@ -240,6 +242,7 @@ func syncReasoning(m map[string]any) {
 	if hasRC && !hasR {
 		m["reasoning"] = rc
 	}
+	delete(m, "reasoning_content")
 	if !hasRC && !hasR {
 		m["reasoning"] = nil
 	}

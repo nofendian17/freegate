@@ -25,8 +25,8 @@ func TestSyncReasoning_BothPresent(t *testing.T) {
 	if m["reasoning"] != "step by step" {
 		t.Errorf("expected reasoning='step by step', got %v", m["reasoning"])
 	}
-	if m["reasoning_content"] != "step by step" {
-		t.Errorf("expected reasoning_content to be preserved, got %v", m["reasoning_content"])
+	if _, ok := m["reasoning_content"]; ok {
+		t.Errorf("expected reasoning_content to be stripped, got %v", m["reasoning_content"])
 	}
 }
 
@@ -38,8 +38,8 @@ func TestSyncReasoning_OnlyRC(t *testing.T) {
 	if m["reasoning"] != "from opencode" {
 		t.Errorf("expected reasoning='from opencode', got %v", m["reasoning"])
 	}
-	if m["reasoning_content"] != "from opencode" {
-		t.Errorf("expected reasoning_content to be preserved, got %v", m["reasoning_content"])
+	if _, ok := m["reasoning_content"]; ok {
+		t.Errorf("expected reasoning_content to be stripped, got %v", m["reasoning_content"])
 	}
 }
 
@@ -78,8 +78,8 @@ func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	if !strings.Contains(output, `"reasoning":"thinking"`) {
 		t.Error("expected reasoning field to be synced")
 	}
-	if !strings.Contains(output, `"reasoning_content":"thinking"`) {
-		t.Error("expected reasoning_content field to be preserved")
+	if strings.Contains(output, `"reasoning_content"`) {
+		t.Error("expected reasoning_content to be stripped")
 	}
 }
 
@@ -92,8 +92,8 @@ func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	if !strings.Contains(output, `"reasoning":"analysis"`) {
 		t.Error("expected reasoning field to be synced")
 	}
-	if !strings.Contains(output, `"reasoning_content":"analysis"`) {
-		t.Error("expected reasoning_content field to be preserved")
+	if strings.Contains(output, `"reasoning_content"`) {
+		t.Error("expected reasoning_content to be stripped")
 	}
 }
 
@@ -182,9 +182,9 @@ func TestCopyNormalized_Streaming(t *testing.T) {
 	if !strings.Contains(output, `"reasoning":"thought"`) {
 		t.Error("expected reasoning to be preserved in streaming")
 	}
-	// reasoning_content was not present in input; should not appear
+	// reasoning_content is always stripped from client responses.
 	if strings.Contains(output, `"reasoning_content"`) {
-		t.Error("expected reasoning_content to be absent in streaming (not in input)")
+		t.Error("expected reasoning_content to be stripped in streaming")
 	}
 }
 
@@ -201,24 +201,24 @@ func TestCopyNormalized_JSON(t *testing.T) {
 	if !strings.Contains(output, `"reasoning":"thought"`) {
 		t.Error("expected reasoning to be preserved in JSON")
 	}
-	// reasoning_content was not present in input; should not appear
+	// reasoning_content is always stripped from client responses.
 	if strings.Contains(output, `"reasoning_content"`) {
-		t.Error("expected reasoning_content to be absent in JSON (not in input)")
+		t.Error("expected reasoning_content to be stripped in JSON")
 	}
 }
 
-// TestNormalizeStream_DeepSeekDoubleResponse verifies that both
-// `reasoning` and `reasoning_content` are preserved in streaming
-// responses. DeepSeek requires `reasoning_content` to be passed back
-// through conversation history in thinking mode.
+// TestNormalizeStream_DeepSeekDoubleResponse verifies that a response
+// carrying both field names collapses to the single canonical `reasoning`
+// field. DeepSeek history replay is unaffected: the request pipeline
+// re-injects reasoning_content on the way out.
 func TestNormalizeStream_DeepSeekDoubleResponse(t *testing.T) {
 	input := "data: {\"choices\":[{\"delta\":{\"reasoning\":\"step\",\"reasoning_content\":\"step\"}}]}\ndata: [DONE]\n"
 	var buf bytes.Buffer
 	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
 	output := buf.String()
 
-	if !strings.Contains(output, `"reasoning_content":"step"`) {
-		t.Errorf("expected reasoning_content to be preserved, got %s", output)
+	if strings.Contains(output, `"reasoning_content"`) {
+		t.Errorf("expected reasoning_content to be stripped, got %s", output)
 	}
 	if !strings.Contains(output, `"reasoning":"step"`) {
 		t.Errorf("expected reasoning to be preserved, got %s", output)
@@ -233,8 +233,8 @@ func TestNormalizeJSON_DeepSeekDoubleResponse(t *testing.T) {
 	normalizeJSONWithMeta(&buf, strings.NewReader(input), "", "")
 	output := buf.String()
 
-	if !strings.Contains(output, `"reasoning_content":"step"`) {
-		t.Errorf("expected reasoning_content to be preserved, got %s", output)
+	if strings.Contains(output, `"reasoning_content"`) {
+		t.Errorf("expected reasoning_content to be stripped, got %s", output)
 	}
 	if !strings.Contains(output, `"reasoning":"step"`) {
 		t.Errorf("expected reasoning to be preserved, got %s", output)

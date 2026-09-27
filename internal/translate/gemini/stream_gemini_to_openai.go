@@ -113,7 +113,8 @@ func (s *GeminiToOpenAIState) ProcessChunk(chunk map[string]any) []string {
 	}
 
 	// Walk parts. For text parts: emit content delta. For thought
-	// parts (Gemini thinking): emit reasoning_content. For
+	// parts (Gemini thinking): emit reasoning (the single canonical
+	// field; reasoning_content is DeepSeek-only). For
 	// functionCall parts: emit a single tool_call delta (Gemini does
 	// not stream args incrementally for tool calls).
 	for i, pAny := range parts {
@@ -128,7 +129,7 @@ func (s *GeminiToOpenAIState) ProcessChunk(chunk map[string]any) []string {
 				if t == "" {
 					continue
 				}
-				results = append(results, s.chunkLine(map[string]any{"reasoning_content": t}, nil))
+				results = append(results, s.chunkLine(map[string]any{"reasoning": t}, nil))
 			} else {
 				if t == "" {
 					continue

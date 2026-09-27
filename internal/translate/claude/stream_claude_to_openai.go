@@ -157,7 +157,7 @@ func (s *ClaudeToOpenAIState) onContentBlockDelta(chunk map[string]any) []string
 		if think == "" {
 			return nil
 		}
-		return []string{s.chunkLine(map[string]any{"reasoning_content": think}, nil)}
+		return []string{s.chunkLine(map[string]any{"reasoning": think}, nil)}
 	case "input_json_delta":
 		pj, _ := delta["partial_json"].(string)
 		if pj == "" {

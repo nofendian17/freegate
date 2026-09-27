@@ -130,8 +130,10 @@ func JSONToOpenAI(body []byte) ([]byte, error) {
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = toolCalls
 	}
+	// Single canonical field: reasoning_content is DeepSeek-only and the
+	// request pipeline re-injects it for history replay, so responses
+	// normalize everything to `reasoning`.
 	if reasoningContent != "" {
-		msg["reasoning_content"] = reasoningContent
 		msg["reasoning"] = reasoningContent
 	}
 

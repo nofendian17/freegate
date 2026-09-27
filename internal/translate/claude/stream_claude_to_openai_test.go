@@ -104,8 +104,8 @@ func TestProcessClaudeChunk_ThinkingDelta(t *testing.T) {
 	})
 	parsed = parseSSELines(t, out[0])
 	delta, _ = parsed[0]["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)
-	if delta["reasoning_content"] != "hmm" {
-		t.Errorf("reasoning_content=%v want hmm", delta["reasoning_content"])
+	if delta["reasoning"] != "hmm" {
+		t.Errorf("reasoning=%v want hmm", delta["reasoning"])
 	}
 	// close thinking block — should emit </think>
 	out = s.ProcessChunk(map[string]any{
