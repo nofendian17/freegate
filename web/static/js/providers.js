@@ -565,6 +565,25 @@
   var comboCancelBtn = document.getElementById('combo-cancel');
   var comboProviders = ['opencode', 'kilo', 'llm7'];
   var combosCache = {};
+  // provider name -> model list, from /api/upstreams/models (live cache);
+  // providers with no list (or a failed fetch) fall back to free text.
+  var tierModels = {};
+
+  function tierModelControl(provider, model) {
+    var choices = tierModels[provider] || [];
+    if (!choices.length) {
+      return '<input class="combo-tier-model rounded-2xl border border-hairline bg-canvas px-3 py-2 font-mono text-caption text-ink placeholder:text-mid-gray" name="tier_model" placeholder="model (required)" value="' + esc(model || '') + '" aria-label="Tier model">';
+    }
+    var opts = '<option value=""' + (!model ? ' selected' : '') + '>provider default</option>' +
+      choices.map(function (m) {
+        return '<option value="' + esc(m) + '"' + (m === model ? ' selected' : '') + '>' + esc(m) + '</option>';
+      }).join('');
+    // Preserve a saved model that no longer appears in the list.
+    if (model && choices.indexOf(model) < 0) {
+      opts += '<option value="' + esc(model) + '" selected>' + esc(model) + ' (saved)</option>';
+    }
+    return '<select class="combo-tier-model rounded-2xl border border-hairline bg-canvas px-3 py-2 font-mono text-caption text-ink" name="tier_model" aria-label="Tier model">' + opts + '</select>';
+  }
 
   function addTierRow(provider, model) {
     var wrap = document.getElementById('combo-tiers');
@@ -577,7 +596,7 @@
           return '<option value="' + esc(n) + '"' + (n === provider ? ' selected' : '') + '>' + esc(n) + '</option>';
         }).join('') +
       '</select>' +
-      '<input class="combo-tier-model rounded-2xl border border-hairline bg-canvas px-3 py-2 font-mono text-caption text-ink placeholder:text-mid-gray" name="tier_model" placeholder="model (required)" value="' + esc(model || '') + '" aria-label="Tier model">' +
+      tierModelControl(provider, model) +
       '<button class="tier-up rounded-2xl px-3 py-1.5 text-caption text-mid-gray hover:bg-canvas hover:text-ink" type="button" aria-label="Move tier up">Up</button>' +
       '<button class="tier-down rounded-2xl px-3 py-1.5 text-caption text-mid-gray hover:bg-canvas hover:text-ink" type="button" aria-label="Move tier down">Down</button>' +
       '<button class="tier-remove rounded-2xl px-3 py-1.5 text-caption text-ember hover:bg-canvas" type="button" aria-label="Remove tier">Remove</button>';
@@ -585,11 +604,29 @@
   }
 
   function loadTierEditor() {
-    return getJSON('/api/providers')
-      .then(function (body) {
+    // The catalog endpoint feeds the model dropdowns (built-ins included).
+    // Its own catch keeps providers loading even if it fails — those
+    // providers simply fall back to the free-text model input.
+    var catalogBody = null;
+    var catalog = getJSON('/api/upstreams/models')
+      .then(function (body) { catalogBody = body; })
+      .catch(function () { /* no catalog — free-text fallback */ });
+    return Promise.all([catalog, getJSON('/api/providers')])
+      .then(function (results) {
+        var body = results[1];
         var rows = body.data || body || [];
         comboProviders = ['opencode', 'kilo', 'llm7'];
-        rows.forEach(function (p) { comboProviders.push('custom:' + p.name); });
+        tierModels = {};
+        if (catalogBody && typeof catalogBody === 'object') {
+          for (var name in catalogBody) {
+            if (Array.isArray(catalogBody[name])) tierModels[name] = catalogBody[name];
+          }
+        }
+        rows.forEach(function (p) {
+          comboProviders.push('custom:' + p.name);
+          // Catalog takes precedence; providers list is the fallback.
+          if (!tierModels['custom:' + p.name]) tierModels['custom:' + p.name] = p.models || [];
+        });
         var wrap = document.getElementById('combo-tiers');
         var kept = [];
         wrap.querySelectorAll('.combo-row').forEach(function (row) {
@@ -654,6 +691,22 @@
   });
   comboCancelBtn.addEventListener('click', resetComboForm);
   document.getElementById('combo-add-tier').addEventListener('click', function () { addTierRow('opencode', ''); });
+
+  // Switching a tier's provider repopulates its model control from the new
+  // provider's model list; a value not in the new list resets to default.
+  document.getElementById('combo-tiers').addEventListener('change', function (e) {
+    if (!e.target.classList.contains('combo-tier-provider')) return;
+    var row = e.target.closest('.combo-row');
+    if (!row) return;
+    var prev = row.querySelector('.combo-tier-model');
+    if (!prev) return;
+    var kept = prev.value;
+    var choices = tierModels[e.target.value] || [];
+    if (kept && choices.indexOf(kept) < 0) kept = '';
+    var holder = document.createElement('div');
+    holder.innerHTML = tierModelControl(e.target.value, kept);
+    prev.replaceWith(holder.firstChild);
+  });
 
   document.getElementById('combo-tiers').addEventListener('click', function (e) {
     var row = e.target.closest('.combo-row');
