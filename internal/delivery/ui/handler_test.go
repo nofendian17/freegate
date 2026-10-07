@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // NewTestRecorder mirrors the brief's helper name.
@@ -135,6 +136,114 @@ func TestLoginPage_Renders(t *testing.T) {
 	h.LoginPage(w2, req2)
 	if !strings.Contains(w2.Body.String(), "/api/pools") {
 		t.Errorf("login page should reflect next param in form")
+	}
+}
+
+// newTestHandlerWithFastThrottle swaps in a throttle with millisecond waits
+// so tests can exercise the blocked window without sleeping seconds.
+func newTestHandlerWithFastThrottle(t *testing.T, adminToken string) *Handler {
+	t.Helper()
+	h := newTestHandlerWithToken(t, adminToken)
+	h.login = &loginThrottle{
+		entries:    make(map[string]*loginAttempt),
+		base:       10 * time.Millisecond,
+		max:        time.Minute,
+		maxEntries: 4096,
+	}
+	return h
+}
+
+func testLoginRequest(h *Handler, token string) *httptest.ResponseRecorder {
+	form := url.Values{"admin_token": {token}}
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.Login(w, req)
+	return w
+}
+
+func TestLogin_Backoff_BlocksRepeatFailures(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	h := newTestHandlerWithFastThrottle(t, token)
+
+	w := testLoginRequest(h, "wrong")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("first failure: status = %d, want 401", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "invalid token") {
+		t.Fatalf("first failure should say invalid token, got %q", w.Body.String())
+	}
+
+	// Immediate retry while inside the wait window must be rejected with
+	// 429 before the token is compared — even a correct token is refused.
+	w2 := testLoginRequest(h, token)
+	if w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("retry during window: status = %d, want 429", w2.Code)
+	}
+	if ra := w2.Header().Get("Retry-After"); ra == "" {
+		t.Fatal("429 must carry Retry-After")
+	}
+	if !strings.Contains(w2.Body.String(), "too many failed attempts") {
+		t.Fatalf("429 should explain the wait, got %q", w2.Body.String())
+	}
+
+	// After the window passes the correct token is accepted again.
+	time.Sleep(15 * time.Millisecond)
+	w3 := testLoginRequest(h, token)
+	if w3.Code != http.StatusFound {
+		t.Fatalf("after window: status = %d, want 302", w3.Code)
+	}
+}
+
+func TestLogin_Backoff_GrowsWithFailures(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	h := newTestHandlerWithFastThrottle(t, token)
+
+	// First failure: wait = base (10ms, shown rounded up as 1s in HTML).
+	w1 := testLoginRequest(h, "wrong")
+	if !strings.Contains(w1.Body.String(), "try again in 1s") {
+		t.Fatalf("first failure should show base wait, got %q", w1.Body.String())
+	}
+	// Wait out the base window so attempt two is processed, not blocked.
+	time.Sleep(15 * time.Millisecond)
+	w2 := testLoginRequest(h, "wrong")
+	if !strings.Contains(w2.Body.String(), "try again in 1s") {
+		t.Fatalf("second failure should show doubled wait, got %q", w2.Body.String())
+	}
+
+	// And the blocked window is now longer than one base period.
+	time.Sleep(15 * time.Millisecond)
+	if w3 := testLoginRequest(h, "wrong"); w3.Code != http.StatusTooManyRequests {
+		t.Fatalf("third immediate attempt should be inside the grown window: status = %d, want 429", w3.Code)
+	}
+}
+
+func TestLogin_Backoff_SuccessResetsCount(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	h := newTestHandlerWithFastThrottle(t, token)
+
+	testLoginRequest(h, "wrong")
+	time.Sleep(15 * time.Millisecond)
+	if w := testLoginRequest(h, token); w.Code != http.StatusFound {
+		t.Fatalf("correct token after wait: status = %d, want 302", w.Code)
+	}
+	// Success resets the failure count: the next failure starts at base again.
+	w := testLoginRequest(h, "wrong")
+	if !strings.Contains(w.Body.String(), "try again in 1s") {
+		t.Fatalf("failure after success should start at base wait, got %q", w.Body.String())
+	}
+}
+
+func TestLogin_Backoff_NilThrottleKeepsOldBehavior(t *testing.T) {
+	// Handlers built without a throttle (bare struct, nil by default) must
+	// behave exactly as before: unlimited immediate attempts.
+	token := "0123456789abcdef0123456789abcdef"
+	h := newTestHandlerWithToken(t, token)
+	h.login = nil
+	for i := 0; i < 5; i++ {
+		if w := testLoginRequest(h, "wrong"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401 with no throttling", i+1, w.Code)
+		}
 	}
 }
 
