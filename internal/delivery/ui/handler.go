@@ -2,15 +2,19 @@ package ui
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/middleware"
 	"freegate/internal/domain"
+	"freegate/internal/httputil"
 )
 
 // DataSource provides the data the UI needs to render.
@@ -29,6 +33,9 @@ type Handler struct {
 	templates  *template.Template
 	staticFS   fs.FS
 	adminToken string
+	// login throttles failed logins with an increasing wait (nil disables
+	// throttling; tests build the Handler struct directly).
+	login *loginThrottle
 }
 
 // New creates a Handler with the given data source, parsed templates, and
@@ -44,6 +51,7 @@ func New(data DataSource, tpl *template.Template, staticFS fs.FS, adminToken ...
 		templates:  tpl,
 		staticFS:   staticFS,
 		adminToken: tok,
+		login:      newLoginThrottle(),
 	}
 }
 
@@ -75,8 +83,30 @@ func (h *Handler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// loginWaitSeconds rounds a duration up to whole seconds for display and
+// the Retry-After header.
+func loginWaitSeconds(d time.Duration) int {
+	s := int(d / time.Second)
+	if d%time.Second != 0 {
+		s++
+	}
+	return s
+}
+
 // Login validates admin_token from POST form, sets HMAC cookie on success.
+// Failed attempts are throttled with an increasing per-IP wait (see
+// loginThrottle): a blocked attempt is rejected before the token is even
+// compared, and each failure tells the caller how long to wait.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	ip := httputil.ClientIP(r)
+	if wait := h.login.blocked(ip); wait > 0 {
+		secs := loginWaitSeconds(wait)
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Error: fmt.Sprintf("too many failed attempts — try again in %ds", secs), Next: r.URL.Query().Get("next")})
+		return
+	}
 	_ = r.ParseForm()
 	token := r.FormValue("admin_token")
 	next := r.FormValue("next")
@@ -87,11 +117,16 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		next = "/"
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminToken)) != 1 {
+		msg := "invalid token"
+		if wait := loginWaitSeconds(h.login.fail(ip)); wait > 0 {
+			msg = fmt.Sprintf("invalid token — try again in %ds", wait)
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Error: "invalid token", Next: r.URL.Query().Get("next")})
+		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Error: msg, Next: r.URL.Query().Get("next")})
 		return
 	}
+	h.login.reset(ip)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "fg_admin",
 		Value:    hmacForToken(h.adminToken),
