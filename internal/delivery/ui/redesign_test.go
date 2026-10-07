@@ -162,6 +162,10 @@ func TestProvidersPage_Slice2Pins(t *testing.T) {
 	for _, want := range []string{
 		"window.FG",               // shared helpers from ui.js
 		`name="tier_provider"`,    // named dynamic form fields
+		"name=\"tier_model\"",     // named model control (select or input)
+		"/api/upstreams/models",   // live per-provider catalog for model dropdowns
+		"tierModelControl",        // dropdown vs free-text rendering
+		"provider default",        // empty-model option (= provider picks)
 		"no custom providers yet", // actionable empty state
 		"no combos yet",           // actionable empty state
 		"no proxy pools yet",      // actionable empty state

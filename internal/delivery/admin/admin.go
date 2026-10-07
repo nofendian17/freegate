@@ -29,8 +29,11 @@ type Handler struct {
 	// routes immediately after add/update/test. Nil in tests that don't
 	// wire a ProviderManager; all uses are best-effort.
 	warm func(context.Context, string) ([]domain.Model, error)
-	// inflight guards warmCache: one best-effort fetch per provider at a
-	// time, so double-click storms don't stack goroutines.
+	// catalog returns each live upstream's cached model list, keyed by the
+	// provider identifiers used in combo tiers ("opencode", "kilo",
+	// "llm7", "custom:<name>"). Nil in tests that don't wire the
+	// upstreams; the endpoint then returns an empty object.
+	catalog  func() map[string][]string
 	mu       sync.Mutex
 	inflight map[string]struct{}
 }
@@ -44,6 +47,25 @@ func New(store *registry.Store, rebuild func(context.Context) error, transport *
 func (h *Handler) WithWarmer(fn func(context.Context, string) ([]domain.Model, error)) *Handler {
 	h.warm = fn
 	return h
+}
+
+// WithCatalog attaches the live per-provider model catalog provider
+// (server.go closure over the built-in upstreams + ProviderManager).
+func (h *Handler) WithCatalog(fn func() map[string][]string) *Handler {
+	h.catalog = fn
+	return h
+}
+
+// upstreamModels returns each live upstream's cached model catalog, keyed
+// by the provider identifiers the combo tier editor uses. Built-ins list
+// their fetched catalog; customs list their curated selection (which
+// seeds their cache at rebuild). Powers the tier model dropdowns.
+func (h *Handler) upstreamModels(w http.ResponseWriter, r *http.Request) {
+	out := map[string][]string{}
+	if h.catalog != nil {
+		out = h.catalog()
+	}
+	respond.JSON(w, http.StatusOK, out)
 }
 
 // warmCache best-effort loads the provider's catalog metadata into the
@@ -89,6 +111,7 @@ func (h *Handler) Register(r chi.Router) {
 	// testProvider but against form values, storing nothing. Lets the
 	// user pick models via checkboxes before the first save.
 	r.Post("/api/providers/probe", h.probeProvider)
+	r.Get("/api/upstreams/models", h.upstreamModels)
 	r.Get("/api/combos", h.listCombos)
 	r.Post("/api/combos", h.createCombo)
 	r.Put("/api/combos/{id}", h.updateCombo)

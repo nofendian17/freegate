@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -256,7 +257,33 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 		combo.RebuildCombos(rows, lookup)
 		return nil
 	}
-	adminHandler := admin.New(pstore, rebuild, sharedTr).WithWarmer(mgr.Warm)
+	// The providers page needs each live upstream's cached model catalog
+	// (combo tier model dropdowns). Built-ins report their fetched
+	// catalog; customs report their curated selection (which seeds their
+	// cache at rebuild).
+	adminHandler := admin.New(pstore, rebuild, sharedTr).
+		WithWarmer(mgr.Warm).
+		WithCatalog(func() map[string][]string {
+			out := make(map[string][]string, 4)
+			add := func(name string, u domain.Upstream) {
+				models := u.Models()
+				ids := make([]string, 0, len(models))
+				for _, m := range models {
+					if m.ID != "" {
+						ids = append(ids, m.ID)
+					}
+				}
+				sort.Strings(ids)
+				out[name] = ids
+			}
+			add("opencode", opencode)
+			add("kilo", kilo)
+			add("llm7", llm7)
+			for _, u := range mgr.All() {
+				add(u.Name(), u) // Name() already carries the "custom:" prefix
+			}
+			return out
+		})
 
 	// Dashboard + provider/combo management (admin-only).
 	r.Group(func(r chi.Router) {

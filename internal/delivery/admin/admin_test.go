@@ -461,6 +461,56 @@ func TestAdmin_TestProvider_WarmsCatalog(t *testing.T) {
 	}
 }
 
+// TestAdmin_UpstreamModels verifies the catalog endpoint: nil catalog
+// yields an empty object (not null), and the attached provider function
+// is called on each request.
+func TestAdmin_UpstreamModels(t *testing.T) {
+	s, err := registry.Open(t.Context(), t.TempDir()+"/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func(context.Context) error { return nil }, nil)
+	r := testRouter(h)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/upstreams/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if body := strings.TrimSpace(w.Body.String()); body != "{}" {
+		t.Fatalf("nil catalog must return empty object, got %s", body)
+	}
+
+	calls := 0
+	h = h.WithCatalog(func() map[string][]string {
+		calls++
+		return map[string][]string{
+			"opencode":    {"b-model", "a-model"},
+			"custom:acme": {"m1"},
+		}
+	})
+	r = testRouter(h)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/upstreams/models", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("catalog called %d times, want 1", calls)
+	}
+	var got map[string][]string
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if ids := got["opencode"]; len(ids) != 2 || ids[0] != "b-model" || ids[1] != "a-model" {
+		t.Fatalf("opencode ids = %v, want [b-model a-model] (order preserved, sorting is the closure's job)", ids)
+	}
+	if ids := got["custom:acme"]; len(ids) != 1 || ids[0] != "m1" {
+		t.Fatalf("custom:acme ids = %v, want [m1]", ids)
+	}
+}
+
 // TestAdmin_ProbeProvider_AdHoc verifies the pre-save probe: it lists the
 // upstream catalog from form values without storing anything.
 func TestAdmin_ProbeProvider_AdHoc(t *testing.T) {
