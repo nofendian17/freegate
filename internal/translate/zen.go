@@ -2,13 +2,16 @@ package translate
 
 import "regexp"
 
-// MinOpencodeClientMajor/MinOpencodeClientMinor is the Zen gateway floor:
-// User-Agents below opencode/1.17.x are rejected (426/403). freegate mints
-// its own User-Agent from the cached client version (see upstream
-// opencode_identity.go), which is always at or above this floor.
+// MinOpencodeClientMajor/MinOpencodeClientMinor is the gateway floor:
+// User-Agents below opencode v2 (opencode/<channel>/<version>/<client>,
+// e.g. opencode/latest/2.0.26/cli) are rejected with 403 FreeTierError
+// since 2026-10-14, when free inference moved from /zen/v1 to
+// /inference/v1 (9router PR #4842). freegate mints its own User-Agent
+// from the cached client version (see upstream opencode_identity.go),
+// which is always at or above this floor.
 const (
-	MinOpencodeClientMajor = 1
-	MinOpencodeClientMinor = 17
+	MinOpencodeClientMajor = 2
+	MinOpencodeClientMinor = 0
 )
 
 // OpenCodeSessionRE is the canonical descending session form freegate

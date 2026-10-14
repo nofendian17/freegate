@@ -6,7 +6,7 @@ freegate provides one authenticated API for OpenAI Chat Completions, Anthropic M
 
 Built-in upstreams:
 
-- **OpenCode** — `https://opencode.ai/zen/v1`
+- **OpenCode** — `https://opencode.ai/inference/v1`
 - **Kilo / OpenRouter** — `https://api.kilo.ai/api/openrouter`
 - **LLM7** — `https://api.llm7.io/v1`
 - **Custom providers** — any OpenAI-compatible provider managed in SQLite
@@ -267,7 +267,7 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 
 | Variable | Default | Description |
 |---|---|---|
-| `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/zen/v1` | OpenCode base URL |
+| `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/inference/v1` | OpenCode base URL |
 | `UPSTREAM_KEY_OPENCODE` | `public` | Comma-separated OpenCode bearer keys; keys are rotated per request |
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated free model IDs without the `-free` suffix |
 | `OPENCODE_CLIENT_VERSION` | auto | Optional OpenCode client version advertised to the gateway |

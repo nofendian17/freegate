@@ -12,7 +12,6 @@ import (
 )
 
 var openCodeSessionRE = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
-var openCodeRequestRE = regexp.MustCompile(`^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 
 func TestGenSessionID_CanonicalDescendingForm(t *testing.T) {
 	id := genSessionID()
@@ -39,32 +38,13 @@ func TestGenSessionID_CanonicalDescendingForm(t *testing.T) {
 	}
 }
 
-func TestGenRequestID_CanonicalForm(t *testing.T) {
-	id := genRequestID()
-	if !openCodeRequestRE.MatchString(id) {
-		t.Fatalf("request id %q not canonical", id)
-	}
-	raw, err := strconv.ParseUint(id[4:16], 16, 64)
-	if err != nil {
-		t.Fatalf("hex decode: %v", err)
-	}
-	const mask = uint64(1)<<48 - 1
-	recovered := int64((raw & mask) >> 12)
-	const window = int64(1) << 36
-	nowMs := time.Now().UnixMilli()
-	k := (nowMs - recovered + window/2) / window
-	if diff := nowMs - (recovered + k*window); diff < 0 || diff > 60_000 {
-		t.Fatalf("request timestamp off by %d ms", diff)
-	}
-}
-
 func TestGenSessionID_UniqueAndOrdered(t *testing.T) {
 	a, b := genSessionID(), genSessionID()
 	if a == b {
 		t.Fatal("duplicate session ids")
 	}
-	if !openCodeRequestRE.MatchString(genOpencodeIDWithClock("msg", false)) {
-		t.Fatal("request id not canonical")
+	if !openCodeSessionRE.MatchString(genOpencodeIDWithClock("ses", true)) {
+		t.Fatal("session id not canonical")
 	}
 }
 
@@ -90,14 +70,14 @@ func TestNormalizeClientVersion(t *testing.T) {
 }
 
 func TestMeetsMinClientVersion(t *testing.T) {
-	for _, v := range []string{"1.17.0", "1.18.31", "1.19.0", "2.0.0"} {
+	for _, v := range []string{"2.0.0", "2.0.26", "2.1.0", "9.9.9"} {
 		if !meetsMinClientVersion(v) {
 			t.Errorf("expected %s to meet minimum", v)
 		}
 	}
-	for _, v := range []string{"1.16.9", "1.10.0", "0.9.0", "bogus", ""} {
+	for _, v := range []string{"1.17.0", "1.18.31", "1.19.0", "1.16.9", "0.9.0", "bogus", ""} {
 		if meetsMinClientVersion(v) {
-			t.Errorf("expected %q to fail minimum", v)
+			t.Errorf("expected %q to fail minimum (v1 rejected since 2026-10-14)", v)
 		}
 	}
 }
@@ -125,7 +105,7 @@ func TestRefreshClientVersion_CachesRelease(t *testing.T) {
 	if got, _ := openCodeClientVersion.Load().(string); got != "9.9.9" {
 		t.Fatalf("version = %q", got)
 	}
-	if ua := openCodeUserAgent(); !strings.HasPrefix(ua, "opencode/9.9.9") {
+	if ua := openCodeUserAgent(); !strings.HasPrefix(ua, "opencode/latest/9.9.9/cli") {
 		t.Fatalf("ua = %q", ua)
 	}
 }
@@ -165,7 +145,7 @@ func TestRefreshClientVersion_FailOpen(t *testing.T) {
 	}
 }
 
-func TestRedactZenCredential(t *testing.T) {
+func TestRedactOpenCodeCredential(t *testing.T) {
 	cases := []struct {
 		key, value, want string
 	}{
@@ -178,23 +158,55 @@ func TestRedactZenCredential(t *testing.T) {
 		{"x-opencode-session", "ses_abc", "ses_abc"},
 	}
 	for _, tc := range cases {
-		if got := redactZenCredential(tc.key, tc.value); got != tc.want {
+		if got := redactOpenCodeCredential(tc.key, tc.value); got != tc.want {
 			t.Errorf("redact(%q, %q) = %q, want %q", tc.key, tc.value, got, tc.want)
 		}
 	}
 }
 
-func TestLogZenRequest_RespectsFlag(t *testing.T) {
+func TestLogOpenCodeRequest_RespectsFlag(t *testing.T) {
 	t.Setenv("UPSTREAM_CAPTURE", "")
-	logZenRequest("/chat/completions", map[string]string{"Authorization": "Bearer sk-real"}, []byte(`{}`))
+	logOpenCodeRequest("/chat/completions", map[string]string{"Authorization": "Bearer sk-real"}, []byte(`{}`))
 	t.Setenv("UPSTREAM_CAPTURE", "true")
-	logZenRequest("/chat/completions", map[string]string{"Authorization": "Bearer sk-real"}, []byte(`{}`))
+	logOpenCodeRequest("/chat/completions", map[string]string{"Authorization": "Bearer sk-real"}, []byte(`{}`))
 }
 
 func TestOpenCodeUserAgent_FallbackShape(t *testing.T) {
 	withClientVersion(t, openCodeFallbackVersion)
 	ua := openCodeUserAgent()
-	if ua != "opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14" {
+	if ua != "opencode/latest/2.0.26/cli" {
+		t.Fatalf("ua = %q", ua)
+	}
+}
+
+func TestPinnedClientVersion(t *testing.T) {
+	t.Setenv("OPENCODE_CLIENT_VERSION", "2.0.29")
+	if norm, ok := pinnedClientVersion(); !ok || norm != "2.0.29" {
+		t.Fatalf("pinned = (%q, %v), want (2.0.29, true)", norm, ok)
+	}
+	if clientVersionProbeEnabled() {
+		t.Fatal("probe must be disabled when the version is pinned")
+	}
+
+	t.Setenv("OPENCODE_CLIENT_VERSION", "v2.1.0")
+	if norm, ok := pinnedClientVersion(); !ok || norm != "2.1.0" {
+		t.Fatalf("pinned = (%q, %v), want (2.1.0, true)", norm, ok)
+	}
+
+	for _, v := range []string{"", "1.18.31", "bogus", "opencode/2.0.26/cli"} {
+		t.Setenv("OPENCODE_CLIENT_VERSION", v)
+		if norm, ok := pinnedClientVersion(); ok {
+			t.Fatalf("pinned(%q) = (%q, true), want ok=false", v, norm)
+		}
+		if !clientVersionProbeEnabled() {
+			t.Fatalf("probe must stay enabled for pin %q", v)
+		}
+	}
+}
+
+func TestOpenCodeUserAgent_V2Form(t *testing.T) {
+	withClientVersion(t, "2.0.29")
+	if ua := openCodeUserAgent(); ua != "opencode/latest/2.0.29/cli" {
 		t.Fatalf("ua = %q", ua)
 	}
 }

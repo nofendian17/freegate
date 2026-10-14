@@ -9,15 +9,20 @@ import (
 type RefreshFunc func(ctx context.Context) error
 
 type Refresher struct {
-	name     string
-	refresh  RefreshFunc
-	interval time.Duration
-	backoff  time.Duration
-	maxBack  time.Duration
+	name       string
+	refresh    RefreshFunc
+	interval   time.Duration
+	backoff    time.Duration
+	maxBackoff time.Duration
 	// onFailure runs after a failed refresh, before the backoff wait.
 	// Upstreams wire pool flushing here so a retry never reuses the
 	// blackholed pooled session that just failed. Nil = no hook.
 	onFailure func()
+	// quiet downgrades the failure log from warn to debug and skips the
+	// success info log. For fail-open probes (e.g. the OpenCode client
+	// version tracker) where failure is routine — offline, rate-limited,
+	// or a below-minimum release — and the fallback is always correct.
+	quiet bool
 }
 
 func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refresher {
@@ -25,11 +30,11 @@ func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refreshe
 		interval = ModelRefreshInterval
 	}
 	return &Refresher{
-		name:     name,
-		refresh:  fn,
-		interval: interval,
-		backoff:  InitialBackoff,
-		maxBack:  MaxBackoff,
+		name:       name,
+		refresh:    fn,
+		interval:   interval,
+		backoff:    InitialBackoff,
+		maxBackoff: MaxBackoff,
 	}
 }
 
@@ -37,6 +42,13 @@ func NewRefresher(name string, fn RefreshFunc, interval time.Duration) *Refreshe
 // It returns the refresher for chaining.
 func (r *Refresher) WithOnFailure(fn func()) *Refresher {
 	r.onFailure = fn
+	return r
+}
+
+// WithQuiet downgrades the failure log from warn to debug and skips the
+// success info log. It returns the refresher for chaining.
+func (r *Refresher) WithQuiet() *Refresher {
+	r.quiet = true
 	return r
 }
 
@@ -55,7 +67,11 @@ func (r *Refresher) Run(ctx context.Context) {
 		}
 
 		if err := r.refresh(ctx); err != nil {
-			slog.Warn("model refresh failed", "upstream", r.name, "error", err)
+			if r.quiet {
+				slog.Debug("refresh failed", "upstream", r.name, "error", err)
+			} else {
+				slog.Warn("model refresh failed", "upstream", r.name, "error", err)
+			}
 			if r.onFailure != nil {
 				r.onFailure()
 			}
@@ -65,11 +81,13 @@ func (r *Refresher) Run(ctx context.Context) {
 				return
 			case <-t.C:
 			}
-			backoff = min(backoff*2, r.maxBack)
+			backoff = min(backoff*2, r.maxBackoff)
 			continue
 		}
 
-		slog.Info("models refreshed", "upstream", r.name)
+		if !r.quiet {
+			slog.Info("models refreshed", "upstream", r.name)
+		}
 		backoff = r.backoff
 
 		t.Reset(r.interval)

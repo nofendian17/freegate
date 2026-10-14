@@ -62,7 +62,7 @@ func Load() *Config {
 
 		TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
 
-		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/zen/v1"),
+		UpstreamURLOpenCode:           envStr("UPSTREAM_URL_OPENCODE", "https://opencode.ai/inference/v1"),
 		UpstreamKeyOpenCode:           envSlice("UPSTREAM_KEY_OPENCODE", "public"),
 		UpstreamOpenCodeFreeAllowlist: envSlice("UPSTREAM_OPENCODE_FREE_ALLOWLIST", "big-pickle"),
 

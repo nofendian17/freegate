@@ -19,7 +19,7 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - RATE_LIMIT=${RATE_LIMIT:-60}
       - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
-      - UPSTREAM_URL_OPENCODE=${UPSTREAM_URL_OPENCODE:-https://opencode.ai/zen/v1}
+      - UPSTREAM_URL_OPENCODE=${UPSTREAM_URL_OPENCODE:-https://opencode.ai/inference/v1}
       - UPSTREAM_KEY_OPENCODE=${UPSTREAM_KEY_OPENCODE:-public}
       - UPSTREAM_OPENCODE_FREE_ALLOWLIST=${UPSTREAM_OPENCODE_FREE_ALLOWLIST:-big-pickle}
       - UPSTREAM_REFRESH_OPENCODE=${UPSTREAM_REFRESH_OPENCODE:-60}
@@ -33,7 +33,7 @@ services:
       - UPSTREAM_DEFAULT=${UPSTREAM_DEFAULT:-opencode}
       # Direct config for Responses API models (comma-separated substrings, e.g. muse-spark)
       - RESPONSE_MODELS=${RESPONSE_MODELS:-muse-spark,muse_spark}
-      # Direct config for Messages API models (comma-separated substrings, e.g. union-alpha via /zen/v1/messages)
+      # Direct config for Messages API models (comma-separated substrings, e.g. union-alpha via /inference/v1/messages)
       - MESSAGE_MODELS=${MESSAGE_MODELS:-union-alpha}
       # Debug: raw upstream response logging via slog (stdout). Default
       # false; lines contain full conversation content, enable only while

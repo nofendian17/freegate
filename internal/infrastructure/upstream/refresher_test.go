@@ -12,11 +12,11 @@ func TestRefresher_OnFailureCalledOnError(t *testing.T) {
 	var calls atomic.Int32
 	var hooks atomic.Int32
 	r := &Refresher{
-		name:     "test",
-		refresh:  func(ctx context.Context) error { calls.Add(1); return errors.New("boom") },
-		interval: time.Hour,
-		backoff:  time.Millisecond,
-		maxBack:  time.Millisecond,
+		name:       "test",
+		refresh:    func(ctx context.Context) error { calls.Add(1); return errors.New("boom") },
+		interval:   time.Hour,
+		backoff:    time.Millisecond,
+		maxBackoff: time.Millisecond,
 	}
 	r.WithOnFailure(func() { hooks.Add(1) })
 
@@ -35,6 +35,27 @@ func TestRefresher_OnFailureCalledOnError(t *testing.T) {
 	}
 }
 
+func TestRefresher_QuietRunsLikeNormal(t *testing.T) {
+	var calls atomic.Int32
+	var hooks atomic.Int32
+	r := NewRefresher("test-quiet", func(ctx context.Context) error { calls.Add(1); return errors.New("boom") }, time.Hour).
+		WithQuiet().
+		WithOnFailure(func() { hooks.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	r.Run(ctx)
+
+	if calls.Load() == 0 {
+		t.Fatal("refresh was never attempted")
+	}
+	if hooks.Load() != calls.Load() {
+		t.Fatalf("onFailure called %d times for %d failures", hooks.Load(), calls.Load())
+	}
+}
 func TestRefresher_NoOnFailureOnSuccess(t *testing.T) {
 	var hooks atomic.Int32
 	r := NewRefresher("test", func(ctx context.Context) error { return nil }, time.Hour).
