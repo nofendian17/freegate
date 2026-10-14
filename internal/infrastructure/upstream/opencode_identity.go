@@ -16,15 +16,16 @@ import (
 	"freegate/internal/translate"
 )
 
-// OpenCode client identity for Zen free-tier validation.
+// OpenCode client identity for free-tier validation.
 //
-// Mirrors 9router PR #10 (cherry-pick of decolua#4105): the gateway rejects
-// anonymous free-tier requests unless they carry a current OpenCode client
-// User-Agent (opencode/<version>, version >= 1.17.0) and an
-// x-opencode-session in canonical descending form
-// (ses_ + 12 hex timestamp digits + 14 Base62 chars).
+// Mirrors 9router PR #4842 (fix/opencode-free-inference-v2): since
+// 2026-10-14 the v1 "opencode/1.18.x" User-Agent form and the /zen/v1
+// endpoint are rejected with 403 FreeTierError. Free inference moved to
+// /inference/v1 and requires the v2 UA shape
+// opencode/<channel>/<version>/<client> (e.g. opencode/latest/2.0.26/cli)
+// with major >= 2.
 const (
-	openCodeFallbackVersion = "1.18.31"
+	openCodeFallbackVersion = "2.0.26"
 	// openCodeClientVersionTTL bounds how often the cached client version
 	// is refreshed from GitHub releases (mirrors 9router's 12h default).
 	openCodeClientVersionTTL    = 12 * time.Hour
@@ -34,28 +35,32 @@ const (
 // openCodeReleasesURL is a var so tests can point it at a local server.
 var openCodeReleasesURL = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
 
+// openCodeVersionClient is reused across probes; its Timeout bounds each
+// release fetch (openCodeVersionFetchTimeout).
+var openCodeVersionClient = &http.Client{Timeout: openCodeVersionFetchTimeout}
+
 var openCodeClientVersion atomic.Value // stores string
 
-// logZenRequest emits the exact outgoing Zen request when
+// logOpenCodeRequest emits the exact outgoing inference request when
 // UPSTREAM_CAPTURE=true: endpoint, wire headers, and full body (no
-// truncation — debug only on trusted machines). Same trust policy as
+// truncation — capture only on trusted machines). Same trust policy as
 // response capture (full conversation content), except credentials are
 // always redacted: only the well-known anonymous "public" values are
 // shown verbatim.
-func logZenRequest(endpoint string, headers map[string]string, body []byte) {
+func logOpenCodeRequest(endpoint string, headers map[string]string, body []byte) {
 	if os.Getenv("UPSTREAM_CAPTURE") != "true" {
 		return
 	}
 	safe := make(map[string]string, len(headers))
 	for k, v := range headers {
-		safe[k] = redactZenCredential(k, v)
+		safe[k] = redactOpenCodeCredential(k, v)
 	}
-	slog.Info("upstream zen request", "endpoint", endpoint, "headers", safe, "body", string(body))
+	slog.Info("upstream opencode request", "endpoint", endpoint, "headers", safe, "body", string(body))
 }
 
-// redactZenCredential keeps the anonymous "public" markers visible (needed
-// to debug free-tier validation) while redacting real keys.
-func redactZenCredential(key, value string) string {
+// redactOpenCodeCredential keeps the anonymous "public" markers visible
+// (needed to debug free-tier validation) while redacting real keys.
+func redactOpenCodeCredential(key, value string) string {
 	switch strings.ToLower(key) {
 	case "authorization":
 		if value == "Bearer public" {
@@ -77,25 +82,42 @@ func init() {
 	// OPENCODE_CLIENT_VERSION pins the advertised client version (e.g.
 	// for air-gapped setups where the GitHub release probe can't run).
 	// Values below the gateway minimum are ignored.
-	if v := strings.TrimSpace(os.Getenv("OPENCODE_CLIENT_VERSION")); v != "" {
-		if norm, ok := normalizeClientVersion(v); ok && meetsMinClientVersion(norm) {
-			openCodeClientVersion.Store(norm)
-		}
+	if norm, ok := pinnedClientVersion(); ok {
+		openCodeClientVersion.Store(norm)
 	}
 }
 
-// openCodeUserAgent returns the User-Agent sent to the Zen gateway:
-// opencode/<cached-or-pinned-version> with the provider-utils/runtime
-// suffixes the genuine client sends. Suffix versions match the official
-// 1.18.31 release wire capture (ai-sdk/provider-utils/4.0.23
-// runtime/bun/1.3.14; cf. anomalyco/opencode#49433 discussion and local
-// capture of the release binary against a logging mock).
+// pinnedClientVersion returns the OPENCODE_CLIENT_VERSION override when it
+// is set to a valid above-minimum version. A pin also disables the
+// background release probe (see clientVersionProbeEnabled), so a later
+// probe success can never overwrite the operator's choice.
+func pinnedClientVersion() (string, bool) {
+	if v := strings.TrimSpace(os.Getenv("OPENCODE_CLIENT_VERSION")); v != "" {
+		if norm, ok := normalizeClientVersion(v); ok && meetsMinClientVersion(norm) {
+			return norm, true
+		}
+	}
+	return "", false
+}
+
+// clientVersionProbeEnabled reports whether the background GitHub release
+// probe should run. It is skipped when the version is pinned: no network
+// call, no failure noise, and the pin can't be overwritten.
+func clientVersionProbeEnabled() bool {
+	_, pinned := pinnedClientVersion()
+	return !pinned
+}
+
+// openCodeUserAgent returns the User-Agent sent to the inference gateway:
+// opencode/latest/<cached-or-pinned-version>/cli. Upstream rejects the v1
+// "opencode/1.18.x" form with 403 FreeTierError since 2026-10-14
+// (9router PR #4842, captured from the v2.0.26 CLI).
 func openCodeUserAgent() string {
 	v, _ := openCodeClientVersion.Load().(string)
 	if v == "" {
 		v = openCodeFallbackVersion
 	}
-	return "opencode/" + v + " ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
+	return "opencode/latest/" + v + "/cli"
 }
 
 var releaseTagRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
@@ -112,7 +134,7 @@ func normalizeClientVersion(tag string) (norm string, ok bool) {
 }
 
 // meetsMinClientVersion reports whether v satisfies the gateway floor
-// (opencode/1.17.x and newer).
+// (opencode v2 and newer; v1 UAs are rejected with 403 since 2026-10-14).
 func meetsMinClientVersion(v string) bool {
 	parts := strings.Split(v, ".")
 	if len(parts) < 2 {
@@ -123,24 +145,26 @@ func meetsMinClientVersion(v string) bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	return major > translate.MinOpencodeClientMajor || (major == translate.MinOpencodeClientMajor && minor >= translate.MinOpencodeClientMinor)
+	if major > translate.MinOpencodeClientMajor {
+		return true
+	}
+	return major == translate.MinOpencodeClientMajor && minor >= translate.MinOpencodeClientMinor
 }
 
 // refreshOpenCodeClientVersion fetches the latest OpenCode release tag and
 // caches it as the advertised client version. Fail-open: any fetch, parse,
 // or below-minimum result keeps the current (fallback) version.
 func refreshOpenCodeClientVersion(ctx context.Context) error {
-	client := &http.Client{Timeout: openCodeVersionFetchTimeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openCodeReleasesURL, nil)
 	if err != nil {
 		return fmt.Errorf("opencode client version: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
+	resp, err := openCodeVersionClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("opencode client version: fetch releases: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("opencode client version: releases API %d", resp.StatusCode)
 	}

@@ -117,7 +117,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		modelID = id
 	}
 
-	// Determine upstream target format. Muse models are served by /zen/v1/responses.
+	// Determine upstream target format. Muse models are served by /inference/v1/responses.
 	targetFormat := targetFormatForModel(modelID)
 
 	slog.Debug("chat translate", "model", modelID, "src", format, "dst", targetFormat, "path", r.URL.Path, "response_models", getResponseModels())
@@ -219,7 +219,7 @@ func extractModelID(body []byte) (string, error) {
 // targetFormatForModel returns the upstream format for a given model.
 // Direct config via RESPONSE_MODELS / MESSAGE_MODELS env (comma-separated
 // substrings, case-insensitive). Muse Spark family → Responses API,
-// Union Alpha → Claude Messages API (/zen/v1/messages per 9router PR #4111).
+// Union Alpha → Claude Messages API (/inference/v1/messages per 9router PR #4842).
 func targetFormatForModel(modelID string) translate.Format {
 	// Strip thinking suffix "model(level)" if present
 	base := modelID

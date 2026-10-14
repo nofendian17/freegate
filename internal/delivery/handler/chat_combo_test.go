@@ -67,8 +67,8 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 			if raw.Model != "union-alpha" {
 				t.Errorf("messages: model=%q", raw.Model)
 			}
-			if len(raw.Tools) != 17 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
-				t.Errorf("messages: tools must carry name/input_schema plus 16 merged gate stubs, got %s", body)
+			if len(raw.Tools) != 3 || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+				t.Errorf("messages: tools must carry name/input_schema plus read/shell fingerprint, got %s", body)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -111,8 +111,8 @@ func (z *zenWire) serve(t *testing.T) http.HandlerFunc {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if len(raw.Tools) != 17 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
-				t.Errorf("chat: openai tools shape broken (want caller + 16 merged gate stubs), got %s", body)
+			if len(raw.Tools) != 3 || raw.Tools[0].Type != "function" || raw.Tools[0].Function.Name != "get_weather" {
+				t.Errorf("chat: openai tools shape broken (want caller + read/shell fingerprint), got %s", body)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -257,16 +257,16 @@ func TestChat_ComboMessagesTier_FailoverToOpenAI(t *testing.T) {
 }
 
 func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
-	// Downstream Zen identity headers must NOT reach the upstream:
-	// freegate always mints fresh canonical identity instead.
+	// Downstream identity headers must NOT reach the upstream:
+	// freegate always mints fresh canonical v2 identity instead.
 	z := &zenWire{}
 	h := comboTestHandler(t, z, []registry.ComboTier{{Provider: "opencode", Model: "union-alpha"}})
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(openAIToolsBody("assistant", "", false)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "opencode/1.18.31")
 	req.Header.Set("x-opencode-session", "ses_0afae3e4c001AmMPIe8RFqNeTF")
-	req.Header.Set("x-opencode-request", "usr_testuser000000000000000001")
-	req.Header.Set("x-opencode-client", "cli")
+	req.Header.Set("x-opencode-request", "msg_0afae3e4c001AmMPIe8RFqNeTF")
+	req.Header.Set("x-opencode-client", "desktop")
 	req.Header.Set("x-opencode-project", "prj_test0000000000000000000001")
 	rec := httptest.NewRecorder()
 	h.Chat(rec, req)
@@ -281,8 +281,6 @@ func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
 	got := z.headers[0]
 	for k, foreign := range map[string]string{
 		"X-Opencode-Session": "ses_0afae3e4c001AmMPIe8RFqNeTF",
-		"X-Opencode-Request": "usr_testuser000000000000000001",
-		"X-Opencode-Client":  "cli",
 		"X-Opencode-Project": "prj_test0000000000000000000001",
 	} {
 		if v := got.Get(k); v == foreign {
@@ -292,16 +290,29 @@ func TestChat_DownstreamIdentityIgnoredUpstream(t *testing.T) {
 			t.Errorf("upstream %s empty, want minted", k)
 		}
 	}
-	if v := got.Get("X-Opencode-Client"); v != "desktop" {
-		t.Errorf("upstream X-Opencode-Client = %q, want desktop", v)
+	// v2 CLI parity: x-opencode-request is never sent (rejected with 403).
+	if v := got.Get("X-Opencode-Request"); v != "" {
+		t.Errorf("upstream X-Opencode-Request = %q, want absent", v)
+	}
+	if v := got.Get("X-Opencode-Session-Id"); v == "" {
+		t.Errorf("upstream X-Opencode-Session-Id empty, want minted")
+	}
+	if v := got.Get("X-Session-Affinity"); v == "" {
+		t.Errorf("upstream X-Session-Affinity empty, want minted")
+	}
+	if v := got.Get("X-Opencode-Client"); v != "cli" {
+		t.Errorf("upstream X-Opencode-Client = %q, want cli", v)
 	}
 	if v := got.Get("X-Opencode-Project"); v != "global" {
 		t.Errorf("upstream X-Opencode-Project = %q, want global", v)
 	}
-	// Minted UA carries provider-utils/runtime suffixes, so it must never
-	// equal the bare downstream value; equality means UA forwarding regressed.
+	// Minted UA is the v2 form, so it must never equal the bare v1
+	// downstream value; equality means UA forwarding regressed.
 	if v := got.Get("User-Agent"); v == "opencode/1.18.31" {
 		t.Errorf("upstream User-Agent forwarded downstream value %q, want minted", v)
+	}
+	if v := got.Get("User-Agent"); !strings.HasPrefix(v, "opencode/latest/") || !strings.HasSuffix(v, "/cli") {
+		t.Errorf("upstream User-Agent = %q, want v2 opencode/<channel>/<version>/<client>", v)
 	}
 }
 

@@ -187,7 +187,7 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 		}
 		if domain.IsRetryableStatus(resp) && !last {
 			slog.Warn("combo tier retryable status, trying next", "combo", u.name, "tier", tier.Upstream.Name(), "status", resp.StatusCode)
-			resp.Close()
+			_ = resp.Close()
 			u.markCooldown(i)
 			continue
 		}

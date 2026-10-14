@@ -31,7 +31,7 @@ func TestPostSetsAcceptHeaderForStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !strings.Contains(got, "text/event-stream") {
 		t.Errorf("expected Accept: text/event-stream for stream=true, got %q", got)
@@ -51,7 +51,7 @@ func TestPostOmitsAcceptForNonStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if got == "text/event-stream" {
 		t.Errorf("expected no Accept: text/event-stream for stream=false, got %q", got)
@@ -71,7 +71,7 @@ func TestPostOmitsAcceptWhenStreamFieldMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if got == "text/event-stream" {
 		t.Errorf("expected no Accept: text/event-stream when stream field missing, got %q", got)
@@ -92,7 +92,7 @@ func TestPostRotatesApiKeyAcrossRequests(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	want := []string{"Bearer key-a", "Bearer key-b", "Bearer key-a", "Bearer key-b"}
@@ -117,7 +117,7 @@ func TestPostUsesSingleKeyWhenOneConfigured(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	for i, g := range got {
@@ -145,7 +145,7 @@ func TestPostRetriesWithNextKeyOn429(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 after failover, got %d", resp.StatusCode)
@@ -172,7 +172,7 @@ func TestPostReturns429WhenAllKeysLimited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", resp.StatusCode)
@@ -198,7 +198,7 @@ func TestPostSkipsLimitedKeyOnSubsequentRequests(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("request %d: expected 200, got %d", i, resp.StatusCode)
 		}
@@ -230,7 +230,7 @@ func TestPostDoesNotRetry429WithSingleKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", resp.StatusCode)
@@ -255,7 +255,7 @@ func TestPostWithHeaders_SyncsXApiKeyWithBearer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if len(got) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(got))
@@ -282,7 +282,7 @@ func TestPostWithHeaders_PreservesExplicitXApiKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if apiKey != "explicit" {
 		t.Errorf("expected explicit x-api-key preserved, got %q", apiKey)
 	}
@@ -312,7 +312,7 @@ func TestPostWithHeaders_StripsPublicXApiKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	if len(got) != 2 {
@@ -342,7 +342,7 @@ func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if apiKey != "explicit" {
 		t.Errorf("expected explicit non-public x-api-key preserved, got %q", apiKey)
 	}

@@ -215,7 +215,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	uiHandler := ui.New(rec, tpl, web.Static(), cfg.AdminToken)
 	// Direct config for Responses models (e.g. muse-spark) and Messages
-	// models (e.g. union-alpha via /zen/v1/messages per 9router PR #4111).
+	// models (e.g. union-alpha via /inference/v1/messages per 9router PR #4842).
 	handler.SetResponseModels(cfg.ResponseModels)
 	handler.SetMessageModels(cfg.MessageModels)
 	apiHandler := handler.New(cs, ms, m).WithReadiness(pstore)

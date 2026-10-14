@@ -54,7 +54,7 @@ func TestComboUpstream_MessagesTierToolSchema(t *testing.T) {
 		if r.URL.Path != "/messages" || raw.Model != "union-alpha" {
 			t.Errorf("path=%s model=%s", r.URL.Path, raw.Model)
 		}
-		if len(raw.Tools) != 1+len(gateToolNames) || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
+		if len(raw.Tools) != 1+len(fingerprintToolNames) || raw.Tools[0].Name != "get_weather" || raw.Tools[0].InputSchema == nil {
 			t.Errorf("invalid Messages tools: %+v", raw.Tools)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -63,7 +63,7 @@ func TestComboUpstream_MessagesTierToolSchema(t *testing.T) {
 		for _, tl := range raw.Tools {
 			seen[tl.Name] = true
 		}
-		for _, want := range gateToolNames {
+		for _, want := range fingerprintToolNames {
 			if !seen[want] {
 				t.Errorf("missing gate tool %q in %+v", want, raw.Tools)
 			}
@@ -74,11 +74,11 @@ func TestComboUpstream_MessagesTierToolSchema(t *testing.T) {
 	defer srv.Close()
 	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, http.DefaultTransport.(*http.Transport).Clone(), nil)
 	cu := NewComboUpstream("assistant", []ComboTier{{Upstream: u, Model: "union-alpha"}})
-	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"assistant","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{}}}}]}`))
+	resp, err := cu.ChatCompletion(context.Background(), []byte(`{"model":"assistant","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"get_weather","description":"x","input_schema":{"type":"object"}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -97,7 +97,7 @@ func TestComboUpstream_Failover_SendsSameBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -117,7 +117,7 @@ func TestComboUpstream_FreeTierRejection_FailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -145,7 +145,7 @@ func (s *flakyTransportStub) ListModels(ctx context.Context) ([]domain.Model, er
 func (s *flakyTransportStub) ChatCompletion(ctx context.Context, b []byte) (*domain.UpstreamResponse, error) {
 	s.calls++
 	if s.calls <= s.failTimes {
-		return nil, errors.New(`Post "https://opencode.ai/zen/v1/chat/completions": EOF`)
+		return nil, errors.New(`Post "https://opencode.ai/inference/v1/chat/completions": EOF`)
 	}
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(s.status)
@@ -163,7 +163,7 @@ func TestComboUpstream_TransportError_RetriesSameTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -180,7 +180,7 @@ func TestComboUpstream_TransportErrorPersisting_FailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -199,7 +199,7 @@ func TestComboUpstream_FailedTierCooldown_SkipsOnNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first chat: %v", err)
 	}
-	resp.Close()
+	_ = resp.Close()
 	if t1.calls != 2 || t2.calls != 1 {
 		t.Fatalf("first: expected t1=2,t2=1, got t1=%d,t2=%d", t1.calls, t2.calls)
 	}
@@ -209,7 +209,7 @@ func TestComboUpstream_FailedTierCooldown_SkipsOnNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second chat: %v", err)
 	}
-	resp.Close()
+	_ = resp.Close()
 	if t1.calls != 2 || t2.calls != 2 {
 		t.Fatalf("second: expected t1=2 (skipped),t2=2, got t1=%d,t2=%d", t1.calls, t2.calls)
 	}
@@ -244,7 +244,7 @@ func TestComboUpstream_Exhausted_ReturnsLast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 500 || !strings.Contains(string(raw), "second") {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
@@ -259,7 +259,7 @@ func TestComboUpstream_NilResponse_FailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -326,7 +326,7 @@ func TestComboUpstream_RewritesModelPerTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
@@ -346,7 +346,7 @@ func TestComboUpstream_EmptyTierModel_SendsBodyAsIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if string(t1.gotBody) != string(body) {
 		t.Fatalf("body rewritten: %q", t1.gotBody)
 	}

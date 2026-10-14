@@ -15,7 +15,7 @@ import (
 func TestRelayRewrite(t *testing.T) {
 	sel := NewRelaySelector()
 	sel.SetPools([]RelayPool{{URL: "https://relay.example.com"}})
-	req := httptest.NewRequest("POST", "https://opencode.ai/zen/v1/chat/completions", nil)
+	req := httptest.NewRequest("POST", "https://opencode.ai/inference/v1/chat/completions", nil)
 	if !sel.Apply(req) {
 		t.Fatal("expected relay apply")
 	}
@@ -25,7 +25,7 @@ func TestRelayRewrite(t *testing.T) {
 	if req.Header.Get("x-relay-target") != "https://opencode.ai" {
 		t.Errorf("target = %q", req.Header.Get("x-relay-target"))
 	}
-	if req.Header.Get("x-relay-path") != "/zen/v1/chat/completions" {
+	if req.Header.Get("x-relay-path") != "/inference/v1/chat/completions" {
 		t.Errorf("path = %q", req.Header.Get("x-relay-path"))
 	}
 }
@@ -102,7 +102,7 @@ func TestRelayStrategies(t *testing.T) {
 
 func TestRelayStrictFallback(t *testing.T) {
 	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("direct-ok"))
+		_, _ = w.Write([]byte("direct-ok"))
 	}))
 	defer direct.Close()
 
@@ -117,7 +117,7 @@ func TestRelayStrictFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-strict must fall back to direct: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body := make([]byte, 9)
 	n, _ := resp.Body.Read(body)
 	if string(body[:n]) != "direct-ok" {
@@ -176,7 +176,7 @@ func TestResolveRelayPools(t *testing.T) {
 // requests are in flight must not race. Run with -race.
 func TestRelaySwapRace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 	c := NewHTTPClientWithTransport(srv.URL, []string{"k"}, nil, nil)
@@ -191,7 +191,7 @@ func TestRelaySwapRace(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		}()
 	}

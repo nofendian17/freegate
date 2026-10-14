@@ -180,7 +180,7 @@ func defaultConfig() *Config {
 		LogLevel:   "info",
 		RateLimit:  60,
 
-		UpstreamURLOpenCode:           "https://opencode.ai/zen/v1",
+		UpstreamURLOpenCode:           "https://opencode.ai/inference/v1",
 		UpstreamKeyOpenCode:           []string{"public"},
 		UpstreamOpenCodeFreeAllowlist: []string{"big-pickle"},
 

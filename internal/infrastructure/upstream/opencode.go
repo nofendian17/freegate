@@ -19,9 +19,9 @@ import (
 	"freegate/internal/translate"
 )
 
-// OpenCode Zen client identity (User-Agent version cache, canonical
-// session IDs) lives in opencode_identity.go, mirroring 9router PR #10
-// (cherry-pick of decolua#4105) for the gateway's free-tier validation.
+// OpenCode inference client identity (User-Agent version cache, canonical
+// session IDs) lives in opencode_identity.go, mirroring 9router PR #4842
+// (fix/opencode-free-inference-v2) for the gateway's free-tier validation.
 
 // Defaults for endpoint routing; use SetResponseModels/SetMessageModels to
 // override from RESPONSE_MODELS / MESSAGE_MODELS config so handler and
@@ -40,17 +40,22 @@ type OpenCodeUpstream struct {
 	messageModels  []string
 }
 
-func NewOpenCodeUpstreamWithTransport(baseURL string, apiKeys []string, tr *http.Transport, freeAllowlist []string) *OpenCodeUpstream {
+func NewOpenCodeUpstreamWithTransport(
+	baseURL string,
+	apiKeys []string,
+	tr *http.Transport,
+	freeAllowlist []string,
+) *OpenCodeUpstream {
 	// Static headers for catalog fetches (/models). Chat requests build
-	// compliant per-request Zen headers in ChatCompletion (see buildOpencodeHeaders),
-	// mirroring 9router's OpenCodeExecutor.buildHeaders: fresh session/request
-	// IDs per call, desktop client tag, global project, and anthropic-version
-	// for /messages models. No x-api-key: the genuine client authenticates
-	// with `Authorization: Bearer` only (anomalyco/opencode commit 5a83358,
-	// session/llm/request.ts) — sending `x-api-key: public` is a
+	// compliant per-request headers in ChatCompletion (see buildOpencodeHeaders),
+	// mirroring 9router's OpenCodeExecutor.buildHeaders: v2 User-Agent,
+	// cli client tag, fresh session IDs per call, global project, and
+	// anthropic-version for /messages models. No x-api-key: the genuine client authenticates
+	// with `Authorization: Bearer` only — sending `x-api-key: public` is a
 	// non-genuine fingerprint the free-tier gate rejects.
+	baseURL = normalizeOpenCodeBaseURL(baseURL)
 	headers := map[string]string{
-		"x-opencode-client": "desktop",
+		"x-opencode-client": "cli",
 		"User-Agent":        openCodeUserAgent(),
 	}
 	al := make(map[string]bool, len(freeAllowlist))
@@ -96,6 +101,28 @@ func normalizeModelPatterns(models []string) []string {
 	return out
 }
 
+// normalizeOpenCodeBaseURL migrates legacy /zen/v1 bases to /inference/v1.
+// Free inference moved off /zen/v1 on 2026-10-14; every free request there
+// now answers 403 FreeTierError (9router PR #4842). Existing .env files and
+// stored settings may still point at the old path, so rewrite it rather
+// than failing closed.
+func normalizeOpenCodeBaseURL(baseURL string) string {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	if trimmed == "" {
+		return baseURL
+	}
+	// Rewrite only when "/zen/v1" is a whole path segment, so "/zen/v10"
+	// and "zen/v1x" stay untouched.
+	const legacy = "/zen/v1"
+	if i := strings.Index(trimmed, legacy); i >= 0 {
+		rest := trimmed[i+len(legacy):]
+		if rest == "" || strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "?") {
+			return trimmed[:i] + "/inference/v1" + rest
+		}
+	}
+	return trimmed
+}
+
 func (o *OpenCodeUpstream) Name() string {
 	return "opencode"
 }
@@ -106,14 +133,20 @@ func (o *OpenCodeUpstream) SetRelayPools(pools []RelayPool) { o.client.SetRelayP
 
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	// Client-version probe runs alongside the model catalog refresher so
-	// the advertised User-Agent tracks OpenCode releases. Fail-open: a
-	// failed probe keeps the fallback version. Both refreshers share ctx
-	// and are joined so Server shutdown waits for the inner probe too.
+	// the advertised User-Agent tracks OpenCode releases. Fail-open and
+	// quiet: a failed probe keeps the fallback version and only logs at
+	// debug (upstream still publishes v1 tags, which are below the v2
+	// minimum, so failure is the routine case). Skipped entirely when the
+	// version is pinned via OPENCODE_CLIENT_VERSION. Both refreshers share
+	// ctx and are joined so Server shutdown waits for the inner probe too.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).Run(ctx)
+		if !clientVersionProbeEnabled() {
+			return
+		}
+		NewRefresher("opencode-client", refreshOpenCodeClientVersion, openCodeClientVersionTTL).WithQuiet().Run(ctx)
 	}()
 	refresher := NewRefresher("opencode", func(ctx context.Context) error {
 		models, err := o.ListModels(ctx)
@@ -182,12 +215,15 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	if o.isMessagesModel(model) {
 		out = ensureMessagesMaxTokens(out)
 	}
-	// Anonymous free-tier requests without tools are rejected with 403
-	// FreeTierError on every endpoint (verified live); a non-empty tools
-	// array passes. Inject a no-op tool for anonymous callers only —
-	// keyed requests bypass the requirement and keep exact passthrough.
+	// Anonymous free-tier requests must carry OpenCode's exact read/shell
+	// fingerprint (verified live on /inference/v1; stubs and tool_choice
+	// "none" draw 403 FreeTierError, 9router PR #4842). Inject/merge the
+	// fingerprint for anonymous callers only — keyed requests bypass the
+	// requirement and keep exact passthrough. The alias map tracks caller
+	// tools renamed to read_client/shell_client for response restoration.
+	var aliases map[string]string
 	if o.anonymousOnly() {
-		out = ensureUpstreamTools(out, endpoint)
+		out, aliases = ensureUpstreamTools(out, endpoint)
 	}
 	// Anonymous free-tier requests are only served as streams (verified
 	// live: non-streaming bodies get 403 FreeTierError on every endpoint).
@@ -196,10 +232,10 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	// Keyed requests keep native behavior.
 	if !isStreamBody(out) && o.anonymousOnly() {
 		out = ensureStreamRequest(out, endpoint)
-		return o.chatCompletionStreamAssembled(ctx, endpoint, out)
+		return o.chatCompletionStreamAssembled(ctx, endpoint, out, aliases)
 	}
 	headers := buildOpencodeHeaders(endpoint, out)
-	logZenRequest(endpoint, headers, out)
+	logOpenCodeRequest(endpoint, headers, out)
 	// No x-api-key is sent on this path by design: the genuine client
 	// authenticates with `Authorization: Bearer` only, for anonymous and
 	// keyed callers alike. HTTPClient.doWithHeaders additionally strips a
@@ -207,6 +243,26 @@ func (o *OpenCodeUpstream) ChatCompletion(ctx context.Context, body []byte) (*do
 	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
 	if err != nil {
 		return nil, err
+	}
+	if len(aliases) > 0 && resp != nil && resp.Body != nil {
+		ct := resp.Header.Get("Content-Type")
+		if strings.Contains(ct, "text/event-stream") {
+			resp.Body = wrapAliasRestoreStream(resp.Body, aliases)
+		} else {
+			// Buffer small JSON bodies to restore aliased tool names;
+			// leave large/streaming bodies on the alias-safe SSE path.
+			// Non-streaming JSON here is bounded by MaxResponseBodySize.
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
+			_ = resp.Body.Close()
+			if readErr == nil {
+				raw = restoreUpstreamBody(raw, aliases)
+				resp.Body = io.NopCloser(bytes.NewReader(raw))
+				resp.ContentLength = int64(len(raw))
+				resp.Header.Del("Content-Length")
+			} else {
+				resp.Body = io.NopCloser(bytes.NewReader(raw))
+			}
+		}
 	}
 	result := domain.NewUpstreamResponse(resp)
 	result.Format = string(o.RequestFormat(out))
@@ -258,9 +314,14 @@ func ensureStreamRequest(body []byte, endpoint string) []byte {
 // chatCompletionStreamAssembled posts a streaming request and folds the SSE
 // back into one native JSON response. Non-SSE replies (e.g. JSON errors)
 // pass through untouched for the usual failover handling.
-func (o *OpenCodeUpstream) chatCompletionStreamAssembled(ctx context.Context, endpoint string, out []byte) (*domain.UpstreamResponse, error) {
+func (o *OpenCodeUpstream) chatCompletionStreamAssembled(
+	ctx context.Context,
+	endpoint string,
+	out []byte,
+	aliases map[string]string,
+) (*domain.UpstreamResponse, error) {
 	headers := buildOpencodeHeaders(endpoint, out)
-	logZenRequest(endpoint, headers, out)
+	logOpenCodeRequest(endpoint, headers, out)
 	resp, err := o.client.PostWithHeaders(ctx, endpoint, out, headers)
 	if err != nil {
 		return nil, err
@@ -276,12 +337,13 @@ func (o *OpenCodeUpstream) chatCompletionStreamAssembled(ctx context.Context, en
 		result.Format = string(o.RequestFormat(out))
 		return result, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	model := extractOpencodeModel(out)
 	assembled, err := assembleUpstreamStream(endpoint, resp.Body, model, MaxResponseBodySize)
 	if err != nil {
 		return nil, fmt.Errorf("opencode: assemble stream: %w", err)
 	}
+	assembled = restoreUpstreamBody(assembled, aliases)
 	header := resp.Header.Clone()
 	if header == nil {
 		header = make(http.Header)
@@ -325,34 +387,12 @@ func (o *OpenCodeUpstream) buildURL(model string, body []byte) string {
 // genSessionID returns an x-opencode-session in canonical descending form:
 // ses_ + 12 lowercase hex chars (low 6 bytes of ~(ms*0x1000 + counter)) +
 // 14 Base62 chars. The bitwise complement makes lexicographic order
-// reverse-chronological; the gateway validates this shape for free-tier
-// requests (9router PR #10). Uses the shared module counter.
-// genRequestID returns an x-opencode-request in canonical form:
-// msg_ + 12 lowercase hex chars (low 6 bytes of ms*0x1000 + 1, no
-// complement) + 14 Base62 chars. The counter is fixed at 1 and the shared
-// module counter is left untouched, mirroring 9router exactly.
+// reverse-chronological; the gateway decodes the prefix as
+// ~(timeMs*0x1000 + counter) and rejects non-small counters with 403
+// FreeTierError, so the counter stays real (9router PR #4842). Uses the
+// shared module counter.
 func genSessionID() string {
 	return genOpencodeIDWithClock("ses", true)
-}
-
-func genRequestID() string {
-	val := uint64(time.Now().UnixMilli())*0x1000 + 1
-	var timeBytes [8]byte
-	binary.BigEndian.PutUint64(timeBytes[:], val)
-	timeHex := hex.EncodeToString(timeBytes[2:])
-	var sb strings.Builder
-	sb.WriteString("msg_")
-	sb.WriteString(timeHex)
-	var rb [14]byte
-	if _, err := rand.Read(rb[:]); err != nil {
-		for i := range rb {
-			rb[i] = byte(i % 62)
-		}
-	}
-	for _, b := range rb {
-		sb.WriteByte(opencodeIDChars[int(b)%62])
-	}
-	return sb.String()
 }
 
 // baseModelID strips the thinking suffix "model(level)" so registry lookups
@@ -490,17 +530,17 @@ func ensureMessagesMaxTokens(body []byte) []byte {
 	return out
 }
 
-// buildOpencodeHeaders returns compliant per-request Zen headers per 9router
-// PR #4111 and PR #10: versioned first-party UA, desktop client tag, fresh
-// canonical session/request IDs, global project, streaming Accept, and
-// anthropic-version for /messages. Every value is minted fresh per request:
-// downstream client headers (User-Agent, x-opencode-*) are deliberately
-// ignored — the gateway validates shape, not origin, and forwarding foreign
-// sessions/requests buys nothing (verified live: minted-fresh requests pass
-// while forwarded-identity ones still draw intermittent 403 FreeTierError).
-// No x-api-key header at all: the genuine client authenticates with
-// `Authorization: Bearer` only — anonymous and keyed alike — and the
-// free-tier gate treats the public marker as a non-genuine fingerprint.
+// buildOpencodeHeaders returns compliant per-request headers per 9router
+// PR #4842: v2 first-party UA (opencode/latest/<version>/cli), cli client
+// tag, fresh canonical session IDs, global project, streaming Accept, and
+// anthropic-version for /messages. Mirrors the v2 CLI: x-opencode-session-id
+// alongside x-opencode-session plus x-session-affinity/x-session-id, and
+// never x-opencode-request (v1-only, rejected with 403). Every value is
+// minted fresh per request: downstream client headers (User-Agent,
+// x-opencode-*) are deliberately ignored. No x-api-key header at all: the
+// genuine client authenticates with `Authorization: Bearer` only — anonymous
+// and keyed alike — and the free-tier gate treats the public marker as a
+// non-genuine fingerprint.
 func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
 	stream := isStreamBody(body)
 	isMessages := strings.HasSuffix(endpoint, "/messages")
@@ -508,14 +548,17 @@ func buildOpencodeHeaders(endpoint string, body []byte) map[string]string {
 	if stream {
 		accept = "text/event-stream"
 	}
+	session := genSessionID()
 	headers := map[string]string{
-		"Content-Type":       "application/json",
-		"User-Agent":         openCodeUserAgent(),
-		"x-opencode-client":  "desktop",
-		"x-opencode-session": genSessionID(),
-		"x-opencode-request": genRequestID(),
-		"x-opencode-project": "global",
-		"Accept":             accept,
+		"Content-Type":          "application/json",
+		"User-Agent":            openCodeUserAgent(),
+		"x-opencode-client":     "cli",
+		"x-opencode-session":    session,
+		"x-opencode-session-id": session,
+		"x-session-affinity":    session,
+		"x-session-id":          session,
+		"x-opencode-project":    "global",
+		"Accept":                accept,
 	}
 	if isMessages {
 		headers["anthropic-version"] = "2023-06-01"
@@ -563,11 +606,11 @@ func isResponsesBody(body []byte) bool {
 	return false
 }
 
-// genOpencodeID mirrors 9router's request ID generation:
+// genOpencodeIDWithClock mirrors 9router's descendingTimeHex:
 // (ms*0x1000+counter) rendered as 12 hex chars (low 6 bytes, big-endian)
-// + 14 alphanumerics. Produces msg_ IDs matching
-// /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/. Session IDs (ses_) additionally
-// apply the canonical bitwise complement — see genSessionID.
+// + 14 alphanumerics. Session IDs (ses_) apply the canonical bitwise
+// complement — see genSessionID. Only ses_ is used now: x-opencode-request
+// (msg_) is v1-only and rejected with 403 since 9router PR #4842.
 var (
 	opencodeIDMu      sync.Mutex
 	opencodeIDLast    int64

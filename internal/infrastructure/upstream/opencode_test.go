@@ -25,7 +25,7 @@ func newTestOpenCode(t *testing.T, body string) *OpenCodeUpstream {
 	t.Cleanup(srv.Close)
 
 	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, []string{"big-pickle"})
-	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "desktop"}, nil)
+	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "cli"}, nil)
 	return u
 }
 
@@ -134,7 +134,7 @@ func newTestOpenCodeWithAllowlist(t *testing.T, body string, allowlist []string)
 	t.Cleanup(srv.Close)
 
 	u := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"public"}, nil, allowlist)
-	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "desktop"}, nil)
+	u.client = NewHTTPClientWithTransport(srv.URL, []string{"public"}, map[string]string{"x-opencode-client": "cli"}, nil)
 	return u
 }
 
@@ -200,25 +200,31 @@ func TestOpenCode_EnsureMessagesMaxTokens(t *testing.T) {
 func TestOpenCode_BuildHeaders_MintsFreshIdentity(t *testing.T) {
 	// Downstream client headers are ignored: every request gets freshly
 	// minted canonical identity (gateway validates shape, not origin).
+	// Mirrors the v2 CLI (9router PR #4842): session-id/affinity headers
+	// present, x-opencode-request absent.
 	h := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
-	if !strings.HasPrefix(h["User-Agent"], "opencode/") {
+	if h["User-Agent"] != openCodeUserAgent() {
 		t.Errorf("User-Agent not minted: %q", h["User-Agent"])
+	}
+	if !strings.HasPrefix(h["User-Agent"], "opencode/latest/") || !strings.HasSuffix(h["User-Agent"], "/cli") {
+		t.Errorf("User-Agent not v2 form: %q", h["User-Agent"])
 	}
 	if !translate.OpenCodeSessionRE.MatchString(h["x-opencode-session"]) {
 		t.Errorf("session not canonical: %q", h["x-opencode-session"])
 	}
-	if !strings.HasPrefix(h["x-opencode-request"], "msg_") {
-		t.Errorf("request id not minted: %q", h["x-opencode-request"])
+	session := h["x-opencode-session"]
+	if h["x-opencode-session-id"] != session || h["x-session-affinity"] != session || h["x-session-id"] != session {
+		t.Errorf("session headers not mirrored: %+v", h)
 	}
-	if h["x-opencode-client"] != "desktop" || h["x-opencode-project"] != "global" {
+	if _, ok := h["x-opencode-request"]; ok {
+		t.Errorf("x-opencode-request must be absent (v1-only, rejected with 403): %+v", h)
+	}
+	if h["x-opencode-client"] != "cli" || h["x-opencode-project"] != "global" {
 		t.Errorf("defaults broken: %+v", h)
 	}
 	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))
 	if h["x-opencode-session"] == h2["x-opencode-session"] {
 		t.Error("session not fresh per request")
-	}
-	if h["x-opencode-request"] == h2["x-opencode-request"] {
-		t.Error("request id not fresh per request")
 	}
 }
 
@@ -266,7 +272,7 @@ func TestOpenCode_AnonymousNonStreamUpgradedToStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if gotStream != true {
 		t.Fatalf("upstream did not receive stream:true, got %v", gotStream)
 	}
@@ -314,7 +320,7 @@ func TestOpenCode_MixedKeysNeverUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("chat: %v", err)
 		}
-		resp.Close()
+		_ = resp.Close()
 	}
 	for _, s := range gotStream {
 		if s != nil {
@@ -336,7 +342,7 @@ func TestOpenCode_StreamOptionsOnlyOnChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if got["stream"] != true {
 		t.Fatalf("stream not enabled: %v", got["stream"])
 	}
@@ -360,7 +366,7 @@ func TestOpenCode_KeyedNonStreamPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if gotStream != nil {
 		t.Fatalf("keyed request unexpectedly upgraded, stream=%v", gotStream)
 	}
@@ -381,24 +387,42 @@ func TestOpenCode_UpgradeNonSSEErrorPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	defer resp.Close()
+	defer func() { _ = resp.Close() }()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status=%d, want 429 passthrough", resp.StatusCode)
 	}
 }
 
 func TestOpenCode_GenID_Format(t *testing.T) {
-	for _, p := range []string{"ses", "msg"} {
-		id := genOpencodeIDWithClock(p, false)
-		if len(id) != len(p)+1+12+14 {
-			t.Errorf("%s: unexpected length %d for %q", p, len(id), id)
-		}
-		if id[:len(p)+1] != p+"_" {
-			t.Errorf("%s: bad prefix %q", p, id)
-		}
+	id := genOpencodeIDWithClock("ses", true)
+	if len(id) != len("ses")+1+12+14 {
+		t.Errorf("ses: unexpected length %d for %q", len(id), id)
 	}
-	if id := genSessionID(); !openCodeSessionRE.MatchString(id) {
-		t.Errorf("genSessionID %q does not match canonical form", id)
+	if id[:4] != "ses_" {
+		t.Errorf("ses: bad prefix %q", id)
+	}
+	if gen := genSessionID(); !openCodeSessionRE.MatchString(gen) {
+		t.Errorf("genSessionID %q does not match canonical form", gen)
+	}
+	// Upstream decodes the prefix as ~(time*0x1000+counter) and rejects
+	// non-small counters with 403: the minted prefix must carry counter 1
+	// on a fresh millisecond (9router PR #4842).
+	a, b := genSessionID(), genSessionID()
+	if a == b {
+		t.Fatal("duplicate session ids")
+	}
+}
+
+func TestOpenCode_NormalizeBaseURL_MigratesZen(t *testing.T) {
+	if got := normalizeOpenCodeBaseURL("https://opencode.ai/zen/v1"); got != "https://opencode.ai/inference/v1" {
+		t.Fatalf("migrate zen=%q", got)
+	}
+	if got := normalizeOpenCodeBaseURL("https://opencode.ai/inference/v1"); got != "https://opencode.ai/inference/v1" {
+		t.Fatalf("keep inference=%q", got)
+	}
+	u := NewOpenCodeUpstreamWithTransport("https://opencode.ai/zen/v1", []string{"public"}, nil, nil)
+	if !strings.Contains(u.client.baseURL, "/inference/v1") {
+		t.Fatalf("baseURL not migrated: %q", u.client.baseURL)
 	}
 }
 
@@ -420,23 +444,23 @@ func TestOpenCode_AnonymousInjectsNoopTools_KeyedDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anon chat: %v", err)
 	}
-	resp.Close()
+	_ = resp.Close()
 	var raw map[string]any
 	if err := json.Unmarshal(gotBody, &raw); err != nil {
 		t.Fatalf("anon body not json: %v", err)
 	}
 	tools, ok := raw["tools"].([]any)
 	if !ok {
-		t.Fatalf("anon body missing injected stub tools: %s", gotBody)
+		t.Fatalf("anon body missing fingerprint tools: %s", gotBody)
 	}
-	expectGateNames(t, tools)
+	expectFingerprintNames(t, tools)
 
 	keyed := NewOpenCodeUpstreamWithTransport(srv.URL, []string{"sk-real"}, nil, nil)
 	resp, err = keyed.ChatCompletion(context.Background(), in)
 	if err != nil {
 		t.Fatalf("keyed chat: %v", err)
 	}
-	resp.Close()
+	_ = resp.Close()
 	raw = nil
 	if err := json.Unmarshal(gotBody, &raw); err != nil {
 		t.Fatalf("keyed body not json: %v", err)
