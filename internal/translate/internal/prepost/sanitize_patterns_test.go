@@ -15,7 +15,7 @@ func TestSanitize_DropsNestedUnicodePatterns(t *testing.T) {
 			"field": map[string]any{"type": "string", "pattern": livePattern},
 			"safe":  map[string]any{"type": "string", "pattern": `^[a-z]+$`},
 			"nested": map[string]any{
-				"type":  "object",
+				"type": "object",
 				"properties": map[string]any{
 					"deep": map[string]any{"type": "string", "pattern": `\P{L}+`},
 				},

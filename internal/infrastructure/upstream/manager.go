@@ -38,16 +38,9 @@ func NewProviderManager(s *registry.Store, tr *http.Transport) *ProviderManager 
 	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
-// relayPools resolves a provider's edge-relay setting to a pool list for
-// CustomUpstream.SetRelayPools (see ResolveRelayPools).
-func (m *ProviderManager) relayPools(ctx context.Context, full registry.Provider) []RelayPool {
-	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
-		return m.store.GetPool(ctx, id)
-	})
-}
-
-// relayPoolsCached is the batched Rebuild variant: pool rows are already
-// fetched in one GetPools call, so no per-provider query occurs.
+// relayPoolsCached resolves a provider's edge-relay setting to a pool list
+// for CustomUpstream.SetRelayPools (see ResolveRelayPools). Pool rows are
+// already fetched in one GetPools call, so no per-provider query occurs.
 func (m *ProviderManager) relayPoolsCached(full registry.Provider, poolsByID map[uint]registry.ProxyPool) []RelayPool {
 	return ResolveRelayPools("custom:"+full.Name, full.ProxyMode, full.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
 		if p, ok := poolsByID[id]; ok {

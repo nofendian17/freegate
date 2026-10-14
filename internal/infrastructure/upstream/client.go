@@ -253,7 +253,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 		}
 		if resp.StatusCode == http.StatusTooManyRequests && len(c.apiKeys) > 1 && attempt+1 < attempts {
 			c.cooldown.mark(key)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 		return resp, nil
@@ -266,7 +266,7 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
 }
 
