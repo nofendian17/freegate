@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,6 +213,63 @@ func TestComboUpstream_FailedTierCooldown_SkipsOnNextRequest(t *testing.T) {
 	_ = resp.Close()
 	if t1.calls != 2 || t2.calls != 2 {
 		t.Fatalf("second: expected t1=2 (skipped),t2=2, got t1=%d,t2=%d", t1.calls, t2.calls)
+	}
+}
+
+// cancelStub blocks until its context is done, like a real upstream call
+// on a canceled request. calls is atomic: the test reads it while the
+// in-flight request goroutine increments it.
+type cancelStub struct {
+	name  string
+	calls atomic.Int64
+}
+
+func (s *cancelStub) Name() string                                       { return s.name }
+func (s *cancelStub) Match(string) bool                                  { return true }
+func (s *cancelStub) ListModels(context.Context) ([]domain.Model, error) { return nil, nil }
+func (s *cancelStub) ChatCompletion(ctx context.Context, _ []byte) (*domain.UpstreamResponse, error) {
+	s.calls.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (s *cancelStub) Models() []domain.Model               { return nil }
+func (s *cancelStub) Start(context.Context, time.Duration) {}
+
+// TestComboUpstream_CanceledContext_NoCooldownNoFailover: a client
+// disconnect must not cool the tier down (every other user would pay for
+// it) and must not walk the remaining tiers for a request nobody is
+// waiting for.
+func TestComboUpstream_CanceledContext_NoCooldownNoFailover(t *testing.T) {
+	t1 := &cancelStub{name: "opencode"}
+	t2 := &tierStub{name: "kilo", status: 200, body: `{"ok":true}`}
+	cu := NewComboUpstream("hemat", []ComboTier{{Upstream: t1}, {Upstream: t2}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := cu.ChatCompletion(ctx, []byte(`{"model":"hemat","messages":[]}`))
+		done <- err
+	}()
+	// Wait until tier 1 is actually in flight, then disconnect the client.
+	for i := 0; i < 500 && t1.calls.Load() == 0; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if t1.calls.Load() != 1 {
+		t.Fatalf("canceled tier retried: t1 calls = %d, want 1", t1.calls.Load())
+	}
+	if t2.calls != 0 {
+		t.Fatalf("failover walked after cancel: t2 calls = %d, want 0", t2.calls)
+	}
+	cu.mu.Lock()
+	_, cooled := cu.cooled[0]
+	cu.mu.Unlock()
+	if cooled {
+		t.Fatal("client cancel must not put the tier in cooldown")
 	}
 }
 

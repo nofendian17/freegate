@@ -16,9 +16,15 @@ type clientKeyVerifyEntry struct {
 	expiresAt time.Time
 }
 
+// clientKeyVerifyCache caches VerifyClientKey results. A lookup that misses
+// runs a SQLite query and then stores the result — and an admin revoke can
+// land in that gap, so every invalidation bumps a generation counter: a
+// set() carrying a generation that changed while the query ran is dropped
+// instead of resurrecting a revoked key for up to the TTL.
 type clientKeyVerifyCache struct {
-	mu      sync.RWMutex
-	entries map[string]clientKeyVerifyEntry
+	mu         sync.RWMutex
+	entries    map[string]clientKeyVerifyEntry
+	generation uint64
 }
 
 func newClientKeyVerifyCache() *clientKeyVerifyCache {
@@ -49,11 +55,17 @@ func (c *clientKeyVerifyCache) get(hash string) (bool, bool) {
 	return e.valid, true
 }
 
-func (c *clientKeyVerifyCache) set(hash string, valid bool) {
+func (c *clientKeyVerifyCache) set(hash string, valid bool, gen uint64) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen != c.generation {
+		// An invalidate ran while the DB query was in flight; this result
+		// may predate a revoke and must not be cached.
+		return
+	}
 	if c.entries == nil {
 		c.entries = make(map[string]clientKeyVerifyEntry)
 	}
@@ -77,7 +89,18 @@ func (c *clientKeyVerifyCache) set(hash string, valid bool) {
 		}
 	}
 	c.entries[hash] = clientKeyVerifyEntry{valid: valid, expiresAt: time.Now().Add(clientKeyVerifyTTL)}
-	c.mu.Unlock()
+}
+
+// currentGeneration snapshots the invalidation generation before a slow
+// verify query starts; pass it to set so a concurrent revoke drops the
+// would-be cache entry.
+func (c *clientKeyVerifyCache) currentGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.generation
 }
 
 func (c *clientKeyVerifyCache) invalidate(hash string) {
@@ -86,6 +109,7 @@ func (c *clientKeyVerifyCache) invalidate(hash string) {
 	}
 	c.mu.Lock()
 	delete(c.entries, hash)
+	c.generation++
 	c.mu.Unlock()
 }
 
@@ -95,5 +119,6 @@ func (c *clientKeyVerifyCache) invalidateAll() {
 	}
 	c.mu.Lock()
 	clear(c.entries)
+	c.generation++
 	c.mu.Unlock()
 }

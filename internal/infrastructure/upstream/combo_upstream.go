@@ -163,12 +163,21 @@ func (u *ComboUpstream) ChatCompletion(ctx context.Context, body []byte) (*domai
 			if err == nil && resp != nil {
 				break
 			}
+			if ctx.Err() != nil {
+				break // client is gone; a retry cannot succeed
+			}
 			if attempt == 0 {
 				slog.Debug("combo tier transport error, retrying same tier", "combo", u.name, "tier", tier.Upstream.Name(), "error", err)
 			}
 		}
 		if err != nil {
 			lastErr = err
+			// A canceled request context is the client disconnecting, not
+			// an upstream fault: cooling the tier down would punish every
+			// other user, and walking the remaining tiers is pointless.
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("combo %q: %w", u.name, ctx.Err())
+			}
 			u.markCooldown(i)
 			if !last {
 				slog.Warn("combo tier failed, trying next", "combo", u.name, "tier", tier.Upstream.Name(), "error", err)

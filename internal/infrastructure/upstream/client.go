@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -103,6 +104,15 @@ func (k *keyCooldown) isLimited(key string) bool {
 // rather than per-upstream.
 func NewTransport() *http.Transport {
 	tr := &http.Transport{
+		// Explicit connect timeout: a blackholed endpoint must fail into
+		// the same-tier retry / combo failover within seconds. Without a
+		// DialContext the zero-value dialer has no deadline at all — only
+		// http.DefaultTransport sets one — so connects could hang until
+		// the OS TCP timeout.
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 		// HTTP/2 multiplexes concurrent streams over a single TCP+TLS
 		// connection, so far fewer handshakes cross lossy networks.
 		// All upstreams negotiate h2 (verified live); others
