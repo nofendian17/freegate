@@ -199,8 +199,12 @@ func setNormalizedHeader(w http.ResponseWriter, applied []string) {
 // OpenAI-compatible error response. Upstream HTTP errors (including 429)
 // are passed through verbatim by ProxyChat, so errors reaching this
 // function are transport/selection failures: always a 502 gateway error.
+// The detail goes to the log only: err.Error() can carry upstream hosts,
+// dial/TLS internals, or combo tier names, none of which belong in an
+// API response.
 func (h *Handler) writeChatError(w http.ResponseWriter, err error) {
-	respond.JSONError(w, http.StatusBadGateway, "upstream_error", err.Error())
+	slog.Error("chat proxy failed", "error", err)
+	respond.JSONError(w, http.StatusBadGateway, "upstream_error", "upstream request failed")
 }
 
 func extractModelID(body []byte) (string, error) {

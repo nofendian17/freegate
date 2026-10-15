@@ -1,0 +1,21 @@
+# Keep the build context limited to what the Go build needs. web/ must
+# stay: it is compiled into the binary via go:embed (web/embed.go).
+
+.git
+.worktrees
+
+# Docs, CI, editor noise
+.github
+docs
+*.md
+.DS_Store
+.idea
+.vscode
+
+# Local runtime state: never bake databases, env files or captures into an image
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+captures/

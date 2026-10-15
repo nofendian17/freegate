@@ -214,6 +214,14 @@ func TestHandler_Chat_UpstreamError_Returns502(t *testing.T) {
 	if errResp["error"]["type"] != "upstream_error" {
 		t.Errorf("unexpected error type: %v", errResp["error"]["type"])
 	}
+	// The response must not echo the internal error chain (upstream
+	// hosts, dial/TLS details): clients get a generic message.
+	if strings.Contains(w.Body.String(), "dial failed") {
+		t.Errorf("internal error detail leaked to client: %s", w.Body.String())
+	}
+	if errResp["error"]["message"] == "" {
+		t.Error("expected a non-empty generic error message")
+	}
 }
 
 func TestHandler_Chat_EmptyBody(t *testing.T) {
