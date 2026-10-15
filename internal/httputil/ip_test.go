@@ -16,11 +16,12 @@ func TestClientIP(t *testing.T) {
 	}{
 		{"XFF trusted when trust enabled", true, "203.0.113.1", "", "10.0.0.1:1234", "203.0.113.1"},
 		{"X-Real-IP trusted when trust enabled", true, "", "203.0.113.2", "10.0.0.1:1234", "203.0.113.2"},
-		{"Multiple XFF takes first", true, "203.0.113.1, 198.51.100.1", "", "10.0.0.1:1234", "203.0.113.1"},
 		{"No forwarded header falls back to RemoteAddr", true, "", "", "10.0.0.1:1234", "10.0.0.1"},
 
 		{"Spoofed XFF ignored by default", false, "203.0.113.1", "", "10.0.0.1:1234", "10.0.0.1"},
 		{"Spoofed X-Real-IP ignored by default", false, "", "203.0.113.2", "10.0.0.1:1234", "10.0.0.1"},
+		{"Multiple XFF takes rightmost hop", true, "203.0.113.1, 198.51.100.1", "", "10.0.0.1:1234", "198.51.100.1"},
+		{"Spoofed leftmost hop ignored", true, "1.2.3.4, 203.0.113.1", "", "10.0.0.1:1234", "203.0.113.1"},
 		{"RemoteAddr used by default", false, "", "", "10.0.0.1:1234", "10.0.0.1"},
 
 		{"RemoteAddr no port fallback", false, "", "", "10.0.0.1", "10.0.0.1"},

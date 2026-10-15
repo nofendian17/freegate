@@ -2,15 +2,14 @@ package middleware
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,14 +114,6 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-func HmacForToken(token string) string {
-	h := hmac.New(sha256.New, []byte(token))
-	h.Write([]byte(token))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func hmacForToken(token string) string { return HmacForToken(token) }
-
 // ApiAuth gates /v1/* on the admin token alone — the no-DB variant, used by
 // embedders and tests. server.go wires ApiAuthDB, which adds DB-managed
 // client keys on top of the same admin-token superset.
@@ -180,13 +171,10 @@ func ApiAuthDB(adminToken string, checker ClientKeyChecker) func(http.Handler) h
 			// Admin session cookie (set by POST /login) also grants /v1 —
 			// the dashboard playground and model-test buttons fetch /v1/*
 			// same-origin with only the fg_admin cookie, no API key header.
-			if adminToken != "" {
-				if c, err := r.Cookie("fg_admin"); err == nil && c.Value != "" {
-					exp := HmacForToken(adminToken)
-					if subtle.ConstantTimeCompare([]byte(c.Value), []byte(exp)) == 1 {
-						next.ServeHTTP(w, r)
-						return
-					}
+			if c, err := r.Cookie(AdminSessionCookie); err == nil && c.Value != "" {
+				if VerifyAdminSession(adminToken, c.Value) {
+					next.ServeHTTP(w, r)
+					return
 				}
 			}
 			respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing API key")
@@ -194,13 +182,29 @@ func ApiAuthDB(adminToken string, checker ClientKeyChecker) func(http.Handler) h
 	}
 }
 
-func AdminAuth(adminToken string) func(http.Handler) http.Handler {
+// AdminAuth gates the dashboard and /api/* on the admin token: a valid
+// fg_admin session cookie (set by POST /login) or the raw token via
+// X-Admin-Token / Authorization: Bearer. Rejections that presented a
+// credential are recorded in throttle — keyed by client IP, with the same
+// exponential backoff as the login form — so header-token guessing cannot
+// bypass the login throttle that guards the POST /login path. A nil
+// throttle disables throttling.
+func AdminAuth(adminToken string, throttle *AuthThrottle) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := httputil.ClientIP(r)
+			if wait := throttle.Blocked(ip); wait > 0 {
+				secs := int((wait + time.Second - 1) / time.Second)
+				w.Header().Set("Retry-After", strconv.Itoa(secs))
+				respond.JSONError(w, http.StatusTooManyRequests, "rate_limit", "too many failed authentication attempts, try again later")
+				return
+			}
+			presented := false
 			// check cookie
-			if c, err := r.Cookie("fg_admin"); err == nil {
-				exp := HmacForToken(adminToken)
-				if subtle.ConstantTimeCompare([]byte(c.Value), []byte(exp)) == 1 {
+			if c, err := r.Cookie(AdminSessionCookie); err == nil && c.Value != "" {
+				presented = true
+				if VerifyAdminSession(adminToken, c.Value) {
+					throttle.Reset(ip)
 					next.ServeHTTP(w, r)
 					return
 				}
@@ -212,9 +216,16 @@ func AdminAuth(adminToken string) func(http.Handler) http.Handler {
 					key = auth[7:]
 				}
 			}
-			if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {
-				next.ServeHTTP(w, r)
-				return
+			if key != "" {
+				presented = true
+				if adminToken != "" && subtle.ConstantTimeCompare([]byte(key), []byte(adminToken)) == 1 {
+					throttle.Reset(ip)
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			if presented {
+				throttle.Fail(ip)
 			}
 			if r.Header.Get("HX-Request") == "true" || strings.Contains(r.Header.Get("Accept"), "application/json") {
 				respond.JSONError(w, http.StatusUnauthorized, "unauthorized", "admin authentication required")
@@ -235,7 +246,14 @@ type RateLimiter struct {
 	wg       sync.WaitGroup
 }
 
-const rateLimiterShards = 32
+const (
+	rateLimiterShards = 32
+	// rateLimiterMaxPerShard bounds each shard's visitor map so rotating
+	// source IPs cannot grow memory without bound; on overflow one
+	// arbitrary entry is evicted (that visitor only loses its
+	// current-minute count).
+	rateLimiterMaxPerShard = 4096
+)
 
 type shard struct {
 	mu       sync.Mutex
@@ -308,6 +326,15 @@ func (rl *RateLimiter) allow(ip string) bool {
 
 	v, exists := sh.visitors[ip]
 	if !exists {
+		if len(sh.visitors) >= rateLimiterMaxPerShard {
+			// Bounded memory: drop one arbitrary entry. Go map iteration
+			// starts at a random bucket, so the victim is arbitrary; the
+			// worst case is that one visitor's count resets early.
+			for k := range sh.visitors {
+				delete(sh.visitors, k)
+				break
+			}
+		}
 		sh.visitors[ip] = &visitor{count: 1, lastSeen: time.Now()}
 		return true
 	}

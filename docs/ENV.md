@@ -12,7 +12,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 |----------|----------|---------|-------------|
 | `PORT` | No | `1234` | Port the proxy binds on (`0.0.0.0:<PORT>`) |
 | `LOG_LEVEL` | No | `info` | Log verbosity: `debug`, `info`, `warn`, `error` (slog level) |
-| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`) via `AdminAuth` (cookie `fg_admin` HMAC-SHA256 or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`. Client API keys are DB-managed (`POST /api/api-keys`, managed at `/settings`); no env var needed. |
+| `ADMIN_TOKEN` | Yes | (empty) | **Required**, >=6 chars (user-defined password). Gates dashboard (`/`, `/partials/*`, `/api/*`) via `AdminAuth` (cookie `fg_admin` — a 12 h signed session set by `POST /login` — or header `X-Admin-Token` / `Authorization: Bearer`). Also valid as superset for `/v1/*` — raw token or the post-login `fg_admin` session cookie both work. `GET /ready` is public (no token) for Docker HEALTHCHECK. Generate: `openssl rand -hex 32` or any password >=6. Compared with `subtle.ConstantTimeCompare`; failed logins and rejected credential attempts are throttled per IP with exponential backoff. Client API keys are DB-managed (`POST /api/api-keys`, managed at `/settings`); no env var needed. |
 | `RATE_LIMIT` | No | `60` | Requests per minute per client IP (sharded 32-way, `RateLimiter` per-IP map). Returning clients (within 2 min) get HTTP 429 with `Retry-After: 60` and a JSON error body. |
 | `TRUST_PROXY_HEADERS` | No | `false` | Honor `X-Forwarded-For` / `X-Real-IP` when deriving the client IP (rate limit buckets, logs, request history). Leave `false` when exposed directly — forwarded headers are client-controlled and spoofable. Set `true` only behind a reverse proxy that overwrites these headers. |
 
@@ -81,7 +81,7 @@ Related (no env needed): degenerate upstream responses — HTTP 200 with no cont
 
 A failure prints a multi-line error and exits 1.
 
-Dashboard auth is via `AdminAuth` cookie `fg_admin` = `HMAC-SHA256(ADMIN_TOKEN, ADMIN_TOKEN)` hex (or header `X-Admin-Token`/`Bearer`); API auth is via `ApiAuthDB(adminToken, checker)` checking the `ADMIN_TOKEN` superset then DB-managed client keys with `subtle.ConstantTimeCompare`. Unauthenticated dashboard HTML redirects `302 /login?next=...`; HTMX/JSON gets `401 {"error":{"type":"unauthorized"}}`. Without any client key, only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants `/v1/*` access — there is no open API.
+Dashboard auth is via `AdminAuth` cookie `fg_admin` = `nonce.expiry.HMAC-SHA256(ADMIN_TOKEN, nonce|expiry)` (hex, 12 h TTL, fresh value per login) set by `POST /login` (or header `X-Admin-Token`/`Bearer`); API auth is via `ApiAuthDB(adminToken, checker)` checking the `ADMIN_TOKEN` superset then DB-managed client keys with `subtle.ConstantTimeCompare`. Unauthenticated dashboard HTML redirects `302 /login?next=...`; HTMX/JSON gets `401 {"error":{"type":"unauthorized"}}`. Without any client key, only the post-login `fg_admin` cookie or raw `ADMIN_TOKEN` header grants `/v1/*` access — there is no open API. Rejected credential attempts (login form or `X-Admin-Token`/`Bearer`) are throttled per IP with exponential backoff.
 
 ## Source-of-truth files
 

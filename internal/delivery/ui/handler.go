@@ -35,7 +35,7 @@ type Handler struct {
 	adminToken string
 	// login throttles failed logins with an increasing wait (nil disables
 	// throttling; tests build the Handler struct directly).
-	login *loginThrottle
+	login *middleware.AuthThrottle
 }
 
 // New creates a Handler with the given data source, parsed templates, and
@@ -51,11 +51,9 @@ func New(data DataSource, tpl *template.Template, staticFS fs.FS, adminToken ...
 		templates:  tpl,
 		staticFS:   staticFS,
 		adminToken: tok,
-		login:      newLoginThrottle(),
+		login:      middleware.NewAuthThrottle(),
 	}
 }
-
-func hmacForToken(token string) string { return middleware.HmacForToken(token) }
 
 func isSecure(r *http.Request) bool {
 	if r.TLS != nil {
@@ -93,13 +91,14 @@ func loginWaitSeconds(d time.Duration) int {
 	return s
 }
 
-// Login validates admin_token from POST form, sets HMAC cookie on success.
-// Failed attempts are throttled with an increasing per-IP wait (see
-// loginThrottle): a blocked attempt is rejected before the token is even
-// compared, and each failure tells the caller how long to wait.
+// Login validates admin_token from POST form and sets a signed session
+// cookie on success. Failed attempts are throttled with an increasing
+// per-IP wait (see middleware.AuthThrottle): a blocked attempt is rejected
+// before the token is even compared, and each failure tells the caller how
+// long to wait.
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	ip := httputil.ClientIP(r)
-	if wait := h.login.blocked(ip); wait > 0 {
+	if wait := h.login.Blocked(ip); wait > 0 {
 		secs := loginWaitSeconds(wait)
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -113,12 +112,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if next == "" {
 		next = r.URL.Query().Get("next")
 	}
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+	// Only same-origin paths are allowed: reject protocol-relative ("//x")
+	// and backslash forms ("/\evil.example" — browsers normalize "\" to "/",
+	// turning it into a protocol-relative hop).
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, `\`) {
 		next = "/"
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(h.adminToken)) != 1 {
 		msg := "invalid token"
-		if wait := loginWaitSeconds(h.login.fail(ip)); wait > 0 {
+		if wait := loginWaitSeconds(h.login.Fail(ip)); wait > 0 {
 			msg = fmt.Sprintf("invalid token — try again in %ds", wait)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -126,11 +128,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		_ = h.templates.ExecuteTemplate(w, "login.html", loginData{Title: "freegate — login", Error: msg, Next: r.URL.Query().Get("next")})
 		return
 	}
-	h.login.reset(ip)
+	session, err := middleware.IssueAdminSession(h.adminToken)
+	if err != nil {
+		http.Error(w, "failed to issue session", http.StatusInternalServerError)
+		return
+	}
+	h.login.Reset(ip)
 	http.SetCookie(w, &http.Cookie{
-		Name:     "fg_admin",
-		Value:    hmacForToken(h.adminToken),
+		Name:     middleware.AdminSessionCookie,
+		Value:    session,
 		Path:     "/",
+		MaxAge:   int(middleware.AdminSessionTTL / time.Second),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isSecure(r),
@@ -141,7 +149,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // Logout clears the admin cookie and redirects to /login.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "fg_admin",
+		Name:     middleware.AdminSessionCookie,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,

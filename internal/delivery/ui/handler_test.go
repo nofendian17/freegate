@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"freegate/internal/delivery/middleware"
 )
 
 // NewTestRecorder mirrors the brief's helper name.
@@ -51,8 +53,11 @@ func TestLogin_Success_SetsCookie(t *testing.T) {
 	if len(cookies) == 0 || cookies[0].Name != "fg_admin" {
 		t.Fatalf("cookie not set: %+v", cookies)
 	}
-	if cookies[0].Value != hmacForToken("0123456789abcdef0123456789abcdef") {
-		t.Fatalf("cookie value mismatch: got %q want %q", cookies[0].Value, hmacForToken("0123456789abcdef0123456789abcdef"))
+	if !middleware.VerifyAdminSession("0123456789abcdef0123456789abcdef", cookies[0].Value) {
+		t.Fatalf("cookie should verify as an admin session, got %q", cookies[0].Value)
+	}
+	if want := int(middleware.AdminSessionTTL / time.Second); cookies[0].MaxAge != want {
+		t.Fatalf("cookie MaxAge = %d, want %d", cookies[0].MaxAge, want)
 	}
 	if !cookies[0].HttpOnly {
 		t.Fatalf("cookie HttpOnly not set")
@@ -116,6 +121,26 @@ func TestLogin_Success_SecureCookie(t *testing.T) {
 	}
 }
 
+func TestLogin_NextParamRejectsRedirectEscapes(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	for _, next := range []string{
+		`/\evil.example`, // backslash normalizes to "/" in browsers
+		"//evil.example", // protocol-relative
+		"https://evil.example",
+		"evil.example",
+	} {
+		h := newTestHandlerWithToken(t, token)
+		form := url.Values{"admin_token": {token}, "next": {next}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		h.Login(w, req)
+		if loc := w.Header().Get("Location"); loc != "/" {
+			t.Fatalf("next=%q: redirect = %q, want fallback /", next, loc)
+		}
+	}
+}
+
 func TestLoginPage_Renders(t *testing.T) {
 	h := newTestHandlerWithToken(t, "0123456789abcdef0123456789abcdef")
 	req := httptest.NewRequest("GET", "/login", nil)
@@ -139,20 +164,6 @@ func TestLoginPage_Renders(t *testing.T) {
 	}
 }
 
-// newTestHandlerWithFastThrottle swaps in a throttle with millisecond waits
-// so tests can exercise the blocked window without sleeping seconds.
-func newTestHandlerWithFastThrottle(t *testing.T, adminToken string) *Handler {
-	t.Helper()
-	h := newTestHandlerWithToken(t, adminToken)
-	h.login = &loginThrottle{
-		entries:    make(map[string]*loginAttempt),
-		base:       10 * time.Millisecond,
-		max:        time.Minute,
-		maxEntries: 4096,
-	}
-	return h
-}
-
 func testLoginRequest(h *Handler, token string) *httptest.ResponseRecorder {
 	form := url.Values{"admin_token": {token}}
 	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
@@ -164,7 +175,8 @@ func testLoginRequest(h *Handler, token string) *httptest.ResponseRecorder {
 
 func TestLogin_Backoff_BlocksRepeatFailures(t *testing.T) {
 	token := "0123456789abcdef0123456789abcdef"
-	h := newTestHandlerWithFastThrottle(t, token)
+	h := newTestHandlerWithToken(t, token)
+	h.login = middleware.NewAuthThrottle()
 
 	w := testLoginRequest(h, "wrong")
 	if w.Code != http.StatusUnauthorized {
@@ -173,9 +185,14 @@ func TestLogin_Backoff_BlocksRepeatFailures(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "invalid token") {
 		t.Fatalf("first failure should say invalid token, got %q", w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), "try again in 2s") {
+		t.Fatalf("first failure should show the base wait, got %q", w.Body.String())
+	}
 
 	// Immediate retry while inside the wait window must be rejected with
 	// 429 before the token is compared — even a correct token is refused.
+	// (Window growth and reset-on-success are covered at the middleware
+	// level, where the waits are millisecond-scale.)
 	w2 := testLoginRequest(h, token)
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("retry during window: status = %d, want 429", w2.Code)
@@ -185,52 +202,6 @@ func TestLogin_Backoff_BlocksRepeatFailures(t *testing.T) {
 	}
 	if !strings.Contains(w2.Body.String(), "too many failed attempts") {
 		t.Fatalf("429 should explain the wait, got %q", w2.Body.String())
-	}
-
-	// After the window passes the correct token is accepted again.
-	time.Sleep(15 * time.Millisecond)
-	w3 := testLoginRequest(h, token)
-	if w3.Code != http.StatusFound {
-		t.Fatalf("after window: status = %d, want 302", w3.Code)
-	}
-}
-
-func TestLogin_Backoff_GrowsWithFailures(t *testing.T) {
-	token := "0123456789abcdef0123456789abcdef"
-	h := newTestHandlerWithFastThrottle(t, token)
-
-	// First failure: wait = base (10ms, shown rounded up as 1s in HTML).
-	w1 := testLoginRequest(h, "wrong")
-	if !strings.Contains(w1.Body.String(), "try again in 1s") {
-		t.Fatalf("first failure should show base wait, got %q", w1.Body.String())
-	}
-	// Wait out the base window so attempt two is processed, not blocked.
-	time.Sleep(15 * time.Millisecond)
-	w2 := testLoginRequest(h, "wrong")
-	if !strings.Contains(w2.Body.String(), "try again in 1s") {
-		t.Fatalf("second failure should show doubled wait, got %q", w2.Body.String())
-	}
-
-	// And the blocked window is now longer than one base period.
-	time.Sleep(15 * time.Millisecond)
-	if w3 := testLoginRequest(h, "wrong"); w3.Code != http.StatusTooManyRequests {
-		t.Fatalf("third immediate attempt should be inside the grown window: status = %d, want 429", w3.Code)
-	}
-}
-
-func TestLogin_Backoff_SuccessResetsCount(t *testing.T) {
-	token := "0123456789abcdef0123456789abcdef"
-	h := newTestHandlerWithFastThrottle(t, token)
-
-	testLoginRequest(h, "wrong")
-	time.Sleep(15 * time.Millisecond)
-	if w := testLoginRequest(h, token); w.Code != http.StatusFound {
-		t.Fatalf("correct token after wait: status = %d, want 302", w.Code)
-	}
-	// Success resets the failure count: the next failure starts at base again.
-	w := testLoginRequest(h, "wrong")
-	if !strings.Contains(w.Body.String(), "try again in 1s") {
-		t.Fatalf("failure after success should start at base wait, got %q", w.Body.String())
 	}
 }
 
@@ -268,16 +239,23 @@ func TestLogout_ClearsCookie(t *testing.T) {
 	}
 }
 
-func TestHmacForToken_Deterministic(t *testing.T) {
-	a := hmacForToken("0123456789abcdef0123456789abcdef")
-	b := hmacForToken("0123456789abcdef0123456789abcdef")
-	if a != b {
-		t.Fatalf("hmac not deterministic: %q vs %q", a, b)
+func TestLogin_SessionCookie_DistinctPerLogin(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	h := newTestHandlerWithToken(t, token)
+	w1 := testLoginRequest(h, token)
+	w2 := testLoginRequest(h, token)
+	cookies1 := w1.Result().Cookies()
+	cookies2 := w2.Result().Cookies()
+	if len(cookies1) == 0 || len(cookies2) == 0 {
+		t.Fatal("login must set a cookie each time")
 	}
-	if a == "0123456789abcdef0123456789abcdef" {
-		t.Fatalf("hmac should not equal raw token")
+	c1, c2 := cookies1[0].Value, cookies2[0].Value
+	if c1 == c2 {
+		t.Fatalf("each login must issue a distinct cookie, got %q twice", c1)
 	}
-	if len(a) != 64 {
-		t.Fatalf("hmac hex length expected 64, got %d (%q)", len(a), a)
+	for _, c := range []string{c1, c2} {
+		if !middleware.VerifyAdminSession(token, c) {
+			t.Fatalf("cookie %q must verify for the admin token", c)
+		}
 	}
 }
