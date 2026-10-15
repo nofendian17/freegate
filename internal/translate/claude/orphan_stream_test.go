@@ -34,6 +34,9 @@ func feedText(t *testing.T, state *StreamState, s string, pieceSize int, finish 
 		events = append(events, ProcessChunk(orphanChunk(s[i:end]), state)...)
 	}
 	events = append(events, ProcessChunk(orphanFinish(finish), state)...)
+	// The ResponseWriter emits the stream tail at end of stream
+	// (Finalize), after any trailing usage-only chunk.
+	events = append(events, state.Finalize()...)
 	return strings.Join(events, "\n")
 }
 

@@ -629,6 +629,9 @@ func TestNormalizeStream_MissingFinishReasonEOF_TerminatesClaudeStream(t *testin
 			break
 		}
 	}
+	// The ResponseWriter calls Finalize at [DONE]/EOF; a bare ProcessChunk
+	// loop must do the same to get the terminal tail.
+	events = append(events, state.Finalize()...)
 
 	joined := strings.Join(events, "")
 	if !strings.Contains(joined, "message_delta") {

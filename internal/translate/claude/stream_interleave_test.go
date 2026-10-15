@@ -51,6 +51,9 @@ func TestProcessChunk_TextInterleavedMidToolCallPreservesArgs(t *testing.T) {
 			"finish_reason": "tool_calls",
 		}},
 	}, state)...)
+	// Mirror the ResponseWriter: the terminal tail is emitted when the
+	// upstream stream ends (Finalize), not at the finish_reason chunk.
+	events = append(events, state.Finalize()...)
 
 	const wantArgs = `{"command":"ls -la"}`
 	partialByIndex := map[int]string{}

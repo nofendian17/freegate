@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,34 @@ func TestRepairToolArgs_AllValid(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			assertValid(t, in, repairToolArgs(in))
 		})
+	}
+}
+
+// TestRepairToolArgs_Int64PrecisionPreserved guards the fast path against
+// json.Unmarshal's float64 round-trip: large integer tool arguments
+// (snowflake IDs, nanosecond timestamps) must keep their exact digits
+// instead of being reformatted as 1.2345678901234568e+18.
+func TestRepairToolArgs_Int64PrecisionPreserved(t *testing.T) {
+	const digits = "1234567890123456789"
+	for _, in := range []string{
+		`{"id":1234567890123456789}`,
+		"{\"id\":1234567890123456789}", // double-encoded object
+	} {
+		if out := repairToolArgs(in); !strings.Contains(out, digits) {
+			t.Errorf("repairToolArgs(%q) = %q, int64 digits lost", in, out)
+		}
+	}
+}
+
+// TestSplitToolArgs_Int64PrecisionPreserved: split parts run through the
+// same repair fast path, so digits must survive the split too.
+func TestSplitToolArgs_Int64PrecisionPreserved(t *testing.T) {
+	parts := splitToolArgs(`{"a":1}{"b":9223372036854775807}`)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d: %q", len(parts), parts)
+	}
+	if !strings.Contains(parts[1], "9223372036854775807") {
+		t.Errorf("second part lost int64 digits: %q", parts[1])
 	}
 }
 

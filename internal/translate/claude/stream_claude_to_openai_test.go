@@ -59,6 +59,53 @@ func TestProcessClaudeChunk_MessageStartEmitsRole(t *testing.T) {
 	}
 }
 
+// TestProcessClaudeChunk_PromptTokensFromMessageStart covers the Claude →
+// OpenAI direction: message_start carries the prompt-side usage (input and
+// cache tokens) while message_delta carries only output_tokens. The final
+// chunk must report both sides, not prompt_tokens: 0.
+func TestProcessClaudeChunk_PromptTokensFromMessageStart(t *testing.T) {
+	s := NewClaudeToOpenAIState()
+	_ = s.ProcessChunk(map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":    "msg_u",
+			"model": "claude-sonnet-4",
+			"usage": map[string]any{
+				"input_tokens":                float64(10),
+				"cache_read_input_tokens":     float64(2),
+				"cache_creation_input_tokens": float64(3),
+				"output_tokens":               float64(1),
+			},
+		},
+	})
+	out := s.ProcessChunk(map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn"},
+		"usage": map[string]any{"output_tokens": float64(7)},
+	})
+	if len(out) == 0 {
+		t.Fatal("message_delta should emit the final chunk")
+	}
+	var usage map[string]any
+	for _, ch := range parseSSELines(t, strings.Join(out, "\n")) {
+		if u, ok := ch["usage"].(map[string]any); ok {
+			usage = u
+		}
+	}
+	if usage == nil {
+		t.Fatalf("final chunk missing usage: %v", out)
+	}
+	if got := usage["prompt_tokens"]; got != float64(15) {
+		t.Errorf("prompt_tokens = %v, want 15 (10 input + 2 cache read + 3 cache create)", got)
+	}
+	if got := usage["completion_tokens"]; got != float64(7) {
+		t.Errorf("completion_tokens = %v, want 7", got)
+	}
+	if got := usage["total_tokens"]; got != float64(22) {
+		t.Errorf("total_tokens = %v, want 22", got)
+	}
+}
+
 func TestProcessClaudeChunk_TextDelta(t *testing.T) {
 	s := NewClaudeToOpenAIState()
 	// start the text block

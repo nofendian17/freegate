@@ -487,10 +487,19 @@ func assistantContentToBlocks(m oaiMessage) ([]claudeContent, error) {
 				input = json.RawMessage(part)
 			}
 			if i == 0 {
-				// For the first part, fall through parseToolArgs for normal
-				// validation ("" → {}, "null" → {}, non-object → {}).
+				// Validate/to-normalize the FIRST part only. The full
+				// concatenated string ("{"a":1}{"b":2}") is not valid
+				// JSON, so re-parsing it here failed multi-part tool
+				// calls — or, worse for malformed variants, leaked stale
+				// objects into the first tool_use input. For a single
+				// part, keep the strict verbatim pass-through of the
+				// original string ("" → {}, "null" → {}, non-object → {}).
+				arg := part
+				if len(parts) == 1 {
+					arg = tc.Function.Arguments
+				}
 				var err error
-				input, err = parseToolArgs(tc.Function.Arguments)
+				input, err = parseToolArgs(arg)
 				if err != nil {
 					return nil, err
 				}
