@@ -46,6 +46,13 @@ func (s *ChatService) candidates(modelID string) []domain.Upstream {
 // first success — or the last failure when exhausted — is passed through
 // to the client verbatim. There is no IP rotation here: upstream requests
 // route through the enabled proxy pools (Vercel edge relays) in round-robin.
+//
+// Layering note (deliberate, reviewed): this package imports net/http and
+// the infrastructure adapters (metrics, proxy) instead of defining ports
+// for them. ProxyChat is the HTTP request pipeline itself — response
+// streaming, format translation, normalization — not format-agnostic
+// business logic, so port indirection would add plumbing without moving
+// behavior. Revisit if the chat pipeline ever needs a non-HTTP caller.
 type ChatService struct {
 	router         Router
 	metrics        *metrics.Metrics

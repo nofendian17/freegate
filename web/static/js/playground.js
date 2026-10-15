@@ -12,6 +12,17 @@
       typeof m.content === 'string';
   }
 
+  // trimMessagesForStorage returns the newest suffix of messages whose JSON
+  // fits maxBytes, leaving the caller's array untouched: a thread too large
+  // to persist must still render on screen.
+  function trimMessagesForStorage(messages, maxBytes) {
+    var out = messages.slice();
+    while (out.length > 0 && JSON.stringify(out).length > maxBytes) {
+      out.shift();
+    }
+    return out;
+  }
+
   function fmtTime(ts) {
     if (!ts) return '';
     var d = new Date(ts);
@@ -127,20 +138,19 @@
 
         save: function () {
           try {
-            var payload = JSON.stringify({
-              model: this.model,
-              system: this.system,
-              stream: this.stream,
-              reasoning: this.reasoning,
-              messages: this.messages,
-            });
-            if (payload.length > MAX_THREAD_BYTES) this.messages = [];
+            var messages = this.messages;
+            // Oversized threads are trimmed for persistence only. The old
+            // code assigned the trimmed result back to this.messages,
+            // wiping the live on-screen thread mid-conversation.
+            if (JSON.stringify(messages).length > MAX_THREAD_BYTES) {
+              messages = trimMessagesForStorage(messages, MAX_THREAD_BYTES);
+            }
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
               model: this.model,
               system: this.system,
               stream: this.stream,
               reasoning: this.reasoning,
-              messages: this.messages,
+              messages: messages,
             }));
           } catch (e) { /* quota or privacy mode — thread just won't persist */ }
         },

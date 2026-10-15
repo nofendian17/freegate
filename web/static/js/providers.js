@@ -500,14 +500,15 @@
     var token = document.getElementById('pf-token').value.trim();
     var name = document.getElementById('pf-name').value.trim();
     if (!token) { show(poolFormErr, 'deploy: Vercel token is required'); return; }
-    if (!name) { show(poolFormErr, 'deploy: project name is required'); return; }
+    // Project name is optional: the server derives one (relayProjectName)
+    // when it is omitted.
     show(poolFormErr, '');
     show(poolDeployOut, 'Deploying to Vercel… (up to ~2 min)', true);
     withBusy(btn, 'Deploying…', function () {
       return getJSON('/api/pools/vercel-deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vercel_token: token, project_name: name }),
+        body: JSON.stringify({ vercel_token: token, project_name: name || undefined }),
       }).then(function (b) {
         document.getElementById('pf-token').value = '';
         var url = (b && (b.deploy_url || (b.pool && b.pool.proxy_url))) || '';
