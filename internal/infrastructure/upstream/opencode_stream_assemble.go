@@ -82,6 +82,12 @@ func readSSEEvents(r io.Reader, maxBytes int64) ([]string, error) {
 			flush()
 		}
 	}
+	if err := sc.Err(); err != nil {
+		// A scan error (most likely a data line longer than the 1 MB
+		// buffer) would otherwise silently truncate the assembled
+		// response; surface it instead.
+		return nil, fmt.Errorf("assemble: scan stream: %w", err)
+	}
 	flush()
 	return events, nil
 }

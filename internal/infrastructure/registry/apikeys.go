@@ -170,10 +170,15 @@ func (s *Store) VerifyClientKey(ctx context.Context, raw string) (bool, error) {
 		return false, nil
 	}
 	hash := hashClientKey(raw)
+	var cacheGen uint64
 	if s.verifyCache != nil {
 		if valid, ok := s.verifyCache.get(hash); ok {
 			return valid, nil
 		}
+		// Snapshot the invalidation generation before the query: if an
+		// update/delete commits while it runs, set() drops the result
+		// instead of caching a possibly-revoked verdict.
+		cacheGen = s.verifyCache.currentGeneration()
 	}
 	var row ClientKey
 	err := s.db.WithContext(ctx).
@@ -182,7 +187,7 @@ func (s *Store) VerifyClientKey(ctx context.Context, raw string) (bool, error) {
 		First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if s.verifyCache != nil {
-			s.verifyCache.set(hash, false)
+			s.verifyCache.set(hash, false, cacheGen)
 		}
 		return false, nil
 	}
@@ -190,7 +195,7 @@ func (s *Store) VerifyClientKey(ctx context.Context, raw string) (bool, error) {
 		return false, wrapStoreError("verify client key", err)
 	}
 	if s.verifyCache != nil {
-		s.verifyCache.set(hash, row.Enabled)
+		s.verifyCache.set(hash, row.Enabled, cacheGen)
 	}
 	return row.Enabled, nil
 }

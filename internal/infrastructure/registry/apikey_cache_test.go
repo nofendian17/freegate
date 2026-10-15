@@ -33,6 +33,31 @@ func TestVerifyClientKey_CachesResults(t *testing.T) {
 	}
 }
 
+func TestClientKeyVerifyCache_StaleSetAfterInvalidateDropped(t *testing.T) {
+	c := newClientKeyVerifyCache()
+	// A verify that read the generation before a concurrent revoke...
+	gen := c.currentGeneration()
+	c.invalidateAll()
+	// ...must not repopulate the cache with a possibly-revoked verdict.
+	c.set("h", true, gen)
+	if _, ok := c.get("h"); ok {
+		t.Fatal("set from a pre-invalidate generation must be dropped")
+	}
+	// A fresh generation does store.
+	c.set("h", true, c.currentGeneration())
+	if valid, ok := c.get("h"); !ok || !valid {
+		t.Fatal("set from the current generation must be stored")
+	}
+	// Single-hash invalidate bumps the generation too: sets that raced it
+	// are dropped conservatively.
+	gen = c.currentGeneration()
+	c.invalidate("h")
+	c.set("other", true, gen)
+	if _, ok := c.get("other"); ok {
+		t.Fatal("set from a pre-invalidate generation must be dropped after invalidate()")
+	}
+}
+
 func TestClientKeyVerifyCache_Expires(t *testing.T) {
 	c := newClientKeyVerifyCache()
 	c.mu.Lock()

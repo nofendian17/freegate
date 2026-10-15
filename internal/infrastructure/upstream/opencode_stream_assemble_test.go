@@ -59,6 +59,16 @@ event: response.completed
 data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_1","object":"response","status":"completed","output":[{"type":"message","id":"msg_0","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]},"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13}}
 `
 
+// TestReadSSEEvents_OverlongLineSurfacesError: an SSE data line larger than
+// the 1 MB scan buffer used to be dropped silently, truncating the
+// assembled response; the scan error must now surface.
+func TestReadSSEEvents_OverlongLineSurfacesError(t *testing.T) {
+	long := "data: {\"k\":\"" + strings.Repeat("a", 2<<20) + "\"}\n\n"
+	if _, err := readSSEEvents(strings.NewReader(long), MaxResponseBodySize); err == nil {
+		t.Fatal("expected error for over-long SSE line, got nil")
+	}
+}
+
 func TestAssembleChatCompletion(t *testing.T) {
 	out, err := assembleUpstreamStream("/chat/completions", strings.NewReader(assembleChatSSE), "mimo-v2.5-free", MaxResponseBodySize)
 	if err != nil {

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -260,6 +261,36 @@ func TestChatService_Chain_TransportErrorFailsOver(t *testing.T) {
 	}
 	if first.calls != 1 || second.calls != 1 {
 		t.Fatalf("expected failover after transport error, calls=%d,%d", first.calls, second.calls)
+	}
+}
+
+// TestChatService_Chain_ClientCancelStopsFailover: a canceled request
+// context means the client is gone — the remaining candidates must not be
+// dialed for a request nobody is waiting for, and the cancellation must not
+// be reported as an upstream failure.
+func TestChatService_Chain_ClientCancelStopsFailover(t *testing.T) {
+	first := &mockUpstream{name: "custom:a", err: context.Canceled}
+	second := &mockUpstream{name: "custom:b", response: &domain.UpstreamResponse{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		Header:     http.Header{},
+	}}
+	r := &mockChainRouter{chain: []domain.Upstream{first, second}}
+	svc := NewChatService(r, nil)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := svc.ProxyChat(ctx, w, req, "acme-gpt-1", []byte(`{"model":"acme-gpt-1"}`))
+	if err == nil {
+		t.Fatal("expected error for canceled request")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if first.calls != 1 || second.calls != 0 {
+		t.Fatalf("canceled request must not fail over: calls=%d,%d", first.calls, second.calls)
 	}
 }
 

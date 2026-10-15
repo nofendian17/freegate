@@ -14,6 +14,11 @@ import (
 	"freegate/internal/translate"
 )
 
+// statusClientClosedRequest is nginx's 499 convention: the client went away
+// before the upstream answered. It only ever lands in the request log — no
+// response body is written, because the connection is already gone.
+const statusClientClosedRequest = 499
+
 // Router selects an Upstream for a given model ID.
 type Router interface {
 	Select(modelID string) domain.Upstream
@@ -154,6 +159,19 @@ func (s *ChatService) ProxyChat(ctx context.Context, w http.ResponseWriter, r *h
 
 		rsp, err := u.ChatCompletion(ctx, body)
 		if err != nil {
+			// Client canceled/disconnected: do not walk the remaining
+			// candidates — each would dial a fresh upstream for a request
+			// nobody is waiting for.
+			if ctx.Err() != nil {
+				wrappedErr := fmt.Errorf("upstream request: %w", err)
+				if s.metrics != nil {
+					s.metrics.UpstreamErrors.Add(1)
+				}
+				finalStatus = statusClientClosedRequest
+				finalErr = wrappedErr
+				slog.Warn("client canceled during upstream request", "request_id", requestID, "upstream", u.Name(), "error", err)
+				return wrappedErr
+			}
 			if !last {
 				slog.Warn("upstream request failed, trying next candidate", "request_id", requestID, "upstream", u.Name(), "error", err)
 				continue
