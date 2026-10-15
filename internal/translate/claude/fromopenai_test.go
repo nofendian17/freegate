@@ -463,6 +463,56 @@ func TestFromOpenAI_ToolArgsPassThroughRaw(t *testing.T) {
 	}
 }
 
+func TestFromOpenAI_ToolCallConcatenatedArgsSplit(t *testing.T) {
+	// tencent/hy3-free style: one tool_call whose arguments string
+	// concatenates two JSON objects. Each object must become its own
+	// tool_use block with its own input — the first part used to be
+	// re-parsed from the full concatenation ({"a":1}{"b":2}, which is
+	// not a single valid JSON value), failing whole-request translation.
+	in := `{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"","tool_calls":[
+			{"id":"c1","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"ls\"}{\"command\":\"pwd\"}"}}
+		]}
+	]}`
+	out, err := FromOpenAI([]byte(in))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	var inputs []map[string]any
+	var ids []string
+	for _, m := range got["messages"].([]any) {
+		mm, _ := m.(map[string]any)
+		content, _ := mm["content"].([]any)
+		for _, c := range content {
+			cc, _ := c.(map[string]any)
+			if cc["type"] != "tool_use" {
+				continue
+			}
+			input, _ := cc["input"].(map[string]any)
+			inputs = append(inputs, input)
+			id, _ := cc["id"].(string)
+			ids = append(ids, id)
+		}
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 tool_use blocks, got %d: %s", len(inputs), out)
+	}
+	if got, want := inputs[0]["command"], "ls"; got != want {
+		t.Errorf("block 0 command = %v, want %v", got, want)
+	}
+	if got, want := inputs[1]["command"], "pwd"; got != want {
+		t.Errorf("block 1 command = %v, want %v", got, want)
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("split blocks must get distinct ids, both %q", ids[0])
+	}
+}
+
 func TestFromOpenAI_ToolChoiceNoneOmitsTools(t *testing.T) {
 	// OpenAI's tool_choice="none" means "do not call any tool".
 	// The translator must omit the `tools` block in this case —

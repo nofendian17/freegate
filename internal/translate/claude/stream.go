@@ -120,6 +120,30 @@ func (s *StreamState) MarkStartSent() {
 	s.messageStartSent = true
 }
 
+// Finalize emits the stream tail — remaining content_block_stops,
+// message_delta (with the real usage when the upstream sent it after
+// finish_reason, else an estimate) and message_stop — once the upstream
+// stream has ended. The writer calls it at [DONE]/EOF rather than at the
+// finish_reason chunk so a trailing usage-only chunk can still land.
+// Calling it on an already-closed state is a no-op.
+func (s *StreamState) Finalize() []string {
+	if s.closed {
+		return nil
+	}
+	if !s.finishSent {
+		// Upstream ended without a finish_reason chunk: drain the hold
+		// buffer so recovered content still reaches the client, then
+		// close. There is no stop reason to report, matching the previous
+		// behavior for truncated streams.
+		events := s.FlushHoldAtEnd()
+		s.MarkClosed()
+		return events
+	}
+	events := handleFinish(s)
+	s.MarkClosed()
+	return events
+}
+
 // --- Chunk processing ---
 
 // ProcessChunk converts an OpenAI SSE chunk to Claude SSE events.
@@ -129,10 +153,17 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 
 	choices, _ := chunk["choices"].([]any)
 	if len(choices) == 0 {
-		// Might be a usage-only chunk or error
-		if usage, ok := chunk["usage"].(map[string]any); ok && !state.messageStartSent {
-			// Usage in first chunk
+		// Might be a usage-only chunk or error. Usage-only chunks matter
+		// in two positions: before message_start (providers that put usage
+		// in the first chunk), and — with stream_options.include_usage —
+		// AFTER the finish_reason chunk, carrying the real token counts.
+		// Capture it either way so Finalize's message_delta reports the
+		// real numbers instead of an estimate.
+		usage, hasUsage := chunk["usage"].(map[string]any)
+		if hasUsage {
 			state.usage = extractUsage(usage)
+		}
+		if hasUsage && !state.messageStartSent {
 			state.MarkStartSent()
 			events = append(events, formatSSE("message_start", map[string]any{
 				"type":    "message_start",
@@ -208,13 +239,19 @@ func ProcessChunk(chunk map[string]any, state *StreamState) []string {
 	// Handle finish_reason. A recovered orphan tool call already set
 	// tool_calls: an upstream "stop" must not downgrade it, or the
 	// client would see tool_use blocks with an end_turn stop reason.
+	//
+	// The tail (block stops, message_delta, message_stop) is deliberately
+	// NOT emitted here: OpenAI upstreams configured with
+	// stream_options.include_usage deliver the real token counts in a
+	// usage-only chunk AFTER the finish_reason chunk, and message_delta
+	// must report those counts, not an estimate. Finalize — called by the
+	// writer at [DONE]/end of stream — emits the tail once usage has had
+	// its chance to arrive.
 	if fr, ok := choice["finish_reason"].(string); ok && fr != "" && fr != "null" && !state.finishSent {
 		if state.finishReason != "tool_calls" {
 			state.finishReason = fr
 		}
-		events = append(events, handleFinish(state)...)
 		state.finishSent = true
-		state.closed = true
 	}
 
 	return events
@@ -822,10 +859,16 @@ func repairToolArgs(s string) string {
 	if s == "" {
 		return "{}"
 	}
-	// Fast path: already valid JSON.
+	// Fast path: already valid JSON. UseNumber keeps integer precision —
+	// json.Unmarshal's float64 round-trip corrupts int64s above 2^53 and
+	// re-marshals huge ints as 1.2345678901234568e+18.
 	var dummy any
-	if json.Unmarshal([]byte(s), &dummy) == nil {
-		return ensureObjectJSON(dummy)
+	if json.Valid([]byte(s)) {
+		dec := json.NewDecoder(strings.NewReader(s))
+		dec.UseNumber()
+		if dec.Decode(&dummy) == nil {
+			return ensureObjectJSON(dummy)
+		}
 	}
 	// Always repair quotes and control characters first!
 	fixed := repairUnescapedQuotes(s)
@@ -864,10 +907,17 @@ func ensureObjectJSON(v any) string {
 			return string(b)
 		}
 	case string:
-		var inner any
-		if json.Unmarshal([]byte(val), &inner) == nil {
-			if b, err := json.Marshal(inner); err == nil {
-				return string(b)
+		// Double-encoded object ("{\"cmd\":\"ls\"}" emitted as a JSON
+		// string): parse once more, with UseNumber so integer precision
+		// survives the round-trip.
+		if json.Valid([]byte(val)) {
+			dec := json.NewDecoder(strings.NewReader(val))
+			dec.UseNumber()
+			var inner any
+			if dec.Decode(&inner) == nil {
+				if b, err := json.Marshal(inner); err == nil {
+					return string(b)
+				}
 			}
 		}
 	}

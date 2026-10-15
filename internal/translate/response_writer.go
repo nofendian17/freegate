@@ -16,13 +16,13 @@ import (
 // streamState bundles the per-direction streaming state holders. Only
 // one of these is non-nil for any (src, dst) pair.
 type streamState struct {
-	oaiToClaude     *claude.StreamState         // src=OpenAI, dst=Claude
-	claudeToOAI     *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
-	claudeToOAIDone bool                        // [DONE] already emitted for src=Claude, dst=OpenAI
-	oaiToGemini     *gemini.StreamState         // src=OpenAI, dst=Gemini
-	geminiToOAI     *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
-	oaiToResponses  *responses.StreamState      // src=OpenAI, dst=Responses
-	responsesToOAI  *responses.StreamState      // src=Responses, dst=OpenAI
+	oaiToClaude    *claude.StreamState         // src=OpenAI, dst=Claude
+	claudeToOAI    *claude.ClaudeToOpenAIState // src=Claude,  dst=OpenAI
+	doneSent       bool                        // OpenAI stream terminator ([DONE]) already emitted
+	oaiToGemini    *gemini.StreamState         // src=OpenAI, dst=Gemini
+	geminiToOAI    *gemini.GeminiToOpenAIState // src=Gemini,  dst=OpenAI
+	oaiToResponses *responses.StreamState      // src=OpenAI, dst=Responses
+	responsesToOAI *responses.StreamState      // src=Responses, dst=OpenAI
 }
 
 // ResponseWriter wraps an http.ResponseWriter to translate upstream
@@ -116,9 +116,24 @@ func (rw *ResponseWriter) Close() error {
 		return nil
 	}
 	if rw.isStream {
-		if rw.src == FormatClaude && rw.dst == FormatOpenAI && rw.state != nil && !rw.state.claudeToOAIDone {
-			rw.state.claudeToOAIDone = true
+		// OpenAI stream terminator: Claude, Gemini and Responses streams
+		// end without a [DONE] marker of their own, so emit one whenever
+		// this stream was translated INTO OpenAI. Raw OpenAI pass-through
+		// (src == dst) already carried the upstream's own [DONE] and is
+		// excluded; Claude → OpenAI normally sets this at message_stop,
+		// making this a no-op there.
+		if rw.state != nil && rw.src != FormatOpenAI && rw.dst == FormatOpenAI && !rw.state.doneSent {
+			rw.state.doneSent = true
 			rw.writeLine("data: [DONE]\n\n")
+		}
+		// OpenAI → Claude streams defer message_delta/message_stop to the
+		// end of the upstream stream (see StreamState.Finalize): a
+		// usage-only chunk may follow finish_reason and must land in
+		// message_delta. Idempotent once the state is closed.
+		if rw.state != nil && rw.state.oaiToClaude != nil {
+			for _, evt := range rw.state.oaiToClaude.Finalize() {
+				rw.writeLine(evt)
+			}
 		}
 		return nil
 	}
@@ -205,12 +220,13 @@ func (rw *ResponseWriter) streamOpenAIToClaude(p []byte) (int, error) {
 		data = strings.TrimRight(data, "\r\n ")
 
 		if data == "[DONE]" {
-			// Upstream ended without finish_reason: drain the hold buffer
-			// (handleFinish never runs here) before closing.
-			for _, evt := range state.FlushHoldAtEnd() {
+			// End of the upstream stream: emit the deferred tail
+			// (content_block_stop, message_delta, message_stop) now that a
+			// trailing usage-only chunk has had its chance to arrive. Also
+			// covers streams that ended without a finish_reason chunk.
+			for _, evt := range state.Finalize() {
 				rw.writeLine(evt)
 			}
-			state.MarkClosed()
 			break
 		}
 
@@ -263,8 +279,8 @@ func (rw *ResponseWriter) streamClaudeToOpenAI(p []byte) (int, error) {
 		for _, evt := range events {
 			rw.writeLine(evt)
 		}
-		if eventType, _ := chunk["type"].(string); eventType == "message_stop" && !rw.state.claudeToOAIDone {
-			rw.state.claudeToOAIDone = true
+		if eventType, _ := chunk["type"].(string); eventType == "message_stop" && !rw.state.doneSent {
+			rw.state.doneSent = true
 			rw.writeLine("data: [DONE]\n\n")
 		}
 	}

@@ -137,6 +137,9 @@ func TestProcessChunkFinishStop(t *testing.T) {
 		},
 	}
 	events := ProcessChunk(chunk2, state)
+	// The ResponseWriter emits the tail at end of stream (Finalize); a
+	// bare ProcessChunk call no longer carries message_delta/message_stop.
+	events = append(events, state.Finalize()...)
 
 	hasMessageDelta := false
 	hasMessageStop := false
@@ -228,6 +231,7 @@ func TestProcessChunkFinishToolCalls(t *testing.T) {
 	events := ProcessChunk(map[string]any{
 		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{}, "finish_reason": "tool_calls"}},
 	}, state)
+	events = append(events, state.Finalize()...)
 
 	hasStop := false
 	hasMsgDelta := false
@@ -275,6 +279,7 @@ func TestProcessChunkTextAfterToolCall(t *testing.T) {
 	// Text after the tool call: the tool_use block is still open here.
 	events = append(events, feed(`{"choices":[{"index":0,"delta":{"content":"Here is the result"}}]}`)...)
 	events = append(events, feed(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)...)
+	events = append(events, state.Finalize()...)
 
 	// Walk events and assert no two content blocks are open at once.
 	open := 0
@@ -297,6 +302,42 @@ func TestProcessChunkTextAfterToolCall(t *testing.T) {
 	}
 }
 
+// TestProcessChunk_TrailingUsageChunkFeedsFinalize covers OpenAI's
+// stream_options.include_usage layout: finish_reason arrives first, then a
+// final chunk with an empty choices array and the real usage. The tail
+// (message_delta with usage + message_stop) is deferred to Finalize so it
+// reports the real counts instead of the character-count estimate.
+func TestProcessChunk_TrailingUsageChunkFeedsFinalize(t *testing.T) {
+	state := NewStreamState()
+	ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{"content": "hi"}}},
+	}, state)
+	// finish_reason chunk without usage
+	ProcessChunk(map[string]any{
+		"choices": []any{map[string]any{"index": 0.0, "delta": map[string]any{}, "finish_reason": "stop"}},
+	}, state)
+	// usage-only chunk AFTER finish_reason
+	ProcessChunk(map[string]any{
+		"choices": []any{},
+		"usage":   map[string]any{"prompt_tokens": 123.0, "completion_tokens": 45.0},
+	}, state)
+
+	events := state.Finalize()
+	joined := strings.Join(events, "\n")
+	if !strings.Contains(joined, `"output_tokens":45`) {
+		t.Fatalf("message_delta must carry the trailing usage, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, `"input_tokens":123`) {
+		t.Fatalf("message_delta must carry trailing input tokens, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "message_stop") {
+		t.Fatal("expected message_stop from Finalize")
+	}
+	if again := state.Finalize(); len(again) != 0 {
+		t.Fatalf("second Finalize must be a no-op, got %v", again)
+	}
+}
+
 func TestProcessChunkStreamEndToEnd(t *testing.T) {
 	state := NewStreamState()
 
@@ -314,6 +355,7 @@ func TestProcessChunkStreamEndToEnd(t *testing.T) {
 		events := ProcessChunk(chunk, state)
 		allEvents = append(allEvents, events...)
 	}
+	allEvents = append(allEvents, state.Finalize()...)
 
 	eventText := strings.Join(allEvents, " ")
 	if !strings.Contains(eventText, "message_start") {

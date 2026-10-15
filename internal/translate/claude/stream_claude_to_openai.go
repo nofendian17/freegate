@@ -102,6 +102,13 @@ func (s *ClaudeToOpenAIState) onMessageStart(chunk map[string]any) []string {
 		if m, ok := msg["model"].(string); ok && m != "" {
 			s.model = m
 		}
+		// message_start carries the prompt-side usage (input and cache
+		// tokens); message_delta later carries only output_tokens. Keep
+		// the prompt side so the final chunk reports real prompt_tokens
+		// instead of 0.
+		if usage, ok := msg["usage"].(map[string]any); ok {
+			s.usage = parseClaudeUsage(usage)
+		}
 	}
 	return []string{s.chunkLine(map[string]any{"role": "assistant"}, nil)}
 }
@@ -211,7 +218,18 @@ func (s *ClaudeToOpenAIState) onMessageDelta(chunk map[string]any) []string {
 	}
 	var results []string
 	if usage, ok := chunk["usage"].(map[string]any); ok {
-		s.usage = parseClaudeUsage(usage)
+		du := parseClaudeUsage(usage)
+		// message_delta usage carries the output side only; keep the
+		// prompt-side counts captured from message_start.
+		if s.usage != nil {
+			du.PromptTokens = s.usage.PromptTokens
+			if du.CacheReadTokens == 0 && du.CacheCreateTokens == 0 {
+				du.CacheReadTokens = s.usage.CacheReadTokens
+				du.CacheCreateTokens = s.usage.CacheCreateTokens
+			}
+			du.TotalTokens = du.PromptTokens + du.CompletionTokens
+		}
+		s.usage = du
 	}
 	if delta, ok := chunk["delta"].(map[string]any); ok {
 		if sr, ok := delta["stop_reason"].(string); ok && sr != "" {
