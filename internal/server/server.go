@@ -228,7 +228,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	r.Use(middleware.CORS)
 
 	apiAuth := middleware.ApiAuthDB(cfg.AdminToken, pstore)
-	adminAuth := middleware.AdminAuth(cfg.AdminToken)
+	adminAuth := middleware.AdminAuth(cfg.AdminToken, middleware.NewAuthThrottle())
 
 	// Public routes — must be before admin mount so they are not shadowed.
 	r.Get("/login", uiHandler.LoginPage)

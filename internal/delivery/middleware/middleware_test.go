@@ -290,7 +290,7 @@ func TestApiAuth_AdminSessionCookie(t *testing.T) {
 
 	// valid fg_admin cookie (set by POST /login) grants /v1 without headers
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	req.AddCookie(&http.Cookie{Name: "fg_admin", Value: HmacForToken(admin)})
+	req.AddCookie(&http.Cookie{Name: AdminSessionCookie, Value: mustIssueSession(t, admin)})
 	rec := httptest.NewRecorder()
 	m(h).ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -438,7 +438,7 @@ func TestApiAuthDB_VerificationFailureIsUnavailable(t *testing.T) {
 func TestAdminAuth_Cookie(t *testing.T) {
 	admin := "0123456789abcdef0123456789abcdef"
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	m := AdminAuth(admin)
+	m := AdminAuth(admin, nil)
 	// no cookie -> redirect
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
@@ -447,7 +447,7 @@ func TestAdminAuth_Cookie(t *testing.T) {
 		t.Fatalf("expected 302, got %d", rec.Code)
 	}
 	// with valid cookie
-	cookieVal := hmacForToken(admin) // same logic as login
+	cookieVal := mustIssueSession(t, admin)
 	req2 := httptest.NewRequest("GET", "/", nil)
 	req2.AddCookie(&http.Cookie{Name: "fg_admin", Value: cookieVal})
 	rec2 := httptest.NewRecorder()

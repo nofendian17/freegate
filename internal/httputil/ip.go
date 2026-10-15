@@ -20,13 +20,19 @@ var trustProxyHeaders atomic.Bool
 func SetTrustProxyHeaders(trust bool) { trustProxyHeaders.Store(trust) }
 
 // ClientIP returns the originating client IP for r. When proxy headers are
-// trusted, it prefers X-Forwarded-For (first hop) then X-Real-IP; otherwise
-// it always uses the host portion of RemoteAddr.
+// trusted, it prefers the rightmost X-Forwarded-For hop — the address the
+// nearest appending proxy vouched for — then X-Real-IP; otherwise it always
+// uses the host portion of RemoteAddr.
 func ClientIP(r *http.Request) string {
 	if trustProxyHeaders.Load() {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.Index(xff, ","); i >= 0 {
-				return strings.TrimSpace(xff[:i])
+			// Take the rightmost hop: appending proxies (nginx, HAProxy's
+			// default) append the peer they accepted the connection from,
+			// so the final entry is the only hop the chain vouches for.
+			// Earlier entries are caller-supplied text and trivially
+			// spoofed to rotate per-IP rate limits and throttles.
+			if i := strings.LastIndex(xff, ","); i >= 0 {
+				return strings.TrimSpace(xff[i+1:])
 			}
 			return strings.TrimSpace(xff)
 		}
