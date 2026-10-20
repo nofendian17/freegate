@@ -239,7 +239,7 @@ The endpoint path is authoritative for the native routes: `/v1/messages` is Clau
 
 ## Normalization and request handling
 
-- Request bodies are limited to **10 MB**; oversized bodies receive `413`.
+- Request bodies are capped at **30 MB** by default (`MAX_REQUEST_BODY_MB`); oversized bodies receive `413`.
 - `reasoning_content` is normalized into the standard `reasoning` field where appropriate.
 - Tool-call argument fragments are repaired and emitted as valid tool-call events.
 - Leaked DSML/tool scaffolding is removed from user-visible text.
@@ -261,6 +261,7 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `ADMIN_TOKEN` | — | **Required**, at least 6 characters; admin password and API superset key |
 | `RATE_LIMIT` | `60` | Requests per minute per client IP; must be positive |
+| `MAX_REQUEST_BODY_MB` | `30` | Maximum request body size for `/v1/*` in MB; must be positive |
 | `TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` / `X-Real-IP`; enable only behind a proxy that overwrites them |
 
 ### Built-in upstreams

@@ -14,6 +14,10 @@ type Config struct {
 	AdminToken string
 	RateLimit  int
 
+	// MaxRequestBodyMB caps client request bodies (POST /v1/*) in megabytes.
+	// Bodies above the cap are rejected with 413 before being buffered.
+	MaxRequestBodyMB int
+
 	// TrustProxyHeaders enables honoring X-Forwarded-For / X-Real-IP when
 	// deriving the client IP (rate limiting, logs, request history). Enable
 	// only behind a reverse proxy that overwrites these headers; otherwise
@@ -59,6 +63,8 @@ func Load() *Config {
 		LogLevel:   envStr("LOG_LEVEL", "info"),
 		AdminToken: envStr("ADMIN_TOKEN", ""),
 		RateLimit:  envInt("RATE_LIMIT", 60),
+
+		MaxRequestBodyMB: envInt("MAX_REQUEST_BODY_MB", 30),
 
 		TrustProxyHeaders: envBool("TRUST_PROXY_HEADERS", false),
 
@@ -118,6 +124,9 @@ func (c *Config) Validate() error {
 	}
 	if c.RateLimit <= 0 {
 		errs = append(errs, "RATE_LIMIT must be positive")
+	}
+	if c.MaxRequestBodyMB <= 0 {
+		errs = append(errs, "MAX_REQUEST_BODY_MB must be positive")
 	}
 
 	if len(errs) > 0 {

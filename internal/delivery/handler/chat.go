@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,10 +77,15 @@ func getMessageModels() []string {
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		respond.JSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 10 MB limit")
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			respond.JSONError(w, http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body exceeds %d MB limit", h.maxBody>>20))
+			return
+		}
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", "failed to read request body")
 		return
 	}
 

@@ -177,7 +177,7 @@ The `Recoverer` middleware converts panics into 500 responses with `{"error":{"t
 
 ### Body too large
 
-`/v1/chat/completions` and `/v1/messages` reject bodies > 10 MB with `413 {"error":{"type":"body_too_large","message":"request body exceeds 10 MB limit"}}`. The cap is set in `internal/delivery/handler/chat.go::MaxRequestBodySize` — increase there if needed and rebuild.
+`/v1/chat/completions`, `/v1/messages`, and `/v1/responses` reject bodies above `MAX_REQUEST_BODY_MB` (default 30 MB) with `413 {"error":{"type":"body_too_large","message":"request body exceeds 30 MB limit"}}`. Raise the env var and restart to accept larger payloads.
 
 ### Out of memory / OOM kill
 

@@ -218,7 +218,8 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// models (e.g. union-alpha via /inference/v1/messages per 9router PR #4842).
 	handler.SetResponseModels(cfg.ResponseModels)
 	handler.SetMessageModels(cfg.MessageModels)
-	apiHandler := handler.New(cs, ms, m).WithReadiness(pstore)
+	apiHandler := handler.New(cs, ms, m).WithReadiness(pstore).
+		WithMaxRequestBodySize(int64(cfg.MaxRequestBodyMB) << 20)
 	rl := middleware.NewRateLimiter(cfg.RateLimit)
 
 	r := chi.NewRouter()

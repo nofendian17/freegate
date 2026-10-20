@@ -173,12 +173,30 @@ func TestLoad_ProvidersDBPath_Custom(t *testing.T) {
 	}
 }
 
+func TestLoad_MaxRequestBodyMB_Default(t *testing.T) {
+	t.Setenv("MAX_REQUEST_BODY_MB", "")
+	cfg := Load()
+	if cfg.MaxRequestBodyMB != 30 {
+		t.Fatalf("default max request body, got %d", cfg.MaxRequestBodyMB)
+	}
+}
+
+func TestLoad_MaxRequestBodyMB_Custom(t *testing.T) {
+	t.Setenv("MAX_REQUEST_BODY_MB", "64")
+	cfg := Load()
+	if cfg.MaxRequestBodyMB != 64 {
+		t.Fatalf("custom max request body, got %d", cfg.MaxRequestBodyMB)
+	}
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		Port:       1234,
 		AdminToken: "0123456789abcdef0123456789abcdef",
 		LogLevel:   "info",
 		RateLimit:  60,
+
+		MaxRequestBodyMB: 30,
 
 		UpstreamURLOpenCode:           "https://opencode.ai/inference/v1",
 		UpstreamKeyOpenCode:           []string{"public"},

@@ -75,6 +75,41 @@ func testRouter(h *Handler) chi.Router {
 	return r
 }
 
+func TestHandler_Chat_RequestBodyTooLarge(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	h.WithMaxRequestBodySize(16)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+	w := httptest.NewRecorder()
+
+	testRouter(h).ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status 413, got %d", w.Code)
+	}
+	if chat.chatCalled {
+		t.Fatal("chat must not run for an oversized body")
+	}
+	if !strings.Contains(w.Body.String(), "body_too_large") {
+		t.Fatalf("expected body_too_large error, got %s", w.Body.String())
+	}
+}
+
+func TestHandler_Chat_RequestBodyWithinLimit(t *testing.T) {
+	h, chat, _, _ := newMockHandler()
+	h.WithMaxRequestBodySize(1 << 20)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+	w := httptest.NewRecorder()
+
+	testRouter(h).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if !chat.chatCalled {
+		t.Fatal("chat should run for a body within the limit")
+	}
+}
+
 func TestHandler_Ready_Ready(t *testing.T) {
 	h, _, models, _ := newMockHandler()
 	models.ready = true

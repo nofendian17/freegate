@@ -7,7 +7,8 @@ import (
 	"freegate/internal/domain"
 )
 
-const MaxRequestBodySize = 10 << 20
+// DefaultMaxRequestBodySize caps POST bodies when no override is configured.
+const DefaultMaxRequestBodySize = 30 << 20 // 30 MB
 
 // ChatProxy is the interface the handler needs from the chat service.
 type ChatProxy interface {
@@ -34,17 +35,27 @@ type ReadinessChecker interface {
 // It supports OpenAI, Claude, and Gemini API formats through automatic
 // format detection and translation.
 type Handler struct {
-	chat   ChatProxy
-	models ModelLister
-	mtr    MetricsProvider
-	ready  ReadinessChecker
+	chat    ChatProxy
+	models  ModelLister
+	mtr     MetricsProvider
+	ready   ReadinessChecker
+	maxBody int64
 }
 
 func New(chat ChatProxy, models ModelLister, mtr MetricsProvider) *Handler {
-	return &Handler{chat: chat, models: models, mtr: mtr}
+	return &Handler{chat: chat, models: models, mtr: mtr, maxBody: DefaultMaxRequestBodySize}
 }
 
 func (h *Handler) WithReadiness(checker ReadinessChecker) *Handler {
 	h.ready = checker
+	return h
+}
+
+// WithMaxRequestBodySize overrides the request body cap. Non-positive values
+// keep the current limit.
+func (h *Handler) WithMaxRequestBodySize(bytes int64) *Handler {
+	if bytes > 0 {
+		h.maxBody = bytes
+	}
 	return h
 }
