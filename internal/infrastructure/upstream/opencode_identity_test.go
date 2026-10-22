@@ -91,7 +91,7 @@ func withClientVersion(t *testing.T, v string) {
 
 func TestRefreshClientVersion_CachesRelease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
+		_, _ = w.Write([]byte(`{"version":"9.9.9"}`))
 	}))
 	defer srv.Close()
 	prevURL := openCodeReleasesURL
@@ -133,7 +133,7 @@ func TestRefreshClientVersion_FailOpen(t *testing.T) {
 	}
 
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"tag_name":"v1.10.0"}`))
+		_, _ = w.Write([]byte(`{"version":"1.10.0"}`))
 	}))
 	defer srv2.Close()
 	openCodeReleasesURL = srv2.URL
@@ -174,7 +174,7 @@ func TestLogOpenCodeRequest_RespectsFlag(t *testing.T) {
 func TestOpenCodeUserAgent_FallbackShape(t *testing.T) {
 	withClientVersion(t, openCodeFallbackVersion)
 	ua := openCodeUserAgent()
-	if ua != "opencode/latest/2.0.26/cli" {
+	if ua != "opencode/latest/2.0.32/cli" {
 		t.Fatalf("ua = %q", ua)
 	}
 }

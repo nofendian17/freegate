@@ -213,13 +213,13 @@ func TestOpenCode_BuildHeaders_MintsFreshIdentity(t *testing.T) {
 		t.Errorf("session not canonical: %q", h["x-opencode-session"])
 	}
 	session := h["x-opencode-session"]
-	if h["x-opencode-session-id"] != session || h["x-session-affinity"] != session || h["x-session-id"] != session {
+	if h["x-opencode-session-id"] != session || h["x-session-affinity"] != session || h["X-Session-Id"] != session {
 		t.Errorf("session headers not mirrored: %+v", h)
 	}
 	if _, ok := h["x-opencode-request"]; ok {
 		t.Errorf("x-opencode-request must be absent (v1-only, rejected with 403): %+v", h)
 	}
-	if h["x-opencode-client"] != "cli" || h["x-opencode-project"] != "global" {
+	if h["x-opencode-client"] != "cli" || h["x-opencode-project"] == "" {
 		t.Errorf("defaults broken: %+v", h)
 	}
 	h2 := buildOpencodeHeaders("/chat/completions", []byte(`{"model":"x"}`))

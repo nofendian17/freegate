@@ -25,7 +25,7 @@ import (
 // opencode/<channel>/<version>/<client> (e.g. opencode/latest/2.0.26/cli)
 // with major >= 2.
 const (
-	openCodeFallbackVersion = "2.0.26"
+	openCodeFallbackVersion = "2.0.32"
 	// openCodeClientVersionTTL bounds how often the cached client version
 	// is refreshed from GitHub releases (mirrors 9router's 12h default).
 	openCodeClientVersionTTL    = 12 * time.Hour
@@ -33,7 +33,7 @@ const (
 )
 
 // openCodeReleasesURL is a var so tests can point it at a local server.
-var openCodeReleasesURL = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
+var openCodeReleasesURL = "https://registry.npmjs.org/@opencode/cli/latest"
 
 // openCodeVersionClient is reused across probes; its Timeout bounds each
 // release fetch (openCodeVersionFetchTimeout).
@@ -159,24 +159,23 @@ func refreshOpenCodeClientVersion(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("opencode client version: build request: %w", err)
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := openCodeVersionClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("opencode client version: fetch releases: %w", err)
+		return fmt.Errorf("opencode client version: fetch npm: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("opencode client version: releases API %d", resp.StatusCode)
+		return fmt.Errorf("opencode client version: npm registry %d", resp.StatusCode)
 	}
 	var payload struct {
-		TagName string `json:"tag_name"`
+		Version string `json:"version"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return fmt.Errorf("opencode client version: decode releases: %w", err)
+		return fmt.Errorf("opencode client version: decode npm: %w", err)
 	}
-	norm, ok := normalizeClientVersion(payload.TagName)
+	norm, ok := normalizeClientVersion(payload.Version)
 	if !ok {
-		return fmt.Errorf("opencode client version: no semver tag_name in %q", payload.TagName)
+		return fmt.Errorf("opencode client version: no semver version in %q", payload.Version)
 	}
 	if !meetsMinClientVersion(norm) {
 		return fmt.Errorf("opencode client version: %s below minimum", norm)
