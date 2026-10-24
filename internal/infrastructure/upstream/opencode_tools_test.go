@@ -242,3 +242,141 @@ func TestFingerprintToolKey_ExactOnly(t *testing.T) {
 		}
 	}
 }
+
+func decodeBody(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	return raw
+}
+
+func firstSystemContent(t *testing.T, raw map[string]any) string {
+	t.Helper()
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) == 0 {
+		return ""
+	}
+	first, _ := msgs[0].(map[string]any)
+	if first["role"] != "system" {
+		return ""
+	}
+	content, _ := first["content"].(string)
+	return content
+}
+
+func TestEnsureUpstreamTools_InjectsEnvChat(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), "/chat/completions")
+	raw := decodeBody(t, out)
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages=%d, want 2: %s", len(msgs), out)
+	}
+	content := firstSystemContent(t, raw)
+	if !strings.Contains(content, "Do not call the `read` or `shell` tools") {
+		t.Fatalf("placeholder note missing: %q", content)
+	}
+	if !strings.Contains(content, "<env>") || !strings.Contains(content, "</env>") {
+		t.Fatalf("env block missing: %q", content)
+	}
+	if !strings.Contains(content, "Working directory: ") || !strings.Contains(content, "Platform: ") {
+		t.Fatalf("env block missing fields: %q", content)
+	}
+
+	// A second pass must not inject a duplicate block.
+	out2, _ := ensureUpstreamTools(out, "/chat/completions")
+	if got := strings.Count(firstSystemContent(t, decodeBody(t, out2)), "<env>"); got != 1 {
+		t.Fatalf("env present %d times after second pass: %s", got, out2)
+	}
+}
+
+func TestEnsureUpstreamTools_InjectsEnvPreservesSystem(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","messages":[{"role":"system","content":"Be brief."},{"role":"user","content":"hi"}]}`), "/chat/completions")
+	content := firstSystemContent(t, decodeBody(t, out))
+	if !strings.HasPrefix(content, "Be brief.\n\nDo not call") {
+		t.Fatalf("existing system prompt not preserved: %q", content)
+	}
+	if !strings.HasSuffix(content, "</env>") {
+		t.Fatalf("env block not appended: %q", content)
+	}
+}
+
+func TestEnsureUpstreamTools_InjectsEnvMessages(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`), "/messages")
+	raw := decodeBody(t, out)
+	sys, _ := raw["system"].(string)
+	if !strings.Contains(sys, "Do not call") || !strings.Contains(sys, "<env>") {
+		t.Fatalf("messages system prompt missing note/env: %q", sys)
+	}
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("messages=%d, want the caller's single message: %s", len(msgs), out)
+	}
+}
+
+func TestEnsureUpstreamTools_InjectsEnvMessagesSystemArray(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"Be brief."}]}`), "/messages")
+	raw := decodeBody(t, out)
+	blocks, _ := raw["system"].([]any)
+	if len(blocks) != 3 {
+		t.Fatalf("system blocks=%d, want 3 (prompt, note, env): %s", len(blocks), out)
+	}
+	first, _ := blocks[0].(map[string]any)
+	if first["text"] != "Be brief." {
+		t.Fatalf("existing block not preserved: %v", blocks[0])
+	}
+	last, _ := blocks[len(blocks)-1].(map[string]any)
+	if text, _ := last["text"].(string); !strings.Contains(text, "<env>") {
+		t.Fatalf("env block missing: %v", last)
+	}
+}
+
+func TestEnsureUpstreamTools_InjectsEnvResponses(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","input":[],"instructions":"Be brief."}`), "/responses")
+	raw := decodeBody(t, out)
+	ins, _ := raw["instructions"].(string)
+	if !strings.HasPrefix(ins, "Be brief.\n\nDo not call") || !strings.Contains(ins, "<env>") {
+		t.Fatalf("responses instructions missing note/env: %q", ins)
+	}
+
+	out2, _ := ensureUpstreamTools([]byte(`{"model":"m","input":[]}`), "/responses")
+	raw2 := decodeBody(t, out2)
+	ins2, _ := raw2["instructions"].(string)
+	if !strings.Contains(ins2, "<env>") {
+		t.Fatalf("responses instructions not created: %q", ins2)
+	}
+}
+
+func TestEnsureUpstreamTools_DoesNotDuplicateEnv(t *testing.T) {
+	in := `{"model":"m","input":[],"instructions":"<env>\n  Working directory: /tmp\n  Platform: linux\n</env>"}`
+	out, _ := ensureUpstreamTools([]byte(in), "/responses")
+	ins, _ := decodeBody(t, out)["instructions"].(string)
+	if got := strings.Count(ins, "<env>"); got != 1 {
+		t.Fatalf("env present %d times, want 1: %s", got, out)
+	}
+
+	chatIn := `{"model":"m","messages":[{"role":"system","content":"<env>\n  Working directory: /tmp\n  Platform: linux\n</env>"},{"role":"user","content":"hi"}]}`
+	chatOut, _ := ensureUpstreamTools([]byte(chatIn), "/chat/completions")
+	if got := strings.Count(firstSystemContent(t, decodeBody(t, chatOut)), "<env>"); got != 1 {
+		t.Fatalf("chat env present %d times, want 1: %s", got, chatOut)
+	}
+}
+
+func TestEnsureUpstreamTools_InjectsEnvChatContentParts(t *testing.T) {
+	out, _ := ensureUpstreamTools([]byte(`{"model":"m","messages":[{"role":"system","content":[{"type":"text","text":"Be brief."}]},{"role":"user","content":"hi"}]}`), "/chat/completions")
+	raw := decodeBody(t, out)
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages=%d, want 2: %s", len(msgs), out)
+	}
+	first, _ := msgs[0].(map[string]any)
+	parts, _ := first["content"].([]any)
+	if len(parts) != 3 {
+		t.Fatalf("content parts=%d, want 3 (prompt, note, env): %s", len(parts), out)
+	}
+	last, _ := parts[len(parts)-1].(map[string]any)
+	if text, _ := last["text"].(string); !strings.Contains(text, "<env>") {
+		t.Fatalf("env block missing: %v", last)
+	}
+}

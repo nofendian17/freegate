@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -16,7 +18,9 @@ import (
 // against /inference/v1 show free-tier requests must declare OpenCode's own
 // `read` and `shell` tools with their exact descriptions and parameter
 // schemas (verbatim from the v2.0.26 CLI). Stubbed descriptions, renamed
-// schemas, or tool_choice "none" are answered with 403 FreeTierError.
+// schemas, or tool_choice "none" are answered with 403 FreeTierError. The
+// gate also requires an OpenCode-style <env> block in the system prompt;
+// see ensureOpenCodeEnv.
 //
 // Caller tools pass through verbatim, except one that already uses an exact
 // fingerprint name with a different definition: it travels under an alias
@@ -410,9 +414,10 @@ func aliasHistoryToolCalls(raw map[string]any, aliasToOriginal map[string]string
 
 // Without stub "must not be used" descriptions the model does call the
 // appended tools (live probe: `read` on "what files are in /etc?"), so tell
-// it in the system prompt instead. Upstream does not gate on prompt text.
-// Wording matters: "not available" made the model also refuse the caller's
-// own Read/Bash; "placeholders ... use the other tools" kept those working.
+// it in the system prompt instead. Upstream gates on the <env> marker, not
+// on this note's wording: "not available" made the model also refuse the
+// caller's own Read/Bash; "placeholders ... use the other tools" kept those
+// working.
 func noteUnavailableTools(raw map[string]any, endpoint string, names []string) {
 	if len(names) == 0 {
 		return
@@ -443,6 +448,17 @@ func noteUnavailableTools(raw map[string]any, endpoint string, names []string) {
 		}
 		return
 	}
+	if strings.HasSuffix(endpoint, "/messages") {
+		switch s := raw["system"].(type) {
+		case string:
+			raw["system"] = appendPromptBlock(s, note)
+		case []any:
+			raw["system"] = append(s, map[string]any{"type": "text", "text": note})
+		default:
+			raw["system"] = note
+		}
+		return
+	}
 	// OpenAI chat shape only; Claude-shaped bodies carry `system` instead.
 	if _, hasSystem := raw["system"]; hasSystem {
 		return
@@ -453,15 +469,152 @@ func noteUnavailableTools(raw map[string]any, endpoint string, names []string) {
 	}
 	if len(msgs) > 0 {
 		if first, ok := msgs[0].(map[string]any); ok && first["role"] == "system" {
-			if content, _ := first["content"].(string); content != "" {
-				first["content"] = content + "\n\n" + note
-				msgs[0] = first
-				raw["messages"] = msgs
+			switch content := first["content"].(type) {
+			case string:
+				first["content"] = appendPromptBlock(content, note)
+			case []any:
+				first["content"] = append(content, map[string]any{"type": "text", "text": note})
+			case nil:
+				first["content"] = note
+			default:
+				raw["messages"] = append([]any{map[string]any{"role": "system", "content": note}}, msgs...)
 				return
 			}
+			msgs[0] = first
+			raw["messages"] = msgs
+			return
 		}
 	}
 	raw["messages"] = append([]any{map[string]any{"role": "system", "content": note}}, msgs...)
+}
+
+// ensureOpenCodeEnv guarantees an OpenCode-style <env> block in the
+// request's system prompt. The free-tier gate requires more than the
+// read/shell fingerprints: live probes show a body with exact tools but no
+// <env> block is answered with 429 FreeUsageLimitError, while adding a
+// minimal block (Working directory + Platform) to the same body restores
+// 200. The block is a client-fingerprint marker, not a description of the
+// caller's real environment; a real OpenCode client already sends its own
+// and is left untouched.
+func ensureOpenCodeEnv(raw map[string]any, endpoint string) bool {
+	if raw == nil || hasOpenCodeEnv(raw) {
+		return false
+	}
+	block := openCodeEnvBlock()
+	switch {
+	case strings.HasSuffix(endpoint, "/responses"):
+		ins, ok := raw["instructions"]
+		if !ok || ins == nil {
+			raw["instructions"] = block
+			return true
+		}
+		if s, ok := ins.(string); ok {
+			raw["instructions"] = appendPromptBlock(s, block)
+			return true
+		}
+		return false
+	case strings.HasSuffix(endpoint, "/messages"):
+		return appendSystemEnv(raw, block)
+	default:
+		if _, ok := raw["system"]; ok {
+			return appendSystemEnv(raw, block)
+		}
+		return appendChatEnv(raw, block)
+	}
+}
+
+// appendSystemEnv appends block to a top-level string/array `system` field,
+// creating it when absent. Used by the Claude Messages shape and by chat
+// bodies that carry a legacy top-level system prompt.
+func appendSystemEnv(raw map[string]any, block string) bool {
+	sys, ok := raw["system"]
+	if !ok || sys == nil {
+		raw["system"] = block
+		return true
+	}
+	switch s := sys.(type) {
+	case string:
+		raw["system"] = appendPromptBlock(s, block)
+		return true
+	case []any:
+		raw["system"] = append(s, map[string]any{"type": "text", "text": block})
+		return true
+	}
+	return false
+}
+
+func appendChatEnv(raw map[string]any, block string) bool {
+	msgs, ok := raw["messages"].([]any)
+	if !ok {
+		return false
+	}
+	if len(msgs) > 0 {
+		if first, ok := msgs[0].(map[string]any); ok && first["role"] == "system" {
+			switch content := first["content"].(type) {
+			case string:
+				first["content"] = appendPromptBlock(content, block)
+			case []any:
+				first["content"] = append(content, map[string]any{"type": "text", "text": block})
+			case nil:
+				first["content"] = block
+			default:
+				return false
+			}
+			msgs[0] = first
+			raw["messages"] = msgs
+			return true
+		}
+	}
+	raw["messages"] = append([]any{map[string]any{"role": "system", "content": block}}, msgs...)
+	return true
+}
+
+func hasOpenCodeEnv(raw map[string]any) bool {
+	if promptValueHasEnv(raw["instructions"]) || promptValueHasEnv(raw["system"]) {
+		return true
+	}
+	msgs, _ := raw["messages"].([]any)
+	if len(msgs) > 0 {
+		if first, ok := msgs[0].(map[string]any); ok && first["role"] == "system" {
+			return promptValueHasEnv(first["content"])
+		}
+	}
+	return false
+}
+
+func promptValueHasEnv(v any) bool {
+	switch s := v.(type) {
+	case string:
+		return strings.Contains(s, "<env>")
+	case []any:
+		for _, part := range s {
+			if m, ok := part.(map[string]any); ok {
+				if text, ok := m["text"].(string); ok && strings.Contains(text, "<env>") {
+					return true
+				}
+				continue
+			}
+			if text, ok := part.(string); ok && strings.Contains(text, "<env>") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendPromptBlock(existing, block string) string {
+	if strings.TrimSpace(existing) == "" {
+		return block
+	}
+	return strings.TrimRight(existing, "\r\n") + "\n\n" + block
+}
+
+func openCodeEnvBlock() string {
+	wd := "/"
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		wd = cwd
+	}
+	return "<env>\n  Working directory: " + wd + "\n  Platform: " + runtime.GOOS + "\n</env>"
 }
 
 // stripNoneToolChoice drops a caller-supplied tool_choice "none": upstream
@@ -519,6 +672,9 @@ func applyFingerprintTools(raw map[string]any, endpoint string) map[string]strin
 	// upstream answers tool_choice "none" with 403 FreeTierError.
 	if _, ok := raw["tool_choice"]; !ok && strings.HasSuffix(endpoint, "/responses") {
 		raw["tool_choice"] = "auto"
+	}
+	if ensureOpenCodeEnv(raw, endpoint) {
+		slog.Debug("opencode env fingerprint injected", "endpoint", endpoint)
 	}
 	return aliasMap
 }

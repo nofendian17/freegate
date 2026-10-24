@@ -45,7 +45,7 @@ func (s *ChatService) candidates(modelID string) []domain.Upstream {
 // transport errors, 429s, and 5xx fail over to the next candidate; the
 // first success — or the last failure when exhausted — is passed through
 // to the client verbatim. There is no IP rotation here: upstream requests
-// route through the enabled proxy pools (Vercel edge relays) in round-robin.
+// route through the enabled proxy pools (Vercel relays) in round-robin.
 //
 // Layering note (deliberate, reviewed): this package imports net/http and
 // the infrastructure adapters (metrics, proxy) instead of defining ports
