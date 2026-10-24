@@ -149,7 +149,7 @@
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-hairline p-5">
         <div>
           <h2 class="text-body font-medium text-ink">Proxy Pools</h2>
-          <p class="mt-1 text-caption text-mid-gray">Vercel edge relays — round-robin via x-relay-target / x-relay-path</p>
+          <p class="mt-1 text-caption text-mid-gray">Vercel relays — round-robin via x-relay-target / x-relay-path</p>
         </div>
         <div class="flex gap-2">
           <button id="pool-new" type="button" class="rounded-2xl border border-hairline bg-paper px-4 py-2 text-body font-medium text-ink transition-colors hover:bg-canvas">New pool</button>
@@ -220,7 +220,7 @@
       </div>
       <div id="pool-form-err" role="alert" class="mb-4 hidden rounded-2xl border border-ember bg-paper p-3 text-caption text-ember"></div>
       <div id="pool-deploy-out" class="mb-4 hidden rounded-2xl border border-hairline bg-surface-alt p-3 text-caption text-ink-soft"></div>
-      <p id="pf-explainer" class="mb-4 hidden text-caption text-mid-gray">Deploys an edge relay to Vercel — provider requests forward through Vercel's edge network, masking your IP behind its dynamic edge IPs (100GB/mo and 500K invocations free; deploy on multiple accounts for more diversity).</p>
+      <p id="pf-explainer" class="mb-4 hidden text-caption text-mid-gray">Deploys a relay to Vercel — provider requests forward through Vercel's network, masking your IP behind its dynamic egress IPs (100GB/mo and 500K invocations free; deploy on multiple accounts for more diversity). The relay runs on Bun 1.4.x so OpenCode's free tier accepts its TLS fingerprint.</p>
       <form id="pool-form" class="grid gap-5 sm:grid-cols-2">
         <input type="hidden" id="pf-id">
         <label class="flex flex-col gap-1.5" for="pf-name">

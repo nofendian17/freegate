@@ -15,7 +15,14 @@ import (
 	"freegate/internal/infrastructure/registry"
 )
 
-const vercelAPI = "https://api.vercel.com"
+const (
+	vercelAPI = "https://api.vercel.com"
+	// vercelBunVersion pins the Bun runtime for the relay function.
+	// OpenCode's free-tier gate fingerprints the TLS ClientHello: Vercel's
+	// Edge/Node fetch is rejected, while Bun's fetch presents the handshake
+	// its CLI advertises. Bun 1.4.x is the version that passes the gate.
+	vercelBunVersion = "1.4.x"
+)
 
 type vercelDeployIn struct {
 	VercelToken string `json:"vercel_token" validate:"required,max=4096"`
@@ -23,49 +30,83 @@ type vercelDeployIn struct {
 }
 
 const vercelRelayCode = `
-export const config = { runtime: "edge" };
+// Must run on Bun 1.4.x (see vercel.json): OpenCode's free-tier gate
+// fingerprints the TLS ClientHello, and Bun's fetch is what passes it.
+export default {
+  async fetch(req) {
+    const target = req.headers.get("x-relay-target");
+    const relayPath = req.headers.get("x-relay-path") || "/";
+    if (!target) {
+      return new Response(JSON.stringify({ error: "Missing x-relay-target header" }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
 
-export default async function handler(req) {
-  const target = req.headers.get("x-relay-target");
-  const relayPath = req.headers.get("x-relay-path") || "/";
-  if (!target) {
-    return new Response(JSON.stringify({ error: "Missing x-relay-target header" }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
+    const targetUrl = target.replace(/\/$/, "") + relayPath;
+
+    const headers = new Headers(req.headers);
+    headers.delete("x-relay-target");
+    headers.delete("x-relay-path");
+    headers.delete("host");
+    // Strip client-IP headers so the upstream only sees the relay's
+    // egress IP, never the original client IP.
+    for (const h of ["forwarded", "x-forwarded-for", "x-forwarded-host",
+      "x-real-ip", "true-client-ip", "cf-connecting-ip",
+      "x-vercel-proxied-for", "x-vercel-ip-city", "x-vercel-ip-country",
+      "x-vercel-ip-country-region", "x-vercel-ip-continent",
+      "x-vercel-ip-latitude", "x-vercel-ip-longitude",
+      "x-vercel-ip-postal-code", "x-vercel-ip-timezone",
+      "x-vercel-ip-as-number", "x-vercel-ja4-digest"]) {
+      headers.delete(h);
+    }
+
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
+      duplex: "half",
     });
-  }
 
-  const targetUrl = target.replace(/\/$/, "") + relayPath;
-
-  const headers = new Headers(req.headers);
-  headers.delete("x-relay-target");
-  headers.delete("x-relay-path");
-  headers.delete("host");
-  // Strip client-IP headers so the upstream only sees the relay's edge
-  // egress IP, never the original client IP.
-  for (const h of ["forwarded", "x-forwarded-for", "x-forwarded-host",
-    "x-real-ip", "true-client-ip", "cf-connecting-ip",
-    "x-vercel-proxied-for", "x-vercel-ip-city", "x-vercel-ip-country",
-    "x-vercel-ip-country-region", "x-vercel-ip-continent",
-    "x-vercel-ip-latitude", "x-vercel-ip-longitude",
-    "x-vercel-ip-postal-code", "x-vercel-ip-timezone",
-    "x-vercel-ip-as-number", "x-vercel-ja4-digest"]) {
-    headers.delete(h);
-  }
-
-  const response = await fetch(targetUrl, {
-    method: req.method,
-    headers,
-    body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
-    duplex: "half",
-  });
-
-  return new Response(response.body, {
-    status: response.status,
-    headers: response.headers,
-  });
-}
+    return new Response(response.body, {
+      status: response.status,
+      headers: response.headers,
+    });
+  },
+};
 `
+
+func vercelRelayConfig() string {
+	raw, _ := json.Marshal(map[string]any{
+		"bunVersion": vercelBunVersion,
+		"rewrites": []any{
+			map[string]any{"source": "/(.*)", "destination": "/api/relay"},
+		},
+	})
+	return string(raw)
+}
+
+// vercelDeployBody builds the Vercel v13 deployment payload. The relay uses
+// ESM (package.json type "module") so the Bun runtime can load its
+// `export default { fetch }` handler.
+func vercelDeployBody(projectName string) []byte {
+	pkgJSON, _ := json.Marshal(map[string]any{
+		"name":    projectName,
+		"version": "1.0.0",
+		"type":    "module",
+	})
+	body, _ := json.Marshal(map[string]any{
+		"name": projectName,
+		"files": []any{
+			map[string]any{"file": "api/relay.js", "data": vercelRelayCode},
+			map[string]any{"file": "package.json", "data": string(pkgJSON)},
+			map[string]any{"file": "vercel.json", "data": vercelRelayConfig()},
+		},
+		"projectSettings": map[string]any{"framework": nil},
+		"target":          "production",
+	})
+	return body
+}
 
 func relayProjectName(name string) string {
 	if n := strings.TrimSpace(name); n != "" {
@@ -139,7 +180,7 @@ func deployClient(h *Handler) *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// deployPoolToVercel deploys the edge relay function and stores the
+// deployPoolToVercel deploys the Bun relay function and stores the
 // resulting pool. The Vercel token is request-scoped only, never stored.
 func (h *Handler) deployPoolToVercel(w http.ResponseWriter, r *http.Request) {
 	var reqBody vercelDeployIn
@@ -150,21 +191,7 @@ func (h *Handler) deployPoolToVercel(w http.ResponseWriter, r *http.Request) {
 	projectName := relayProjectName(reqBody.ProjectName)
 	client := deployClient(h)
 
-	pkgJSON, _ := json.Marshal(map[string]any{"name": projectName, "version": "1.0.0"})
-	vercelJSON, _ := json.Marshal(map[string]any{
-		"rewrites": []any{map[string]any{"source": "/(.*)", "destination": "/api/relay"}},
-	})
-	deployBody, _ := json.Marshal(map[string]any{
-		"name": projectName,
-		"files": []any{
-			map[string]any{"file": "api/relay.js", "data": vercelRelayCode},
-			map[string]any{"file": "package.json", "data": string(pkgJSON)},
-			map[string]any{"file": "vercel.json", "data": string(vercelJSON)},
-		},
-		"projectSettings": map[string]any{"framework": nil},
-		"target":          "production",
-	})
-
+	deployBody := vercelDeployBody(projectName)
 	status, raw, err := platformRequest(r.Context(), client, http.MethodPost, vercelAPI+"/v13/deployments", vercelToken, deployBody)
 	if err != nil {
 		respond.JSONError(w, http.StatusBadGateway, "upstream_error", err.Error())

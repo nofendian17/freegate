@@ -20,7 +20,7 @@ The proxy exposes free-model catalogs, tracks request metrics in memory, and inc
 - **Free-model filtering** — provider catalogs are refreshed and paid models are excluded
 - **Custom providers** — manage OpenAI-compatible endpoints, keys, headers, and model selections
 - **Tiered combos** — virtual models that fail over across configured upstreams
-- **Edge-relay pools** — round-robin Vercel-style relays with `no_proxy` bypass rules
+- **Relay pools** — round-robin relays, with auto-deployed Vercel functions on Bun 1.4.x and `no_proxy` bypass rules
 - **Response repair** — reasoning-field normalization, tool-call argument repair, and DSML cleanup
 - **Streaming support** — SSE and non-streaming responses
 - **Authentication** — required admin login plus database-managed client API keys
@@ -281,7 +281,7 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 | `UPSTREAM_REFRESH_LLM7` | `300` | LLM7 catalog refresh interval in seconds |
 | `UPSTREAM_DEFAULT` | `opencode` | Fallback setting retained in configuration; the current built-in router uses OpenCode as its default |
 
-Anonymous OpenCode free-tier requests are automatically shaped like the official CLI: the Bun TLS ClientHello, the exact `read`/`shell` tool fingerprints, and an OpenCode-style `<env>` block are added when the caller does not supply them. Only the configured OpenCode host uses the Bun handshake; relay hosts keep standard Go TLS. A relay's own connection to OpenCode is outside freegate's control: a relay whose egress TLS fingerprint, IP, or quota does not satisfy OpenCode's gate still gets 429 for the anonymous free tier. Use direct mode for free-tier requests, or a relay that forwards with a compatible handshake.
+Anonymous OpenCode free-tier requests are automatically shaped like the official CLI: the Bun TLS ClientHello, the exact `read`/`shell` tool fingerprints, and an OpenCode-style `<env>` block are added when the caller does not supply them. Only the configured OpenCode host uses the direct uTLS handshake; relay hosts keep standard Go TLS. The Vercel relay deployed by freegate runs on Bun 1.4.x, so its own `fetch` presents the Bun handshake OpenCode accepts. A third-party relay is outside freegate's control: one whose egress TLS fingerprint, IP, or quota does not satisfy OpenCode's gate still gets 429 for the anonymous free tier. Use direct mode, the auto-deployed Bun relay, or another relay with a compatible handshake.
 
 ### Routing and persistence
 
