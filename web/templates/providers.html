@@ -247,8 +247,11 @@
         </label>
         <span id="pf-strict-help" class="self-center text-caption text-mid-gray">Fail the request if the relay is unreachable instead of falling back to direct.</span>
         <label id="pf-token-wrap" class="hidden flex-col gap-1.5 sm:col-span-2" for="pf-token">
-          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Vercel token — used once for deployment, never stored</span>
-          <input id="pf-token" type="password" placeholder="Paste Vercel API token" autocomplete="off" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Vercel token — used once for deployment and not stored</span>
+          <input id="pf-token" type="password" placeholder="Paste Vercel API token" autocomplete="off" aria-describedby="pf-token-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+          <span id="pf-token-help" class="text-caption text-mid-gray">
+            <a href="https://vercel.com/account/settings/tokens" target="_blank" rel="noopener noreferrer" class="underline decoration-hairline underline-offset-2 hover:text-ink">Get token →</a>
+          </span>
         </label>
         <div class="flex flex-wrap gap-2 sm:col-span-2">
           <button id="pool-save" type="submit" class="rounded-2xl bg-ink px-4 py-2 text-body font-medium text-surface-alt transition-opacity hover:opacity-90">Save</button>
