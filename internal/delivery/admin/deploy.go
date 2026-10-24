@@ -32,6 +32,21 @@ type vercelDeployIn struct {
 const vercelRelayCode = `
 // Must run on Bun 1.4.x (see vercel.json): OpenCode's free-tier gate
 // fingerprints the TLS ClientHello, and Bun's fetch is what passes it.
+const skip = new Set([
+  "x-relay-target", "x-relay-path", "host",
+  "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+  "x-forwarded-port", "x-real-ip", "true-client-ip", "cf-connecting-ip",
+  "x-vercel-forwarded-for", "x-vercel-proxied-for",
+  "x-vercel-ip-as-number", "x-vercel-ip-city", "x-vercel-ip-continent",
+  "x-vercel-ip-country", "x-vercel-ip-country-region",
+  "x-vercel-ip-latitude", "x-vercel-ip-longitude",
+  "x-vercel-ip-postal-code", "x-vercel-ip-timezone",
+  "x-vercel-ja4-digest", "x-vercel-id", "x-vercel-deployment-url",
+  "x-vercel-edge-region", "x-vercel-oidc-token",
+  "x-middleware-subrequest", "x-invocation-id", "x-matched-path", "logs-url",
+  "content-length", "connection",
+]);
+
 export default {
   async fetch(req) {
     const target = req.headers.get("x-relay-target");
@@ -46,19 +61,10 @@ export default {
     const targetUrl = target.replace(/\/$/, "") + relayPath;
 
     const headers = new Headers(req.headers);
-    headers.delete("x-relay-target");
-    headers.delete("x-relay-path");
-    headers.delete("host");
-    // Strip client-IP headers so the upstream only sees the relay's
-    // egress IP, never the original client IP.
-    for (const h of ["forwarded", "x-forwarded-for", "x-forwarded-host",
-      "x-real-ip", "true-client-ip", "cf-connecting-ip",
-      "x-vercel-proxied-for", "x-vercel-ip-city", "x-vercel-ip-country",
-      "x-vercel-ip-country-region", "x-vercel-ip-continent",
-      "x-vercel-ip-latitude", "x-vercel-ip-longitude",
-      "x-vercel-ip-postal-code", "x-vercel-ip-timezone",
-      "x-vercel-ip-as-number", "x-vercel-ja4-digest"]) {
-      headers.delete(h);
+    // Strip relay control headers, client-IP headers, and every Vercel
+    // request header so the upstream only sees the relay's egress.
+    for (const h of [...headers.keys()]) {
+      if (skip.has(h) || h.startsWith("x-vercel-")) headers.delete(h);
     }
 
     const response = await fetch(targetUrl, {

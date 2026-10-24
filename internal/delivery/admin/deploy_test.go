@@ -21,6 +21,40 @@ func TestVercelRelayCodeUsesBunRuntime(t *testing.T) {
 	}
 }
 
+// TestVercelRelayCodeStripsForwardingHeaders guards the header allowlist
+// boundary: relay control headers, client IPs, and Vercel request metadata
+// must never reach the upstream.
+func TestVercelRelayCodeStripsForwardingHeaders(t *testing.T) {
+	required := []string{
+		"x-relay-target", "x-relay-path", "host",
+		"forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+		"x-forwarded-port", "x-real-ip", "true-client-ip", "cf-connecting-ip",
+		"x-vercel-forwarded-for", "x-vercel-proxied-for",
+		"x-vercel-ip-as-number", "x-vercel-ip-city", "x-vercel-ip-continent",
+		"x-vercel-ip-country", "x-vercel-ip-country-region",
+		"x-vercel-ip-latitude", "x-vercel-ip-longitude",
+		"x-vercel-ip-postal-code", "x-vercel-ip-timezone",
+		"x-vercel-ja4-digest", "x-vercel-id", "x-vercel-deployment-url",
+		"x-vercel-edge-region", "x-vercel-oidc-token",
+		"x-middleware-subrequest", "x-invocation-id", "x-matched-path", "logs-url",
+		"content-length", "connection",
+	}
+	if !strings.Contains(vercelRelayCode, "const skip = new Set([") {
+		t.Fatal("relay code missing skip header set")
+	}
+	if !strings.Contains(vercelRelayCode, "for (const h of [...headers.keys()])") {
+		t.Fatal("relay code does not iterate a snapshot of the header keys")
+	}
+	if !strings.Contains(vercelRelayCode, `h.startsWith("x-vercel-")`) {
+		t.Fatal("relay code does not strip the full x-vercel-* namespace")
+	}
+	for _, h := range required {
+		if !strings.Contains(vercelRelayCode, `"`+h+`"`) {
+			t.Fatalf("relay code does not skip %q", h)
+		}
+	}
+}
+
 func TestVercelDeployBodyUsesBunRuntime(t *testing.T) {
 	var body struct {
 		Name   string `json:"name"`
