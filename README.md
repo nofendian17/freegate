@@ -269,6 +269,7 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 | Variable | Default | Description |
 |---|---|---|
 | `UPSTREAM_URL_OPENCODE` | `https://opencode.ai/inference/v1` | OpenCode base URL |
+| `UPSTREAM_OPENCODE_BUN_TLS` | `true` | Present Bun's TLS ClientHello to the OpenCode host; relay hosts keep standard Go TLS. Set `false` only as a kill switch |
 | `UPSTREAM_KEY_OPENCODE` | `public` | Comma-separated OpenCode bearer keys; keys are rotated per request |
 | `UPSTREAM_OPENCODE_FREE_ALLOWLIST` | `big-pickle` | Comma-separated free model IDs without the `-free` suffix |
 | `OPENCODE_CLIENT_VERSION` | auto | Optional OpenCode client version advertised to the gateway |
@@ -279,6 +280,8 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 | `UPSTREAM_REFRESH_KILO` | `60` | Kilo catalog refresh interval in seconds |
 | `UPSTREAM_REFRESH_LLM7` | `300` | LLM7 catalog refresh interval in seconds |
 | `UPSTREAM_DEFAULT` | `opencode` | Fallback setting retained in configuration; the current built-in router uses OpenCode as its default |
+
+Anonymous OpenCode free-tier requests are automatically shaped like the official CLI: the Bun TLS ClientHello, the exact `read`/`shell` tool fingerprints, and an OpenCode-style `<env>` block are added when the caller does not supply them. Only the configured OpenCode host uses the Bun handshake; relay hosts keep standard Go TLS. A relay's own connection to OpenCode is outside freegate's control: a relay whose egress TLS fingerprint, IP, or quota does not satisfy OpenCode's gate still gets 429 for the anonymous free tier. Use direct mode for free-tier requests, or a relay that forwards with a compatible handshake.
 
 ### Routing and persistence
 

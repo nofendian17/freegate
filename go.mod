@@ -7,10 +7,12 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/joho/godotenv v1.5.1
+	github.com/refraction-networking/utls v1.8.2
 	gorm.io/gorm v1.31.2
 )
 
 require (
+	github.com/andybalholm/brotli v1.0.6 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
@@ -19,6 +21,7 @@ require (
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

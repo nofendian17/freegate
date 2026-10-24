@@ -66,7 +66,11 @@ func NewOpenCodeUpstreamWithTransport(
 		}
 	}
 	return &OpenCodeUpstream{
-		client:         NewHTTPClientWithTransport(baseURL, apiKeys, headers, tr),
+		// newOpenCodeHTTPClient swaps in Bun's captured TLS ClientHello for
+		// the OpenCode host: the free-tier gate fingerprints the handshake,
+		// so stock Go crypto/tls is rejected (429 FreeUsageLimitError) even
+		// with byte-identical HTTP headers and body. Relays keep standard TLS.
+		client:         newOpenCodeHTTPClient(baseURL, apiKeys, headers, tr),
 		cache:          NewModelCache(),
 		allowlist:      al,
 		responseModels: append([]string(nil), defaultOpenCodeResponseModels...),
@@ -393,61 +397,6 @@ func (o *OpenCodeUpstream) buildURL(model string, body []byte) string {
 // shared module counter.
 func genSessionID() string {
 	return genOpencodeIDWithClock("ses", true)
-}
-
-// genRandomProjectID mints a fresh 40-hex x-opencode-project per request,
-// mirroring the 9router rotator to avoid per-project rate-limit tracking.
-func genRandomProjectID() string {
-	const hex = "0123456789abcdef"
-	b := make([]byte, 40)
-	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() + int64(i))
-		}
-	}
-	out := make([]byte, 40)
-	for i := range out {
-		out[i] = hex[int(b[i])%16]
-	}
-	return string(out)
-}
-
-// genRandomB3 mints a fresh b3 trace header per request.
-func genRandomB3() string {
-	rh := func(n int) string {
-		b := make([]byte, (n+1)/2)
-		if _, err := rand.Read(b); err != nil {
-			return strings.Repeat("0", n)
-		}
-		s := hex.EncodeToString(b)
-		if len(s) > n {
-			s = s[:n]
-		}
-		for len(s) < n {
-			s += "0"
-		}
-		return s
-	}
-	return rh(32) + "-" + rh(16) + "-1-" + rh(16)
-}
-
-// genRandomTraceparent mints a fresh W3C traceparent per request.
-func genRandomTraceparent() string {
-	rh := func(n int) string {
-		b := make([]byte, (n+1)/2)
-		if _, err := rand.Read(b); err != nil {
-			return strings.Repeat("0", n)
-		}
-		s := hex.EncodeToString(b)
-		if len(s) > n {
-			s = s[:n]
-		}
-		for len(s) < n {
-			s += "0"
-		}
-		return s
-	}
-	return "00-" + rh(32) + "-" + rh(16) + "-01"
 }
 
 // baseModelID strips the thinking suffix "model(level)" so registry lookups
