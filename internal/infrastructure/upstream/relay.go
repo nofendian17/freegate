@@ -14,9 +14,11 @@ import (
 
 // ResolveRelayPools maps a proxy setting to a pool list for SetRelayPools:
 // nil follows the global rotation, an empty slice means direct, otherwise
-// the pinned pool. A missing or disabled pinned pool falls back to global
-// with a warning so routing never breaks on a stale reference. owner is
-// the upstream name used in the warning (e.g. "opencode", "custom:acme").
+// the pinned pool. A missing pinned pool falls back to global with a warning
+// so routing never breaks on a stale reference; a disabled pinned pool
+// connects directly instead, because "disabled" must never re-route the
+// upstream through some other enabled relay. owner is the upstream name
+// used in the warning (e.g. "opencode", "custom:acme").
 func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (registry.ProxyPool, error)) []RelayPool {
 	switch registry.NormalizeProxyMode(mode) {
 	case registry.ProxyModeDirect:
@@ -31,8 +33,8 @@ func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (reg
 			return nil
 		}
 		if !pool.Enabled {
-			slog.Warn("upstream pinned to disabled pool, using global rotation", "upstream", owner, "pool", pool.Name)
-			return nil
+			slog.Warn("upstream pinned to disabled pool, connecting directly", "upstream", owner, "pool", pool.Name)
+			return []RelayPool{}
 		}
 		return []RelayPool{{URL: pool.ProxyURL, NoProxy: pool.NoProxy, Strict: pool.StrictProxy}}
 	default:

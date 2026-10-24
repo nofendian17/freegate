@@ -345,8 +345,8 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 // probe should travel through: nil means direct. Global mode uses the
 // shared rotation (same as production traffic), pool mode pins to the
 // selected pool. A missing or disabled pinned pool is an explicit error
-// so the editor surfaces the misconfiguration instead of testing a
-// different path than production would use.
+// so the editor surfaces the misconfiguration; production traffic for a
+// disabled pin connects directly instead of using another relay.
 func (h *Handler) selectorForTest(ctx context.Context, mode string, poolID *uint) (*upstream.RelaySelector, error) {
 	relays, pool, err := h.resolveProxy(ctx, mode, poolID)
 	if err != nil {
