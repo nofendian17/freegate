@@ -142,6 +142,82 @@ func TestManager_RebuildWidensSelection(t *testing.T) {
 	}
 }
 
+// TestManager_DisabledPinnedPoolGoesDirect guards the disable-proxy path: a
+// provider pinned to a pool that is later disabled must stop using relays
+// entirely (direct), not silently fall back to the global rotation and keep
+// proxying through other enabled pools.
+func TestManager_DisabledPinnedPoolGoesDirect(t *testing.T) {
+	var relayAHits, relayBHits, upstreamHits int
+	modelsBody := `{"object":"list","data":[{"id":"m-relay","object":"model"}]}`
+	relayA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayAHits++
+		_, _ = w.Write([]byte(modelsBody))
+	}))
+	defer relayA.Close()
+	relayB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayBHits++
+		_, _ = w.Write([]byte(modelsBody))
+	}))
+	defer relayB.Close()
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_, _ = w.Write([]byte(modelsBody))
+	}))
+	defer upstreamSrv.Close()
+
+	dsn := fmt.Sprintf("file:mgr-disable-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	store, err := registry.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	poolA, err := store.CreatePool(t.Context(), registry.ProxyPool{Name: "edge-a", ProxyURL: relayA.URL, Enabled: true})
+	if err != nil {
+		t.Fatalf("create pool a: %v", err)
+	}
+	if _, err := store.CreatePool(t.Context(), registry.ProxyPool{Name: "edge-b", ProxyURL: relayB.URL, Enabled: true}); err != nil {
+		t.Fatalf("create pool b: %v", err)
+	}
+	poolID := poolA.ID
+	if _, err := store.CreateProvider(t.Context(), registry.Provider{Name: "pinned", BaseURL: upstreamSrv.URL, APIKeys: []string{"k"}, Models: []string{"m-relay"}, RefreshSec: 10, Enabled: true, ProxyMode: registry.ProxyModePool, ProxyPoolID: &poolID}); err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	// Mirror the server's global rotation after a rebuild: pool A is the pin,
+	// pool B remains an enabled global relay.
+	oldRelay := SharedRelay
+	SharedRelay = NewRelaySelector()
+	SharedRelay.SetPools([]RelayPool{{URL: relayB.URL}})
+	t.Cleanup(func() { SharedRelay = oldRelay })
+
+	mgr := NewProviderManager(store, upstreamSrv.Client().Transport.(*http.Transport))
+	if err := mgr.Rebuild(t.Context()); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if _, err := mgr.Warm(t.Context(), "pinned"); err != nil {
+		t.Fatalf("warm pinned: %v", err)
+	}
+	if relayAHits != 1 || upstreamHits != 0 {
+		t.Fatalf("pinned must travel relay A: relayA=%d upstream=%d", relayAHits, upstreamHits)
+	}
+
+	// Disable the pinned pool, then rebuild exactly like the admin handler.
+	if _, err := store.UpdatePool(t.Context(), poolA.ID, registry.ProxyPool{Name: poolA.Name, ProxyURL: poolA.ProxyURL, Enabled: false}); err != nil {
+		t.Fatalf("disable pool: %v", err)
+	}
+	SharedRelay.SetPools([]RelayPool{{URL: relayB.URL}})
+	if err := mgr.Rebuild(t.Context()); err != nil {
+		t.Fatalf("rebuild after disable: %v", err)
+	}
+	if _, err := mgr.Warm(t.Context(), "pinned"); err != nil {
+		t.Fatalf("warm after disable: %v", err)
+	}
+	if relayAHits != 1 || relayBHits != 0 || upstreamHits != 1 {
+		t.Fatalf("disabled pin must go direct: relayA=%d relayB=%d upstream=%d", relayAHits, relayBHits, upstreamHits)
+	}
+}
+
 // TestManager_PinnedPoolRoutesThroughRelay is an end-to-end proof of
 // per-provider proxy selection: a pinned provider's catalog fetch travels
 // the relay (x-relay-target set) and never hits the upstream directly,

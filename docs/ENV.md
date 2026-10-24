@@ -19,7 +19,7 @@ The authoritative list lives in `internal/config/config.go::Load`; this file is 
 
 ## Proxy pools (SQLite)
 
-Upstream requests route through enabled proxy pools (`GET/POST/PUT/DELETE /api/pools`, managed at `/providers`): each pool is a Vercel edge relay URL, applied round-robin with `x-relay-target` / `x-relay-path` headers; `no_proxy` bypasses per-pool. Pool changes rebuild live — no restart, no env vars.
+Upstream requests route through enabled proxy pools (`GET/POST/PUT/DELETE /api/pools`, managed at `/providers`): each pool is a Vercel edge relay URL, applied round-robin with `x-relay-target` / `x-relay-path` headers; `no_proxy` bypasses per-pool. Disabling a pool removes it from the global rotation, and an upstream pinned to that pool connects directly instead of failing over to another relay. Pool changes rebuild live — no restart, no env vars.
 
 ## Upstreams
 

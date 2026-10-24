@@ -163,8 +163,8 @@ func TestResolveRelayPools(t *testing.T) {
 		t.Fatalf("missing pool must fall back to global: %v", got)
 	}
 	off := uint(2)
-	if got := ResolveRelayPools("u", "pool", &off, get); got != nil {
-		t.Fatalf("disabled pool must fall back to global: %v", got)
+	if got := ResolveRelayPools("u", "pool", &off, get); got == nil || len(got) != 0 {
+		t.Fatalf("disabled pool must go direct, got %v", got)
 	}
 	if got := ResolveRelayPools("u", "pool", nil, get); got != nil {
 		t.Fatalf("pool mode without id must fall back to global: %v", got)
