@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -271,13 +272,41 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 	return nil, fmt.Errorf("unreachable: no attempt returned a response")
 }
 
+// ReadAll fetches a small JSON document (the model catalog) and returns the
+// decoded body.
+//
+// It declares Accept-Encoding itself instead of letting the transport
+// negotiate gzip. Go's transparent gzip decoding assumes every hop keeps body
+// and headers consistent: if a relay decodes the upstream body with its own
+// fetch() but forwards Content-Encoding verbatim (Bun/undici do exactly that,
+// oven-sh/bun#35546), the transport fails on the first read with
+// "gzip: invalid header" and the refresh dies with zero bytes to salvage.
+// Setting the header ourselves turns transparent decoding off, so a stale
+// Content-Encoding becomes inert; a body that arrives gzip-encoded anyway is
+// detected by its magic bytes and inflated here.
 func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
-	resp, err := c.Get(ctx, path)
+	resp, err := c.doWithHeaders(ctx, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, http.NoBody)
+	}, map[string]string{"Accept-Encoding": "identity"})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize+1))
+	if err != nil {
+		return nil, err
+	}
+	// Identity was requested, but an upstream or relay may compress anyway.
+	// Trust the bytes, not the header.
+	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
+		zr, zerr := gzip.NewReader(bytes.NewReader(body))
+		if zerr != nil {
+			return nil, fmt.Errorf("gunzip catalog body: %w", zerr)
+		}
+		defer func() { _ = zr.Close() }()
+		return io.ReadAll(io.LimitReader(zr, MaxResponseBodySize+1))
+	}
+	return body, nil
 }
 
 // CloseIdleConnections drops pooled idle connections so the next request

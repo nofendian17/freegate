@@ -74,9 +74,20 @@ export default {
       duplex: "half",
     });
 
+    // fetch() decodes gzip/br bodies by default (Bun, like undici) but leaves
+    // Content-Encoding/Content-Length on the response headers. Re-serving that
+    // pair hands the caller a decoded body labelled as encoded: a Go client
+    // whose transport negotiated gzip then fails with "gzip: invalid header"
+    // (this broke the upstream /models refresh). Drop the stale framing
+    // headers so the response describes the body actually served.
+    const respHeaders = new Headers(response.headers);
+    for (const h of ["content-encoding", "content-length", "transfer-encoding"]) {
+      respHeaders.delete(h);
+    }
+
     return new Response(response.body, {
       status: response.status,
-      headers: response.headers,
+      headers: respHeaders,
     });
   },
 };
