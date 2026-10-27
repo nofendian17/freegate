@@ -1,6 +1,8 @@
 package upstream
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -345,5 +347,63 @@ func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) 
 	_ = resp.Body.Close()
 	if apiKey != "explicit" {
 		t.Errorf("expected explicit non-public x-api-key preserved, got %q", apiKey)
+	}
+}
+
+// TestReadAllRequestsIdentityEncoding guards the model-catalog fetch against
+// transparent gzip decoding. A relay that decodes the upstream body with its
+// own fetch() and still forwards Content-Encoding: gzip makes the Go
+// transport fail on the first read ("gzip: invalid header", zero bytes
+// recoverable) — the live Vercel/Bun relay did exactly that. ReadAll must
+// declare the encoding itself so a stale header is inert.
+func TestReadAllRequestsIdentityEncoding(t *testing.T) {
+	var gotEncoding string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEncoding = r.Header.Get("Accept-Encoding")
+		// Decoded body with a stale encoding label: the relay failure mode.
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"big-pickle"}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, nil, nil, nil)
+	body, err := client.ReadAll(context.Background(), "/models")
+	if err != nil {
+		t.Fatalf("ReadAll with stale Content-Encoding: %v", err)
+	}
+	if gotEncoding != "identity" {
+		t.Errorf("Accept-Encoding=%q, want identity so the transport never decodes", gotEncoding)
+	}
+	if !strings.Contains(string(body), "big-pickle") {
+		t.Errorf("unexpected body: %q", body)
+	}
+}
+
+// TestReadAllInflatesCompressedBody keeps the identity request honest: an
+// upstream that compresses regardless is decoded from the bytes' magic
+// number, not from the (untrustworthy) header.
+func TestReadAllInflatesCompressedBody(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(`{"object":"list","data":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, nil, nil, nil)
+	body, err := client.ReadAll(context.Background(), "/models")
+	if err != nil {
+		t.Fatalf("ReadAll with gzipped body: %v", err)
+	}
+	if string(body) != `{"object":"list","data":[]}` {
+		t.Errorf("unexpected body: %q", body)
 	}
 }

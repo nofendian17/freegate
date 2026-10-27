@@ -55,6 +55,28 @@ func TestVercelRelayCodeStripsForwardingHeaders(t *testing.T) {
 	}
 }
 
+// TestVercelRelayCodeDropsStaleEncodingHeaders guards the response boundary:
+// fetch() decodes gzip/br bodies but leaves Content-Encoding/Content-Length on
+// the response, so forwarding the upstream headers verbatim makes callers
+// decode twice and fail with "gzip: invalid header" (Go transport, model
+// refresh). The deployed handler must drop the stale framing headers.
+func TestVercelRelayCodeDropsStaleEncodingHeaders(t *testing.T) {
+	if strings.Contains(vercelRelayCode, "headers: response.headers") {
+		t.Fatal("relay forwards upstream response headers verbatim; a decoded body keeps content-encoding")
+	}
+	for _, want := range []string{
+		"const respHeaders = new Headers(response.headers)",
+		`"content-encoding"`,
+		`"content-length"`,
+		`"transfer-encoding"`,
+		"headers: respHeaders",
+	} {
+		if !strings.Contains(vercelRelayCode, want) {
+			t.Fatalf("relay code missing %q", want)
+		}
+	}
+}
+
 func TestVercelDeployBodyUsesBunRuntime(t *testing.T) {
 	var body struct {
 		Name   string `json:"name"`
