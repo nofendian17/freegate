@@ -273,53 +273,50 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 	return nil, fmt.Errorf("unreachable: no attempt returned a response")
 }
 
+// catalogAcceptEncoding is declared explicitly on every catalog fetch. Naming
+// the encoding ourselves disables the transport's transparent decoding, which
+// is the part that cannot be trusted: it assumes every hop keeps the body and
+// the headers consistent, while a relay that decodes with its own fetch() and
+// forwards Content-Encoding verbatim (Bun/undici, oven-sh/bun#35546) hands it
+// plaintext labelled gzip and it loses every byte to "gzip: invalid header".
+// With decoding off, readCatalog trusts the magic bytes instead: a real gzip
+// body is inflated, a mislabeled plaintext body is returned as-is.
+//
+// It also has to be gzip, not identity: the Bun relay replaces whatever
+// Accept-Encoding the caller sent with its own "gzip" (verified live through
+// httpbin), so an identity request never reaches the upstream as identity — it
+// only makes the Vercel edge answer with an empty body. Asking for gzip keeps
+// kilo's ~543 KB catalog at ~68 KB on the wire while staying decodable either
+// way.
+const catalogAcceptEncoding = "gzip"
+
 // ReadAll fetches a JSON catalog document and returns the decoded body.
 //
-// The transport's own gzip negotiation is the cheap path and stays the
-// default: kilo's catalog is ~543 KB raw versus ~68 KB gzipped, and catalogs
-// refresh every minute, so paying identity on every healthy fetch would cost
-// hundreds of megabytes a day. It is also the fragile path — Go's transparent
-// decoding assumes every hop keeps body and headers consistent, and a relay
-// that decodes with its own fetch() but forwards Content-Encoding verbatim
-// (Bun/undici, oven-sh/bun#35546) makes it fail with "gzip: invalid header"
-// and lose every byte.
-//
-// So the fast path goes first, and only decode-level failures — a gzip error
-// or an empty 2xx body — are retried with Accept-Encoding: identity declared
-// by us. Declaring the encoding turns transparent decoding off, which makes a
-// stale Content-Encoding inert and lets a genuinely compressed body be
-// inflated from its magic bytes. HTTP status failures are final: retrying a
-// 401 or a 404 changes nothing.
+// One retry is spent only on an empty 2xx, which a relay can answer
+// transiently. HTTP status failures are final — a second request cannot change
+// a 401 or a 404 — and a corrupt gzip body is deterministic.
 func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
-	body, err := c.readCatalog(ctx, path, nil)
+	extra := map[string]string{"Accept-Encoding": catalogAcceptEncoding}
+	body, err := c.readCatalog(ctx, path, extra)
 	if err == nil {
 		return body, nil
 	}
-	if !isCatalogDecodeFailure(err) {
+	if !errors.Is(err, errEmptyCatalogBody) {
 		return nil, err
 	}
-	// io.ReadAll already consumed the body, so recovery means a fresh
-	// request — cheap next to a refresh that silently stops updating.
-	retried, retryErr := c.readCatalog(ctx, path, map[string]string{"Accept-Encoding": "identity"})
+	retried, retryErr := c.readCatalog(ctx, path, extra)
 	if retryErr == nil {
 		return retried, nil
 	}
-	return nil, fmt.Errorf("%w; identity retry: %v", err, retryErr)
+	return nil, fmt.Errorf("%w; retry: %v", err, retryErr)
 }
 
-// isCatalogDecodeFailure reports whether a catalog fetch failed for a reason a
-// fresh request can fix: a body/header mismatch at some hop (gzip error) or a
-// response with no payload at all (empty 2xx).
-func isCatalogDecodeFailure(err error) bool {
-	if errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) {
-		return true
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "gzip:") || strings.Contains(msg, "empty body")
-}
+// errEmptyCatalogBody marks a 2xx answer with no payload. Catalogs are JSON, so
+// an empty 2xx can never be a valid empty list.
+var errEmptyCatalogBody = errors.New("empty body")
 
 // readCatalog performs one catalog GET and decodes the response. extra headers
-// override the client defaults (used for the identity retry).
+// override the client defaults (used for the catalog Accept-Encoding).
 func (c *HTTPClient) readCatalog(ctx context.Context, path string, extra map[string]string) ([]byte, error) {
 	resp, err := c.doWithHeaders(ctx, func() (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, http.NoBody)
@@ -340,7 +337,7 @@ func (c *HTTPClient) readCatalog(ctx context.Context, path string, extra map[str
 		return nil, fmt.Errorf("GET %s: %s (content-type %q): %s", path, resp.Status, resp.Header.Get("Content-Type"), bodySnippet(body))
 	}
 	if len(body) == 0 {
-		return nil, fmt.Errorf("GET %s: empty body (%s, content-type %q)", path, resp.Status, resp.Header.Get("Content-Type"))
+		return nil, fmt.Errorf("GET %s: %w (%s, content-type %q)", path, errEmptyCatalogBody, resp.Status, resp.Header.Get("Content-Type"))
 	}
 	// Compression can arrive even when it was not negotiated. Trust the
 	// bytes, not the header.

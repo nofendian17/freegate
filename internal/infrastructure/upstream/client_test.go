@@ -351,11 +351,11 @@ func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) 
 	}
 }
 
-// TestReadAllKeepsGzipOnHealthyCatalog guards the cheap path: a healthy
-// upstream must be fetched with the transport's own gzip negotiation, not
-// identity. Kilo's catalog is ~543 KB raw versus ~68 KB gzipped and refreshes
-// every minute, so forcing identity on the happy path costs bandwidth for
-// nothing.
+// TestReadAllKeepsGzipOnHealthyCatalog guards the cheap path: catalogs are
+// fetched with gzip, not identity. Kilo's catalog is ~543 KB raw versus ~68 KB
+// gzipped and refreshes every minute, so identity would cost bandwidth for
+// nothing. The header is declared by ReadAll itself (see ReadAll) so the
+// transport never decodes transparently.
 func TestReadAllKeepsGzipOnHealthyCatalog(t *testing.T) {
 	var gotEncoding string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -373,13 +373,15 @@ func TestReadAllKeepsGzipOnHealthyCatalog(t *testing.T) {
 	}
 }
 
-// TestReadAllRetriesMislabeledBodyAsIdentity covers the relay failure mode: a
-// hop decodes the upstream body with its own fetch() but forwards
-// Content-Encoding: gzip, so the transport's transparent decoder fails with
-// "gzip: invalid header" and loses every byte (oven-sh/bun#35546). ReadAll must
-// retry that decode-level failure with Accept-Encoding: identity, where a
-// stale header is inert.
-func TestReadAllRetriesMislabeledBodyAsIdentity(t *testing.T) {
+// TestReadAllReadsMislabeledPlaintextBody covers the live Vercel/Bun relay
+// failure mode: the relay decodes the upstream body with its own fetch() but
+// forwards Content-Encoding: gzip (oven-sh/bun#35546). The response body is
+// plaintext JSON carrying a gzip label, so ReadAll must read it as-is rather
+// than let the transport's transparent decoder fail with "gzip: invalid
+// header" and lose every byte. It must also succeed on the first request: an
+// identity retry cannot help, because the Bun relay overwrites Accept-Encoding
+// with its own gzip before calling the upstream.
+func TestReadAllReadsMislabeledPlaintextBody(t *testing.T) {
 	var mu sync.Mutex
 	var encodings []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,17 +405,14 @@ func TestReadAllRetriesMislabeledBodyAsIdentity(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(encodings) != 2 {
-		t.Fatalf("requests=%d %v, want a gzip attempt then an identity retry", len(encodings), encodings)
-	}
-	if encodings[0] != "gzip" || encodings[1] != "identity" {
-		t.Errorf("encodings=%v, want [gzip identity]", encodings)
+	if len(encodings) != 1 {
+		t.Fatalf("requests=%d %v, want a single gzip request", len(encodings), encodings)
 	}
 }
 
-// TestReadAllInflatesCompressedBody keeps the identity path honest: an upstream
-// that compresses anyway is decoded from the bytes' magic number, not from the
-// header.
+// TestReadAllInflatesCompressedBody keeps the "trust the bytes" path honest: an
+// upstream that replies with a real gzip body is inflated from its magic
+// number, since ReadAll disables the transport's transparent decoding.
 func TestReadAllInflatesCompressedBody(t *testing.T) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -430,12 +429,9 @@ func TestReadAllInflatesCompressedBody(t *testing.T) {
 	defer srv.Close()
 
 	client := NewHTTPClientWithTransport(srv.URL, nil, nil, nil)
-	// Identity request: the transport does not decode, so the magic-byte
-	// path in readCatalog is what has to inflate it.
-	body, err := client.readCatalog(context.Background(), "/models",
-		map[string]string{"Accept-Encoding": "identity"})
+	body, err := client.ReadAll(context.Background(), "/models")
 	if err != nil {
-		t.Fatalf("readCatalog with gzipped body: %v", err)
+		t.Fatalf("ReadAll with gzipped body: %v", err)
 	}
 	if string(body) != `{"object":"list","data":[]}` {
 		t.Errorf("unexpected body: %q", body)
