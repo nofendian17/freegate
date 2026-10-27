@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -272,22 +273,57 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 	return nil, fmt.Errorf("unreachable: no attempt returned a response")
 }
 
-// ReadAll fetches a small JSON document (the model catalog) and returns the
-// decoded body.
+// ReadAll fetches a JSON catalog document and returns the decoded body.
 //
-// It declares Accept-Encoding itself instead of letting the transport
-// negotiate gzip. Go's transparent gzip decoding assumes every hop keeps body
-// and headers consistent: if a relay decodes the upstream body with its own
-// fetch() but forwards Content-Encoding verbatim (Bun/undici do exactly that,
-// oven-sh/bun#35546), the transport fails on the first read with
-// "gzip: invalid header" and the refresh dies with zero bytes to salvage.
-// Setting the header ourselves turns transparent decoding off, so a stale
-// Content-Encoding becomes inert; a body that arrives gzip-encoded anyway is
-// detected by its magic bytes and inflated here.
+// The transport's own gzip negotiation is the cheap path and stays the
+// default: kilo's catalog is ~543 KB raw versus ~68 KB gzipped, and catalogs
+// refresh every minute, so paying identity on every healthy fetch would cost
+// hundreds of megabytes a day. It is also the fragile path — Go's transparent
+// decoding assumes every hop keeps body and headers consistent, and a relay
+// that decodes with its own fetch() but forwards Content-Encoding verbatim
+// (Bun/undici, oven-sh/bun#35546) makes it fail with "gzip: invalid header"
+// and lose every byte.
+//
+// So the fast path goes first, and only decode-level failures — a gzip error
+// or an empty 2xx body — are retried with Accept-Encoding: identity declared
+// by us. Declaring the encoding turns transparent decoding off, which makes a
+// stale Content-Encoding inert and lets a genuinely compressed body be
+// inflated from its magic bytes. HTTP status failures are final: retrying a
+// 401 or a 404 changes nothing.
 func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
+	body, err := c.readCatalog(ctx, path, nil)
+	if err == nil {
+		return body, nil
+	}
+	if !isCatalogDecodeFailure(err) {
+		return nil, err
+	}
+	// io.ReadAll already consumed the body, so recovery means a fresh
+	// request — cheap next to a refresh that silently stops updating.
+	retried, retryErr := c.readCatalog(ctx, path, map[string]string{"Accept-Encoding": "identity"})
+	if retryErr == nil {
+		return retried, nil
+	}
+	return nil, fmt.Errorf("%w; identity retry: %v", err, retryErr)
+}
+
+// isCatalogDecodeFailure reports whether a catalog fetch failed for a reason a
+// fresh request can fix: a body/header mismatch at some hop (gzip error) or a
+// response with no payload at all (empty 2xx).
+func isCatalogDecodeFailure(err error) bool {
+	if errors.Is(err, gzip.ErrHeader) || errors.Is(err, gzip.ErrChecksum) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "gzip:") || strings.Contains(msg, "empty body")
+}
+
+// readCatalog performs one catalog GET and decodes the response. extra headers
+// override the client defaults (used for the identity retry).
+func (c *HTTPClient) readCatalog(ctx context.Context, path string, extra map[string]string) ([]byte, error) {
 	resp, err := c.doWithHeaders(ctx, func() (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, http.NoBody)
-	}, map[string]string{"Accept-Encoding": "identity"})
+	}, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -296,8 +332,18 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Identity was requested, but an upstream or relay may compress anyway.
-	// Trust the bytes, not the header.
+	// Catalogs are JSON: a non-2xx or an empty 2xx is a failure, not an empty
+	// list. Report the status and a body snippet here, otherwise the caller
+	// only sees "unexpected end of JSON input" and the one detail that
+	// explains it — the status — is gone.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("GET %s: %s (content-type %q): %s", path, resp.Status, resp.Header.Get("Content-Type"), bodySnippet(body))
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("GET %s: empty body (%s, content-type %q)", path, resp.Status, resp.Header.Get("Content-Type"))
+	}
+	// Compression can arrive even when it was not negotiated. Trust the
+	// bytes, not the header.
 	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
 		zr, zerr := gzip.NewReader(bytes.NewReader(body))
 		if zerr != nil {
@@ -307,6 +353,20 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(zr, MaxResponseBodySize+1))
 	}
 	return body, nil
+}
+
+// bodySnippet renders a short, single-line quote of an error body for logs.
+const bodySnippetLimit = 200
+
+func bodySnippet(body []byte) string {
+	s := strings.Join(strings.Fields(string(body)), " ")
+	if s == "" {
+		return "(no body)"
+	}
+	if len(s) > bodySnippetLimit {
+		return s[:bodySnippetLimit] + "…"
+	}
+	return s
 }
 
 // CloseIdleConnections drops pooled idle connections so the next request

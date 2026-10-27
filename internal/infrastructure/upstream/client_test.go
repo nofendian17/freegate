@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -350,16 +351,41 @@ func TestPostWithHeaders_PreservesExplicitXApiKeyWithPublicBearer(t *testing.T) 
 	}
 }
 
-// TestReadAllRequestsIdentityEncoding guards the model-catalog fetch against
-// transparent gzip decoding. A relay that decodes the upstream body with its
-// own fetch() and still forwards Content-Encoding: gzip makes the Go
-// transport fail on the first read ("gzip: invalid header", zero bytes
-// recoverable) — the live Vercel/Bun relay did exactly that. ReadAll must
-// declare the encoding itself so a stale header is inert.
-func TestReadAllRequestsIdentityEncoding(t *testing.T) {
+// TestReadAllKeepsGzipOnHealthyCatalog guards the cheap path: a healthy
+// upstream must be fetched with the transport's own gzip negotiation, not
+// identity. Kilo's catalog is ~543 KB raw versus ~68 KB gzipped and refreshes
+// every minute, so forcing identity on the happy path costs bandwidth for
+// nothing.
+func TestReadAllKeepsGzipOnHealthyCatalog(t *testing.T) {
 	var gotEncoding string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotEncoding = r.Header.Get("Accept-Encoding")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, nil, nil, nil)
+	if _, err := client.ReadAll(context.Background(), "/models"); err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if gotEncoding != "gzip" {
+		t.Errorf("Accept-Encoding=%q, want gzip on the healthy path", gotEncoding)
+	}
+}
+
+// TestReadAllRetriesMislabeledBodyAsIdentity covers the relay failure mode: a
+// hop decodes the upstream body with its own fetch() but forwards
+// Content-Encoding: gzip, so the transport's transparent decoder fails with
+// "gzip: invalid header" and loses every byte (oven-sh/bun#35546). ReadAll must
+// retry that decode-level failure with Accept-Encoding: identity, where a
+// stale header is inert.
+func TestReadAllRetriesMislabeledBodyAsIdentity(t *testing.T) {
+	var mu sync.Mutex
+	var encodings []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		encodings = append(encodings, r.Header.Get("Accept-Encoding"))
+		mu.Unlock()
 		// Decoded body with a stale encoding label: the relay failure mode.
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Type", "application/json")
@@ -372,17 +398,22 @@ func TestReadAllRequestsIdentityEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll with stale Content-Encoding: %v", err)
 	}
-	if gotEncoding != "identity" {
-		t.Errorf("Accept-Encoding=%q, want identity so the transport never decodes", gotEncoding)
-	}
 	if !strings.Contains(string(body), "big-pickle") {
 		t.Errorf("unexpected body: %q", body)
 	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(encodings) != 2 {
+		t.Fatalf("requests=%d %v, want a gzip attempt then an identity retry", len(encodings), encodings)
+	}
+	if encodings[0] != "gzip" || encodings[1] != "identity" {
+		t.Errorf("encodings=%v, want [gzip identity]", encodings)
+	}
 }
 
-// TestReadAllInflatesCompressedBody keeps the identity request honest: an
-// upstream that compresses regardless is decoded from the bytes' magic
-// number, not from the (untrustworthy) header.
+// TestReadAllInflatesCompressedBody keeps the identity path honest: an upstream
+// that compresses anyway is decoded from the bytes' magic number, not from the
+// header.
 func TestReadAllInflatesCompressedBody(t *testing.T) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -399,11 +430,84 @@ func TestReadAllInflatesCompressedBody(t *testing.T) {
 	defer srv.Close()
 
 	client := NewHTTPClientWithTransport(srv.URL, nil, nil, nil)
-	body, err := client.ReadAll(context.Background(), "/models")
+	// Identity request: the transport does not decode, so the magic-byte
+	// path in readCatalog is what has to inflate it.
+	body, err := client.readCatalog(context.Background(), "/models",
+		map[string]string{"Accept-Encoding": "identity"})
 	if err != nil {
-		t.Fatalf("ReadAll with gzipped body: %v", err)
+		t.Fatalf("readCatalog with gzipped body: %v", err)
 	}
 	if string(body) != `{"object":"list","data":[]}` {
 		t.Errorf("unexpected body: %q", body)
+	}
+}
+
+// TestReadAllReportsEmptyBody guards against the opaque failure seen on a
+// custom upstream: an empty 2xx reached json.Unmarshal and surfaced only as
+// "parse models: unexpected end of JSON input", losing the status and
+// content-type that explain it. ReadAll retries once (a relay can answer empty
+// on the first attempt), then reports what the upstream said.
+func TestReadAllReportsEmptyBody(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
+	_, err := client.ReadAll(context.Background(), "/models")
+	if err == nil {
+		t.Fatal("expected an error for an empty 200 body")
+	}
+	for _, want := range []string{"empty body", "200", "application/json"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 2 {
+		t.Errorf("requests=%d, want one retry before giving up", requests)
+	}
+}
+
+// TestReadAllReportsStatusAndSnippet keeps a rejecting upstream from hiding
+// behind a JSON parse error: the caller must see the status and the body, and a
+// 401 must not be retried — a second request cannot change the answer.
+func TestReadAllReportsStatusAndSnippet(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("{\"error\":\n  \"invalid api key\"}"))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
+	_, err := client.ReadAll(context.Background(), "/models")
+	if err == nil {
+		t.Fatal("expected an error for a 401 catalog response")
+	}
+	for _, want := range []string{"401", "invalid api key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error snippet must be single-line, got %q", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 {
+		t.Errorf("requests=%d, want no retry for an HTTP status failure", requests)
 	}
 }
