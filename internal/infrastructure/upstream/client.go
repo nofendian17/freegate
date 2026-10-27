@@ -296,6 +296,16 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Catalogs are JSON: a non-2xx or an empty 2xx is a failure, not an
+	// empty list. Report the status and a body snippet here, otherwise the
+	// caller only sees "unexpected end of JSON input" and the one detail
+	// that explains it — the status — is gone.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("GET %s: %s (content-type %q): %s", path, resp.Status, resp.Header.Get("Content-Type"), bodySnippet(body))
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("GET %s: empty body (%s, content-type %q)", path, resp.Status, resp.Header.Get("Content-Type"))
+	}
 	// Identity was requested, but an upstream or relay may compress anyway.
 	// Trust the bytes, not the header.
 	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
@@ -307,6 +317,20 @@ func (c *HTTPClient) ReadAll(ctx context.Context, path string) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(zr, MaxResponseBodySize+1))
 	}
 	return body, nil
+}
+
+// bodySnippet renders a short, single-line quote of an error body for logs.
+const bodySnippetLimit = 200
+
+func bodySnippet(body []byte) string {
+	s := strings.Join(strings.Fields(string(body)), " ")
+	if s == "" {
+		return "(no body)"
+	}
+	if len(s) > bodySnippetLimit {
+		return s[:bodySnippetLimit] + "…"
+	}
+	return s
 }
 
 // CloseIdleConnections drops pooled idle connections so the next request

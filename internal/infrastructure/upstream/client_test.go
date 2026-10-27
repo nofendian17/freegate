@@ -407,3 +407,51 @@ func TestReadAllInflatesCompressedBody(t *testing.T) {
 		t.Errorf("unexpected body: %q", body)
 	}
 }
+
+// TestReadAllReportsEmptyBody guards against the opaque failure seen on a
+// custom upstream: an empty 2xx reached json.Unmarshal and surfaced only as
+// "parse models: unexpected end of JSON input", losing the status and
+// content-type that explain it.
+func TestReadAllReportsEmptyBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
+	_, err := client.ReadAll(context.Background(), "/models")
+	if err == nil {
+		t.Fatal("expected an error for an empty 200 body")
+	}
+	for _, want := range []string{"empty body", "200", "application/json"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// TestReadAllReportsStatusAndSnippet keeps a rejecting upstream from hiding
+// behind a JSON parse error: the caller must see the status and the body.
+func TestReadAllReportsStatusAndSnippet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("{\"error\":\n  \"invalid api key\"}"))
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClientWithTransport(srv.URL, []string{"key"}, nil, nil)
+	_, err := client.ReadAll(context.Background(), "/models")
+	if err == nil {
+		t.Fatal("expected an error for a 401 catalog response")
+	}
+	for _, want := range []string{"401", "invalid api key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error snippet must be single-line, got %q", err)
+	}
+}
