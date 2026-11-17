@@ -174,7 +174,7 @@ func TestLogOpenCodeRequest_RespectsFlag(t *testing.T) {
 func TestOpenCodeUserAgent_FallbackShape(t *testing.T) {
 	withClientVersion(t, openCodeFallbackVersion)
 	ua := openCodeUserAgent()
-	if ua != "opencode/latest/2.0.32/cli" {
+	if ua != "opencode/latest/2.3.0/cli" {
 		t.Fatalf("ua = %q", ua)
 	}
 }

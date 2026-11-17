@@ -283,6 +283,9 @@ func TestEnsureUpstreamTools_InjectsEnvChat(t *testing.T) {
 	if !strings.Contains(content, "Working directory: ") || !strings.Contains(content, "Platform: ") {
 		t.Fatalf("env block missing fields: %q", content)
 	}
+	if !strings.Contains(content, "Workspace root folder: ") || !strings.Contains(content, "Is directory a git repo: ") {
+		t.Fatalf("env block missing dev fields: %q", content)
+	}
 
 	// A second pass must not inject a duplicate block.
 	out2, _ := ensureUpstreamTools(out, "/chat/completions")

@@ -30,9 +30,30 @@ import (
 // to read/shell.
 var fingerprintToolNames = []string{"read", "shell"}
 
-// Verbatim from the OpenCode v2.0.26 CLI. Upstream compares description and
-// parameters, so do not reword or reformat these (concatenation only).
+// Verbatim from the OpenCode v2.3.0 (dev) CLI. Upstream compares description
+// and parameters, so do not reword or reformat these (concatenation only).
 const fingerprintReadDescription = "Read the contents of a file or directory. " +
+	"Supports text files, images, and PDFs. " +
+	"Each text line is prefixed by its 1-based line number as <line>: <content>. " +
+	"The prefix is for reference and is not part of the file content. " +
+	"Directory entries are returned one per line. " +
+	"Use offset and limit to read large files or directories in sections. " +
+	"Prefer one larger read over many small slices, " +
+	"and use grep to find specific content in large files."
+
+const fingerprintShellDescription = "Execute a shell command and return its output. " +
+	"Commands run on Linux using bash. " +
+	"Quote file paths containing spaces or special characters. " +
+	"Prefer dedicated tools over shell commands when possible. " +
+	"When output is large, the full result is saved to a file and a truncated preview is returned. " +
+	"Rely on automatic truncation unless filtering the output is more useful. " +
+	"Commands still running after their timeout move to the background. " +
+	"Background commands return immediately, and you will be notified when they complete. " +
+	"The current session ID is available in the OPENCODE_SESSION_ID environment variable."
+
+// Legacy v2.0.26 fingerprint definitions kept so genuine older CLI clients
+// passing their own read/shell tools are recognized without aliasing.
+const legacyFingerprintReadDescription = "Read the contents of a file or directory. " +
 	"Supports text files, images, and PDFs. " +
 	"Images and PDFs are presented directly to the model. " +
 	"Each text line is prefixed by its 1-based line number as <line>: <content>. " +
@@ -42,7 +63,7 @@ const fingerprintReadDescription = "Read the contents of a file or directory. " 
 	"Prefer one larger read over many small slices, " +
 	"and use grep to find specific content in large files."
 
-const fingerprintShellDescription = "Execute a shell command and return its output. " +
+const legacyFingerprintShellDescription = "Execute a shell command and return its output. " +
 	"Commands run on Linux using bash. " +
 	"Quote file paths containing spaces or special characters. " +
 	"Prefer dedicated tools over shell commands when possible. " +
@@ -58,7 +79,9 @@ const (
 	fingerprintShellWorkdirDesc = "Working directory to execute the command in. " +
 		"Defaults to the current working directory. When possible, avoid changing directories " +
 		"in the command and set the working directory here instead."
-	fingerprintShellTimeoutDesc = "Timeout in milliseconds. Set to 0 to disable the timeout. " +
+	fingerprintShellTimeoutDesc = "Optional timeout in milliseconds (default 120000). " +
+		"When it expires, a foreground command moves to the background and a background command is stopped."
+	legacyFingerprintShellTimeoutDesc = "Timeout in milliseconds. Set to 0 to disable the timeout. " +
 		"Defaults to 120000 for foreground commands. Background commands have no timeout by default."
 	fingerprintShellBackgroundDesc = "Run the command in the background and return immediately " +
 		"(useful for dev servers and long-running builds). You do not need to use '&' at the end " +
@@ -181,14 +204,29 @@ func canonicalJSON(v any) any {
 	return out
 }
 
-// isFingerprintDefinition reports whether tool already carries OpenCode's
-// exact definition for key.
 func isFingerprintDefinition(tool any, key string) bool {
+	desc := toolDescriptionOf(tool)
+	params := canonicalJSON(toolParametersOf(tool))
 	wantDesc, wantParams := fingerprintWant(key)
-	if toolDescriptionOf(tool) != wantDesc {
-		return false
+	if desc == wantDesc && reflect.DeepEqual(params, canonicalJSON(wantParams)) {
+		return true
 	}
-	return reflect.DeepEqual(canonicalJSON(toolParametersOf(tool)), canonicalJSON(wantParams))
+	if key == "read" {
+		return desc == legacyFingerprintReadDescription &&
+			reflect.DeepEqual(params, canonicalJSON(fingerprintReadParameters()))
+	}
+	if key == "shell" {
+		if desc == legacyFingerprintShellDescription {
+			legacyParams := fingerprintShellParameters()
+			legacyParams["properties"].(map[string]any)["timeout"] = map[string]any{
+				"type":        "integer",
+				"minimum":     0,
+				"description": legacyFingerprintShellTimeoutDesc,
+			}
+			return reflect.DeepEqual(params, canonicalJSON(legacyParams))
+		}
+	}
+	return false
 }
 
 func withToolName(tool any, name string) any {
@@ -614,7 +652,35 @@ func openCodeEnvBlock() string {
 	if cwd, err := os.Getwd(); err == nil && cwd != "" {
 		wd = cwd
 	}
-	return "<env>\n  Working directory: " + wd + "\n  Platform: " + runtime.GOOS + "\n</env>"
+	isGit := "no"
+	for dir := wd; ; {
+		if st, err := os.Stat(dir + "/.git"); err == nil && st.IsDir() {
+			isGit = "yes"
+			break
+		}
+		parent := dir[:strings.LastIndex(dir, "/")]
+		if parent == dir || parent == "" {
+			break
+		}
+		if parent == "/" {
+			if st, err := os.Stat("/.git"); err == nil && st.IsDir() {
+				isGit = "yes"
+			}
+			break
+		}
+		dir = parent
+	}
+	tmpDir := os.TempDir()
+	if tmpDir == "" {
+		tmpDir = "/tmp"
+	}
+	return "<env>\n" +
+		"  Working directory: " + wd + "\n" +
+		"  Workspace root folder: " + wd + "\n" +
+		"  Is directory a git repo: " + isGit + "\n" +
+		"  Platform: " + runtime.GOOS + "\n" +
+		"  Prefer " + tmpDir + " over generic system temporary directories such as /tmp; it is pre-created and approved for external access.\n" +
+		"</env>"
 }
 
 // stripNoneToolChoice drops a caller-supplied tool_choice "none": upstream

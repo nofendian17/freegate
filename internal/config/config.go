@@ -85,8 +85,11 @@ func Load() *Config {
 		UpstreamRefreshKilo:     envInt("UPSTREAM_REFRESH_KILO", 60),
 		UpstreamRefreshLLM7:     envInt("UPSTREAM_REFRESH_LLM7", 300),
 
-		ResponseModels: envSlice("RESPONSE_MODELS", "muse-spark,muse_spark"),
-		MessageModels:  envSlice("MESSAGE_MODELS", "union-alpha"),
+		ResponseModels: envSlice("RESPONSE_MODELS", "muse-spark,muse_spark,muse-ember,muse-wonder"),
+		MessageModels: envSlice(
+			"MESSAGE_MODELS",
+			"union-alpha,minimax-m2.5-free,minimax-m3-free,minimax-m2.1-free,qwen3.6-plus-free",
+		),
 
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 	}
