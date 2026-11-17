@@ -53,3 +53,12 @@ services:
 
 volumes:
   fg-data:
+
+networks:
+  default:
+    # The OpenCode client prefers IPv6 and falls back to IPv4 on its own, so
+    # this is optional: without it the container is IPv4-only and every dial
+    # uses the fallback. IPv6 is preferred when the host provides it.
+    # Docker assigns a ULA /64 automatically; pinning a subnet here would
+    # collide with other projects on the same host using the same range.
+    enable_ipv6: true
