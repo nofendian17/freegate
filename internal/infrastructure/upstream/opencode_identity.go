@@ -25,7 +25,7 @@ import (
 // opencode/<channel>/<version>/<client> (e.g. opencode/latest/2.0.26/cli)
 // with major >= 2.
 const (
-	openCodeFallbackVersion = "2.0.32"
+	openCodeFallbackVersion = "2.3.0"
 	// openCodeClientVersionTTL bounds how often the cached client version
 	// is refreshed from GitHub releases (mirrors 9router's 12h default).
 	openCodeClientVersionTTL    = 12 * time.Hour

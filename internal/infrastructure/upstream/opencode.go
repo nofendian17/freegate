@@ -26,9 +26,15 @@ import (
 // Defaults for endpoint routing; use SetResponseModels/SetMessageModels to
 // override from RESPONSE_MODELS / MESSAGE_MODELS config so handler and
 // upstream agree.
-var defaultOpenCodeResponseModels = []string{"muse-spark", "muse_spark"}
+var defaultOpenCodeResponseModels = []string{"muse-spark", "muse_spark", "muse-ember", "muse-wonder"}
 
-var defaultOpenCodeMessageModels = []string{"union-alpha"}
+var defaultOpenCodeMessageModels = []string{
+	"union-alpha",
+	"minimax-m2.5-free",
+	"minimax-m3-free",
+	"minimax-m2.1-free",
+	"qwen3.6-plus-free",
+}
 
 type OpenCodeUpstream struct {
 	client    *HTTPClient
