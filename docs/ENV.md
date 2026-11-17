@@ -36,6 +36,8 @@ Upstream requests route through enabled proxy pools (`GET/POST/PUT/DELETE /api/p
 
 Relay behavior: `UPSTREAM_OPENCODE_BUN_TLS` applies only to the direct connection to the configured OpenCode host; relay hosts keep standard Go TLS. The Vercel relay deployed by freegate runs on Bun 1.4.x, so its outbound `fetch` presents the Bun handshake that OpenCode's free-tier gate accepts. A third-party relay is outside freegate's control: one whose egress TLS fingerprint, IP, or quota does not satisfy the gate still gets 429 `FreeUsageLimitError` for anonymous free-tier requests. Use direct mode, the auto-deployed Bun relay, or another relay with a compatible handshake.
 
+Address family: the direct OpenCode connection prefers IPv6 and falls back to IPv4 when the host has no usable IPv6 route. The failure is remembered per client until restart, so IPv4-only deployments pay the penalty once instead of on every request. No configuration is required; relay and proxy-pool connections keep the dialer's default behavior.
+
 ### Kilo (OpenRouter)
 
 | Variable | Required | Default | Description |

@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/tls"
 	"encoding/binary"
@@ -155,6 +156,107 @@ func TestOpenCodeTargetHost(t *testing.T) {
 		if got := openCodeTargetHost(in); got != want {
 			t.Errorf("openCodeTargetHost(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// testConn fails immediately so the TLS handshake returns without real I/O.
+type testConn struct{}
+
+func (testConn) Read([]byte) (int, error)         { return 0, io.ErrClosedPipe }
+func (testConn) Write([]byte) (int, error)        { return 0, io.ErrClosedPipe }
+func (testConn) Close() error                     { return nil }
+func (testConn) LocalAddr() net.Addr              { return testAddr{} }
+func (testConn) RemoteAddr() net.Addr             { return testAddr{} }
+func (testConn) SetDeadline(time.Time) error      { return nil }
+func (testConn) SetReadDeadline(time.Time) error  { return nil }
+func (testConn) SetWriteDeadline(time.Time) error { return nil }
+
+type testAddr struct{}
+
+func (testAddr) Network() string { return "test" }
+func (testAddr) String() string  { return "test" }
+
+func TestOpenCodeDialPrefersIPv6(t *testing.T) {
+	var attempts []string
+	tr := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+		attempts = append(attempts, network)
+		return testConn{}, nil
+	}}
+	dial := openCodeBunDialTLS("opencode.ai", tr)
+	// The handshake fails on testConn; only the dial attempt matters here.
+	_, _ = dial(context.Background(), "tcp", "opencode.ai:443")
+	if got, want := strings.Join(attempts, ","), "tcp6"; got != want {
+		t.Fatalf("dial attempts = %q, want %q", got, want)
+	}
+}
+
+func TestOpenCodeDialFallsBackToIPv4(t *testing.T) {
+	var attempts []string
+	tr := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+		attempts = append(attempts, network)
+		if network == "tcp6" {
+			return nil, fmt.Errorf("no route to host")
+		}
+		return testConn{}, nil
+	}}
+	dial := openCodeBunDialTLS("opencode.ai", tr)
+	_, _ = dial(context.Background(), "tcp", "opencode.ai:443")
+	if got, want := strings.Join(attempts, ","), "tcp6,tcp4"; got != want {
+		t.Fatalf("dial attempts = %q, want %q", got, want)
+	}
+}
+
+func TestOpenCodeDialIPv6FailureIsRemembered(t *testing.T) {
+	var attempts []string
+	tr := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+		attempts = append(attempts, network)
+		if network == "tcp6" {
+			return nil, fmt.Errorf("no route to host")
+		}
+		return testConn{}, nil
+	}}
+	dial := openCodeBunDialTLS("opencode.ai", tr)
+	_, _ = dial(context.Background(), "tcp", "opencode.ai:443")
+	_, _ = dial(context.Background(), "tcp", "opencode.ai:443")
+	if got, want := strings.Join(attempts, ","), "tcp6,tcp4,tcp4"; got != want {
+		t.Fatalf("dial attempts = %q, want %q (IPv6 must not be retried)", got, want)
+	}
+}
+
+func TestOpenCodeDialBothFamiliesFail(t *testing.T) {
+	tr := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+		return nil, fmt.Errorf("%s unreachable", network)
+	}}
+	dial := openCodeBunDialTLS("opencode.ai", tr)
+	_, err := dial(context.Background(), "tcp", "opencode.ai:443")
+	if err == nil || !strings.Contains(err.Error(), "tcp4 unreachable") {
+		t.Fatalf("error = %v, want the tcp4 failure", err)
+	}
+}
+
+func TestOpenCodeDialLeavesOtherHostsAlone(t *testing.T) {
+	cases := []struct {
+		name   string
+		target string
+		addr   string
+		host   string
+	}{
+		{name: "relay host", target: "opencode.ai", addr: "relay.example:443", host: "relay.example"},
+		{name: "IP literal target", target: "127.0.0.1", addr: "127.0.0.1:443", host: "127.0.0.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts []string
+			tr := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+				attempts = append(attempts, network)
+				return testConn{}, nil
+			}}
+			dial := openCodeBunDialTLS(tc.target, tr)
+			_, _ = dial(context.Background(), "tcp", tc.addr)
+			if got, want := strings.Join(attempts, ","), "tcp"; got != want {
+				t.Fatalf("dial attempts = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

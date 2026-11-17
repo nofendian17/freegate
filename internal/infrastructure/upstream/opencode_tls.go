@@ -3,11 +3,13 @@ package upstream
 import (
 	"context"
 	"crypto/tls"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -82,18 +84,49 @@ func openCodeBunDialTLS(targetHost string, tr *http.Transport) func(context.Cont
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
+	// Prefer IPv6 for the OpenCode host, falling back to IPv4 when the host
+	// has no usable IPv6 route. After the first failure the transport stops
+	// retrying IPv6, so an IPv4-only deployment does not pay a dial timeout
+	// on every request; a restart re-probes.
+	var ipv6Broken atomic.Bool
+
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			host = addr
 		}
-		raw, err := dial(ctx, network, addr)
+		// sameHost selects the Bun handshake. The family override only
+		// applies to hostnames: IP literals (loopback tests, explicit
+		// addresses) keep whatever family they already specify.
+		sameHost := targetHost != "" && strings.EqualFold(host, targetHost)
+		isTarget := sameHost && net.ParseIP(host) == nil
+
+		dialAddr := func() (net.Conn, error) {
+			if !isTarget {
+				return dial(ctx, network, addr)
+			}
+			if !ipv6Broken.Load() {
+				conn, err6 := dial(ctx, "tcp6", addr)
+				if err6 == nil {
+					return conn, nil
+				}
+				if ctx.Err() != nil {
+					return nil, err6
+				}
+				ipv6Broken.Store(true)
+				slog.Warn("opencode ipv6 dial failed, falling back to ipv4",
+					"host", host, "error", err6)
+			}
+			return dial(ctx, "tcp4", addr)
+		}
+
+		raw, err := dialAddr()
 		if err != nil {
 			return nil, err
 		}
 		hctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		if targetHost == "" || !strings.EqualFold(host, targetHost) {
+		if !sameHost {
 			return handshakeOpenCodeStandardTLS(hctx, raw, host, tr)
 		}
 		return handshakeOpenCodeBunTLS(hctx, raw, host, tr)

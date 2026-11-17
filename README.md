@@ -72,6 +72,8 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+The OpenCode client prefers IPv6 and falls back to IPv4 automatically, so no network configuration is needed. The compose service enables IPv6 on its network so the preferred path is available; on an IPv4-only host the same client simply uses the IPv4 fallback. The other upstreams are unaffected.
+
 Useful compose commands:
 
 ```bash
