@@ -1,15 +1,47 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"freegate/internal/config"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream"
 )
+
+// TestBuildUpstreams_WarpWithoutPoolFailsClosed guards the typed-nil interface
+// trap: with EGRESS_MODE=off there is no pool, so buildUpstreams must hand the
+// builtins a truly nil Egress. A typed-nil *egress.Pool in the interface would
+// slip past every `eg == nil` guard and make WARP mode dial the host's own IP
+// instead of failing closed.
+func TestBuildUpstreams_WarpWithoutPoolFailsClosed(t *testing.T) {
+	cfg := &config.Config{
+		UpstreamURLOpenCode: "https://opencode.example/v1",
+		UpstreamKeyOpenCode: []string{"public"},
+		UpstreamURLKilo:     "https://kilo.example/v1",
+		UpstreamKeyKilo:     "anonymous",
+		UpstreamURLLLM7:     "https://llm7.example/v1",
+		EgressMode:          "off",
+	}
+	opencode, _, _, eg, err := buildUpstreams(cfg, upstream.NewTransport())
+	if err != nil {
+		t.Fatalf("build upstreams: %v", err)
+	}
+	if eg != nil {
+		t.Fatalf("expected nil egress with EGRESS_MODE=off, got %#v", eg)
+	}
+	// Selecting WARP with no pool must fail closed, never dial the host IP.
+	opencode.SetProxy("warp", nil)
+	_, err = opencode.ListModels(context.Background())
+	if err == nil || !errors.Is(err, upstream.ErrNoWarpPool) {
+		t.Fatalf("warp without pool must fail closed with ErrNoWarpPool, got: %v", err)
+	}
+}
 
 // TestApplyBuiltinProxies_DisabledPinGoesDirect guards the builtin path of
 // the disable-proxy rule: once the pool a builtin is pinned to is disabled,

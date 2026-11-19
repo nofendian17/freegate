@@ -45,29 +45,36 @@ func buildEgress(cfg *config.Config) (*egress.Pool, error) {
 }
 
 // buildUpstreams creates the three upstream clients sharing the same transport.
-func buildUpstreams(cfg *config.Config, tr *http.Transport) (*upstream.OpenCodeUpstream, *upstream.KiloUpstream, *upstream.LLM7Upstream, *egress.Pool, error) {
+func buildUpstreams(cfg *config.Config, tr *http.Transport) (*upstream.OpenCodeUpstream, *upstream.KiloUpstream, *upstream.LLM7Upstream, upstream.Egress, error) {
 	pool, err := buildEgress(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	// Keep the Egress interface truly nil when no pool is configured: a typed
+	// nil *egress.Pool stored in the interface would defeat every `eg == nil`
+	// fail-closed check downstream (see upstream.NewWarpTransport).
+	var eg upstream.Egress
+	if pool != nil {
+		eg = pool
+	}
 	opencode := upstream.NewOpenCodeUpstreamWithEgress(
-		cfg.UpstreamURLOpenCode, cfg.UpstreamKeyOpenCode, tr, cfg.UpstreamOpenCodeFreeAllowlist, pool,
+		cfg.UpstreamURLOpenCode, cfg.UpstreamKeyOpenCode, tr, cfg.UpstreamOpenCodeFreeAllowlist, eg,
 	)
 	// Share RESPONSE_MODELS / MESSAGE_MODELS routing config with the handler
 	// so targetFormatForModel and buildURL agree on the endpoint.
 	opencode.SetResponseModels(cfg.ResponseModels)
 	opencode.SetMessageModels(cfg.MessageModels)
-	kilo := upstream.NewKiloUpstreamWithEgress(cfg.UpstreamURLKilo, cfg.UpstreamKeyKilo, tr, pool)
-	llm7 := upstream.NewLLM7UpstreamWithEgress(cfg.UpstreamURLLLM7, tr, pool)
-	return opencode, kilo, llm7, pool, nil
+	kilo := upstream.NewKiloUpstreamWithEgress(cfg.UpstreamURLKilo, cfg.UpstreamKeyKilo, tr, eg)
+	llm7 := upstream.NewLLM7UpstreamWithEgress(cfg.UpstreamURLLLM7, tr, eg)
+	return opencode, kilo, llm7, eg, nil
 }
 
 // buildUpstreamsAndRouter is exposed for Server struct initialization.
-func buildUpstreamsAndRouter(cfg *config.Config, tr *http.Transport) (*upstream.OpenCodeUpstream, *upstream.KiloUpstream, *upstream.LLM7Upstream, *upstream.Router, *egress.Pool, error) {
-	opencode, kilo, llm7, pool, err := buildUpstreams(cfg, tr)
+func buildUpstreamsAndRouter(cfg *config.Config, tr *http.Transport) (*upstream.OpenCodeUpstream, *upstream.KiloUpstream, *upstream.LLM7Upstream, *upstream.Router, upstream.Egress, error) {
+	opencode, kilo, llm7, eg, err := buildUpstreams(cfg, tr)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 	router := upstream.NewRouter(opencode, kilo, llm7)
-	return opencode, kilo, llm7, router, pool, nil
+	return opencode, kilo, llm7, router, eg, nil
 }
