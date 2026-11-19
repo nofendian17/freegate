@@ -57,6 +57,7 @@ const (
 	ProxyModeGlobal = ""
 	ProxyModeDirect = "direct"
 	ProxyModePool   = "pool"
+	ProxyModeWarp   = "warp"
 )
 
 // NormalizeProxyMode trims and lowercases the mode, mapping the "global"
@@ -67,6 +68,8 @@ func NormalizeProxyMode(mode string) string {
 		return ProxyModeDirect
 	case ProxyModePool:
 		return ProxyModePool
+	case ProxyModeWarp:
+		return ProxyModeWarp
 	default:
 		return ProxyModeGlobal
 	}

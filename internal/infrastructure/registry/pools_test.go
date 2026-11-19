@@ -108,6 +108,13 @@ func TestStore_BuiltinProxy(t *testing.T) {
 	if err != nil || b.ProxyMode != ProxyModeDirect || b.ProxyPoolID != nil {
 		t.Fatalf("direct must clear pin: %+v %v", b, err)
 	}
+	if _, err := s.SetBuiltinProxy(t.Context(), "kilo", "warp", &pool.ID); err != nil {
+		t.Fatalf("set warp: %v", err)
+	}
+	b, err = s.GetBuiltinProxy(t.Context(), "kilo")
+	if err != nil || b.ProxyMode != ProxyModeWarp || b.ProxyPoolID != nil {
+		t.Fatalf("warp must clear pin: %+v %v", b, err)
+	}
 	if _, err := s.SetBuiltinProxy(t.Context(), "llm7", "pool", &pool.ID); err != nil {
 		t.Fatalf("set pin: %v", err)
 	}

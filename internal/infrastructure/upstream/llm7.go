@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream/types"
 )
 
@@ -18,12 +19,23 @@ import (
 type LLM7Upstream struct {
 	client *HTTPClient
 	cache  *ModelCache
+	baseTr *http.Transport
+	warpTr *http.Transport
 }
 
 func NewLLM7UpstreamWithTransport(baseURL string, tr *http.Transport) *LLM7Upstream {
+	return NewLLM7UpstreamWithEgress(baseURL, tr, nil)
+}
+
+func NewLLM7UpstreamWithEgress(baseURL string, tr *http.Transport, eg Egress) *LLM7Upstream {
+	if tr == nil {
+		tr = NewTransport()
+	}
 	return &LLM7Upstream{
 		client: NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr),
 		cache:  NewModelCache(),
+		baseTr: tr,
+		warpTr: NewWarpTransport(eg, tr),
 	}
 }
 
@@ -32,6 +44,18 @@ func (u *LLM7Upstream) Name() string { return "llm7" }
 // SetRelayPools overrides edge-relay behavior: nil follows the global
 // rotation, an empty slice means direct, otherwise pinned to the pools.
 func (u *LLM7Upstream) SetRelayPools(pools []RelayPool) { u.client.SetRelayPools(pools) }
+
+// SetProxy sets both the proxy mode and the relay pools for LLM7.
+// When mode is "warp", traffic routes through the WARP exit pool.
+// Otherwise it routes directly or via the given relay pools.
+func (u *LLM7Upstream) SetProxy(mode string, pools []RelayPool) {
+	if registry.NormalizeProxyMode(mode) == registry.ProxyModeWarp {
+		u.client.SetTransport(u.warpTr)
+	} else {
+		u.client.SetTransport(u.baseTr)
+	}
+	u.client.SetRelayPools(pools)
+}
 
 func (u *LLM7Upstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	refresher := NewRefresher("llm7", func(ctx context.Context) error {

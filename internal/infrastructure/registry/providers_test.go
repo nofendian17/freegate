@@ -277,6 +277,13 @@ func TestStore_ProviderProxyPin(t *testing.T) {
 	if direct.ProxyPoolID != nil {
 		t.Fatalf("pool id must be cleared outside pool mode: %+v", direct)
 	}
+	warp, err := s.CreateProvider(t.Context(), Provider{Name: "warp", BaseURL: "https://example.test/v1", APIKeys: []string{"k"}, Enabled: true, ProxyMode: "warp", ProxyPoolID: &pool.ID})
+	if err != nil {
+		t.Fatalf("create warp: %v", err)
+	}
+	if warp.EffectiveProxyMode() != ProxyModeWarp || warp.ProxyPoolID != nil {
+		t.Fatalf("warp mode must be stored and pool id cleared: %+v", warp)
+	}
 	if err := s.UnpinPool(t.Context(), pool.ID); err != nil {
 		t.Fatalf("unpin: %v", err)
 	}

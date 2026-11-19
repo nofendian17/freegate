@@ -24,6 +24,7 @@ type ProviderManager struct {
 	mu        sync.RWMutex
 	store     *registry.Store
 	tr        *http.Transport
+	eg        Egress
 	customs   map[string]*CustomUpstream
 	intervals map[string]time.Duration
 	runCtx    context.Context
@@ -35,7 +36,11 @@ type ProviderManager struct {
 }
 
 func NewProviderManager(s *registry.Store, tr *http.Transport) *ProviderManager {
-	return &ProviderManager{store: s, tr: tr, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
+	return NewProviderManagerWithEgress(s, tr, nil)
+}
+
+func NewProviderManagerWithEgress(s *registry.Store, tr *http.Transport, eg Egress) *ProviderManager {
+	return &ProviderManager{store: s, tr: tr, eg: eg, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
 // relayPoolsCached resolves a provider's edge-relay setting to a pool list
@@ -85,7 +90,11 @@ func (m *ProviderManager) Rebuild(ctx context.Context) error {
 		if full.Models != nil && len(full.Models) == 0 {
 			slog.Warn("custom provider has no models selected, it will not route", "provider", full.Name)
 		}
-		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, m.tr)
+		tr := m.tr
+		if registry.NormalizeProxyMode(full.ProxyMode) == registry.ProxyModeWarp {
+			tr = NewWarpTransport(m.eg, m.tr)
+		}
+		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, tr)
 		fresh.SetRelayPools(m.relayPoolsCached(full, poolsByID))
 		m.mu.RLock()
 		old := m.customs[full.Name]

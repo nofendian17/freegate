@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -54,6 +55,15 @@ type Config struct {
 	// PR #4111). Substrings matched case-insensitively. Defaults to union-alpha.
 	MessageModels []string
 
+	// Egress routes OpenCode traffic through a pool of WARP sidecars so a
+	// free-tier limit can be answered with a fresh exit IP instead of an
+	// error. "off" (default) keeps direct connections.
+	EgressMode           string
+	EgressWarpPool       string
+	EgressCooldown       time.Duration
+	EgressFallbackDirect bool
+	EgressRotateTimeout  time.Duration
+
 	ProvidersDBPath string
 }
 
@@ -92,6 +102,12 @@ func Load() *Config {
 		),
 
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
+
+		EgressMode:           resolveEgressMode(os.Getenv("EGRESS_MODE"), os.Getenv("EGRESS_WARP_POOL")),
+		EgressWarpPool:       envStr("EGRESS_WARP_POOL", ""),
+		EgressCooldown:       envDuration("EGRESS_COOLDOWN", time.Minute),
+		EgressFallbackDirect: envBool("EGRESS_FALLBACK_DIRECT", true),
+		EgressRotateTimeout:  envDuration("EGRESS_ROTATE_TIMEOUT", 90*time.Second),
 	}
 
 	// API_KEY was removed in favour of DB-managed client keys. Warn loudly so
@@ -132,6 +148,12 @@ func (c *Config) Validate() error {
 		errs = append(errs, "MAX_REQUEST_BODY_MB must be positive")
 	}
 
+	switch c.EgressMode {
+	case "", "off", "warp":
+	default:
+		errs = append(errs, fmt.Sprintf("EGRESS_MODE must be off or warp, got %q", c.EgressMode))
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 	}
@@ -143,6 +165,17 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func resolveEgressMode(mode, pool string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "" {
+		return mode
+	}
+	if strings.TrimSpace(pool) != "" {
+		return "warp"
+	}
+	return "off"
 }
 
 func envInt(key string, def int) int {
@@ -167,6 +200,15 @@ func envSlice(key, def string) []string {
 		}
 	}
 	return result
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
 }
 
 func envBool(key string, def bool) bool {

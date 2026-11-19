@@ -1,8 +1,9 @@
-.PHONY: help test test-v test-cover test-race build run css up down restart logs ps ps-all clean tidy vet fmt check compose-build compose-pull
+.PHONY: help test test-v test-cover test-race build run css up down restart logs ps ps-all clean tidy vet fmt check compose-build compose-pull up-warp down-warp
 
 BINARY   := bin/freegate
 PKG      := ./...
 COMPOSE  := docker compose
+WARP_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.warp.yml
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -66,9 +67,16 @@ compose-build: ## Build service images
 compose-pull: ## Pull service images
 	$(COMPOSE) pull
 
+up-warp: ## Start with the WARP egress pool (builds the sidecars)
+	$(WARP_COMPOSE) up -d --build
+
+down-warp: ## Stop the WARP stack
+	$(WARP_COMPOSE) down
+
 rebuild: ## Rebuild and restart a service (usage: make rebuild svc=proxy)
 	$(COMPOSE) up -d --build $(svc)
 
 clean: ## Stop services and remove build artifacts
 	$(COMPOSE) down -v
+	$(WARP_COMPOSE) down -v
 	rm -rf bin coverage.out coverage.html

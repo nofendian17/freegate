@@ -21,7 +21,7 @@ import (
 // used in the warning (e.g. "opencode", "custom:acme").
 func ResolveRelayPools(owner, mode string, poolID *uint, getPool func(uint) (registry.ProxyPool, error)) []RelayPool {
 	switch registry.NormalizeProxyMode(mode) {
-	case registry.ProxyModeDirect:
+	case registry.ProxyModeDirect, registry.ProxyModeWarp:
 		return []RelayPool{}
 	case registry.ProxyModePool:
 		if poolID == nil {

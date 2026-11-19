@@ -38,6 +38,33 @@ Relay behavior: `UPSTREAM_OPENCODE_BUN_TLS` applies only to the direct connectio
 
 Address family: the direct OpenCode connection prefers IPv6 and falls back to IPv4 when the host has no usable IPv6 route. The failure is remembered per client until restart, so IPv4-only deployments pay the penalty once instead of on every request. No configuration is required; relay and proxy-pool connections keep the dialer's default behavior.
 
+### Egress: WARP pool (OpenCode only)
+
+Optional. When enabled, connections to the configured OpenCode host are dialed through a pool of WARP sidecars instead of the host's own address. OpenCode's free tier is counted per exit IP, so a `429 FreeUsageLimitError` is answered by rotating the sidecar that served the request and retrying once. Generic 429s (per-key rate limits) never trigger a rotation — freegate's key cooldown handles those.
+
+The sidecars are official Cloudflare clients behind a SOCKS5 listener (built from `deploy/warp-control`, based on `caomingjun/warp`). Rotation runs `warp-cli tunnel rotate-keys` + `tunnel endpoint reset` + reconnect, which keeps the device registration and avoids Cloudflare's rate-limited registration API. Registration is stored in `/var/lib/cloudflare-warp`, so each container needs its own volume.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `EGRESS_MODE` | No | `off` | `off` = direct connections; `warp` = dial the OpenCode host through the pool |
+| `EGRESS_WARP_POOL` | When `warp` | _(empty)_ | Comma-separated `host:port[@control-url]`. The control URL is the sidecar's rotation API (`POST /rotate`, `GET /ip`). Example: `warp-1:1080@http://warp-1:8081,warp-2:1080@http://warp-2:8081` |
+| `EGRESS_FALLBACK_DIRECT` | No | `true` | When every sidecar is down or cooling, dial directly instead of failing the request. Set `false` to fail closed (never leak the host IP) |
+| `EGRESS_COOLDOWN` | No | `60s` | How long a sidecar is skipped after a failed dial or failed rotation |
+| `EGRESS_ROTATE_TIMEOUT` | No | `90s` | Upper bound for one rotation; a dial that arrives mid-rotation waits this long plus a margin |
+
+Enable it with the compose override, which builds three sidecars and wires `EGRESS_WARP_POOL`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d --build
+```
+
+Notes:
+
+- Only direct OpenCode connections use the pool. Relay pools rewrite the request to the relay host, and those keep their existing path.
+- The uTLS Bun handshake is preserved: the sidecar only carries the TCP bytes, and freegate still performs the ClientHello itself. Do not replace this with `http.Transport.Proxy` (a CONNECT proxy would terminate TLS in the proxy and lose the fingerprint).
+- A rotation closes idle connections so later requests dial the new exit; in-flight streams are never retried.
+- `EGRESS_MODE=warp` with an empty or malformed `EGRESS_WARP_POOL` is a startup error: freegate refuses to boot rather than silently sending OpenCode traffic from the host's own IP. `EGRESS_FALLBACK_DIRECT` applies at runtime, when the configured sidecars are unreachable.
+
 ### Kilo (OpenRouter)
 
 | Variable | Required | Default | Description |

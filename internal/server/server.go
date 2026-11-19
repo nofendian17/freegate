@@ -113,15 +113,16 @@ func applyBuiltinProxies(ctx context.Context, pstore *registry.Store, opencode *
 	for _, b := range settings {
 		byName[b.Name] = b
 	}
-	for name, set := range map[string]func([]upstream.RelayPool){
-		"opencode": opencode.SetRelayPools,
-		"kilo":     kilo.SetRelayPools,
-		"llm7":     llm7.SetRelayPools,
+	for name, set := range map[string]func(string, []upstream.RelayPool){
+		"opencode": opencode.SetProxy,
+		"kilo":     kilo.SetProxy,
+		"llm7":     llm7.SetProxy,
 	} {
 		b := byName[name]
-		set(upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
+		pools := upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
 			return pstore.GetPool(ctx, id)
-		}))
+		})
+		set(b.ProxyMode, pools)
 	}
 	return nil
 }
@@ -144,7 +145,10 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// pools idle connections once instead of per-upstream.
 	sharedTr := buildSharedTransport()
 
-	opencode, kilo, llm7, infraRouter := buildUpstreamsAndRouter(cfg, sharedTr)
+	opencode, kilo, llm7, infraRouter, egressPool, err := buildUpstreamsAndRouter(cfg, sharedTr)
+	if err != nil {
+		return nil, err
+	}
 
 	pstore, err := registry.Open(ctx, cfg.ProvidersDBPath)
 	if err != nil {
@@ -156,7 +160,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 			_ = pstore.Close()
 		}
 	}()
-	mgr := upstream.NewProviderManager(pstore, sharedTr)
+	mgr := upstream.NewProviderManagerWithEgress(pstore, sharedTr, egressPool)
 	if err := mgr.Rebuild(ctx); err != nil {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
@@ -263,6 +267,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// catalog; customs report their curated selection (which seeds their
 	// cache at rebuild).
 	adminHandler := admin.New(pstore, rebuild, sharedTr).
+		WithEgress(egressPool).
 		WithWarmer(mgr.Warm).
 		WithCatalog(func() map[string][]string {
 			out := make(map[string][]string, 4)

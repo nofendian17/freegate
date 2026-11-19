@@ -158,10 +158,11 @@
   }
 
   // Proxy dropdown: "" = global rotation, "direct" = no relay,
-  // "pool:<id>" = pinned pool.
+  // "warp" = WARP egress, "pool:<id>" = pinned pool.
   function parseProxy() {
     var v = document.getElementById('f-proxy').value || '';
     if (v === 'direct') return { proxy_mode: 'direct' };
+    if (v === 'warp') return { proxy_mode: 'warp' };
     var m = /^pool:(\d+)$/.exec(v);
     if (m) return { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };
     return { proxy_mode: '' };
@@ -196,6 +197,7 @@
     if (!sel) return;
     var v = '';
     if (mode === 'direct') v = 'direct';
+    else if (mode === 'warp') v = 'warp';
     else if (mode === 'pool' && poolId != null) v = 'pool:' + poolId;
     if (v && !sel.querySelector('option[value="' + v + '"]')) {
       var opt = document.createElement('option');
@@ -459,6 +461,7 @@
     var v = sel.value || '';
     var payload = { proxy_mode: '' };
     if (v === 'direct') payload = { proxy_mode: 'direct' };
+    else if (v === 'warp') payload = { proxy_mode: 'warp' };
     else {
       var m = /^pool:(\d+)$/.exec(v);
       if (m) payload = { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };

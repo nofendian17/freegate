@@ -153,6 +153,9 @@ func TestResolveRelayPools(t *testing.T) {
 	if got := ResolveRelayPools("u", "direct", nil, get); len(got) != 0 || got == nil {
 		t.Fatalf("direct must be empty non-nil: %v", got)
 	}
+	if got := ResolveRelayPools("u", "warp", nil, get); len(got) != 0 || got == nil {
+		t.Fatalf("warp must be empty non-nil: %v", got)
+	}
 	id := uint(1)
 	got := ResolveRelayPools("u", "pool", &id, get)
 	if len(got) != 1 || got[0].URL != pool.ProxyURL || got[0].NoProxy != pool.NoProxy || !got[0].Strict {
