@@ -55,6 +55,18 @@ func TestValidate_NegativePort(t *testing.T) {
 	}
 }
 
+func TestValidate_EgressMode(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.EgressMode = "socks"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for unknown EGRESS_MODE")
+	}
+	cfg.EgressMode = "warp"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("EGRESS_MODE=warp should be valid: %v", err)
+	}
+}
+
 func TestEnvInt_Default(t *testing.T) {
 	val := envInt("NONEXISTENT_KEY", 42)
 	if val != 42 {

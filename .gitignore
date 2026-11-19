@@ -9,8 +9,10 @@
 
 # IDE
 .idea/
+.openidea/
 .vscode/
 *.swp
+.DS_Store
 
 # Claude
 .claude/dist/

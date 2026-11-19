@@ -91,6 +91,43 @@ func IsFreeTierRejection(resp *UpstreamResponse) bool {
 	return hasFreeTierMarker(peek)
 }
 
+// freeUsageProbeLimit bounds the body scan for a free-usage 429.
+const freeUsageProbeLimit = 8192
+
+// IsFreeUsageLimit reports whether an upstream response is OpenCode's
+// free-tier usage limit (HTTP 429, FreeUsageLimitError). The limit is counted
+// per internet address, so a caller that can change its exit IP may retry the
+// same request after rotating. Generic 429s (per-key rate limits, "too many
+// requests") are deliberately not matched: rotating for those would burn exit
+// identities without fixing anything.
+//
+// The body is peeked and rewound exactly like IsFreeTierRejection, so callers
+// can still read or close the response normally.
+func IsFreeUsageLimit(resp *UpstreamResponse) bool {
+	if resp == nil || resp.Body == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return false
+	}
+	peek, err := io.ReadAll(io.LimitReader(resp.Body, freeUsageProbeLimit+1))
+	resp.Body = &peekBody{reader: io.MultiReader(bytes.NewReader(peek), resp.Body), orig: resp.Body}
+	if err != nil {
+		return false
+	}
+	low := bytes.ToLower(peek)
+	for _, marker := range [][]byte{
+		[]byte("freeusagelimiterror"),
+		[]byte("free usage limit"),
+		[]byte("free usage exceeded"),
+		[]byte("free-tier usage limit"),
+		[]byte("quota exceeded"),
+		[]byte("resource_exhausted"),
+	} {
+		if bytes.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // hasFreeTierMarker parses envelope shapes the gateway emits:
 // {"error":{"type":"FreeTierError",...}} and {"type":"FreeTierError",...}.
 func hasFreeTierMarker(peek []byte) bool {
