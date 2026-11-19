@@ -52,7 +52,7 @@ func TestStruct_ResourceName(t *testing.T) {
 }
 
 func TestStruct_ProxyMode(t *testing.T) {
-	valid := []string{"", "direct", "pool", "global"}
+	valid := []string{"", "direct", "pool", "global", "warp"}
 	for _, mode := range valid {
 		value := mode
 		if err := Struct(proxyModeStruct{Mode: &value}); err != nil {

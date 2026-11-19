@@ -38,7 +38,7 @@ func newValidator() *validator.Validate {
 			return false
 		}
 		switch value.String() {
-		case "", "direct", "pool", "global":
+		case "", "direct", "pool", "global", "warp":
 			return true
 		default:
 			return false

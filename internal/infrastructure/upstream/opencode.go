@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/translate"
 )
@@ -44,6 +46,8 @@ type OpenCodeUpstream struct {
 	// handler.SetResponseModels/SetMessageModels via server wiring.
 	responseModels []string
 	messageModels  []string
+	directTr       *http.Transport
+	warpTr         *http.Transport
 }
 
 func NewOpenCodeUpstreamWithTransport(
@@ -51,6 +55,20 @@ func NewOpenCodeUpstreamWithTransport(
 	apiKeys []string,
 	tr *http.Transport,
 	freeAllowlist []string,
+) *OpenCodeUpstream {
+	return NewOpenCodeUpstreamWithEgress(baseURL, apiKeys, tr, freeAllowlist, nil)
+}
+
+// NewOpenCodeUpstreamWithEgress builds the OpenCode upstream with a rotatable
+// exit. When eg is non-nil, connections to the OpenCode host are dialed
+// through it and a free-tier 429 rotates the exit before one retry. eg nil
+// keeps the original direct behavior.
+func NewOpenCodeUpstreamWithEgress(
+	baseURL string,
+	apiKeys []string,
+	tr *http.Transport,
+	freeAllowlist []string,
+	eg Egress,
 ) *OpenCodeUpstream {
 	// Static headers for catalog fetches (/models). Chat requests build
 	// compliant per-request headers in ChatCompletion (see buildOpencodeHeaders),
@@ -71,17 +89,49 @@ func NewOpenCodeUpstreamWithTransport(
 			al[id] = true
 		}
 	}
-	return &OpenCodeUpstream{
+	var directTr, warpTr *http.Transport
+	if openCodeBunTLSEnabled() {
+		directTr = newOpenCodeBunTransport(baseURL, tr)
+		warpTr = newOpenCodeBunTransportWithEgressForced(baseURL, tr, eg)
+	} else {
+		if tr == nil {
+			directTr = NewTransport()
+		} else {
+			directTr = tr.Clone()
+		}
+		warpTr = NewWarpTransport(eg, tr)
+	}
+	o := &OpenCodeUpstream{
 		// newOpenCodeHTTPClient swaps in Bun's captured TLS ClientHello for
 		// the OpenCode host: the free-tier gate fingerprints the handshake,
 		// so stock Go crypto/tls is rejected (429 FreeUsageLimitError) even
 		// with byte-identical HTTP headers and body. Relays keep standard TLS.
-		client:         newOpenCodeHTTPClient(baseURL, apiKeys, headers, tr),
+		client:         NewHTTPClientWithTransport(baseURL, apiKeys, headers, directTr),
 		cache:          NewModelCache(),
 		allowlist:      al,
 		responseModels: append([]string(nil), defaultOpenCodeResponseModels...),
 		messageModels:  append([]string(nil), defaultOpenCodeMessageModels...),
+		directTr:       directTr,
+		warpTr:         warpTr,
 	}
+	if eg != nil {
+		if !openCodeBunTLSEnabled() {
+			// The pool is applied by the Bun transport's dialer. Without it
+			// OpenCode dials directly, so rotating would change nothing.
+			slog.Warn("egress: WARP pool configured but UPSTREAM_OPENCODE_BUN_TLS=false; OpenCode traffic will not use it")
+			return o
+		}
+		// Only a genuine free-usage limit rotates the exit. The probe rewinds
+		// the body, so a non-limit 429 still reaches the caller unchanged.
+		o.client.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
+			if !isFreeUsageLimit(resp) {
+				return false
+			}
+			eg.RotateAsync("opencode free usage limit")
+			return true
+		})
+	}
+	return o
 }
 
 // SetResponseModels overrides the substring list routing to /responses.
@@ -140,6 +190,18 @@ func (o *OpenCodeUpstream) Name() string {
 // SetRelayPools overrides edge-relay behavior: nil follows the global
 // rotation, an empty slice means direct, otherwise pinned to the pools.
 func (o *OpenCodeUpstream) SetRelayPools(pools []RelayPool) { o.client.SetRelayPools(pools) }
+
+// SetProxy sets both the proxy mode and the relay pools for OpenCode.
+// When mode is "warp", traffic routes through the WARP exit pool.
+// Otherwise it routes directly or via the given relay pools.
+func (o *OpenCodeUpstream) SetProxy(mode string, pools []RelayPool) {
+	if registry.NormalizeProxyMode(mode) == registry.ProxyModeWarp {
+		o.client.SetTransport(o.warpTr)
+	} else {
+		o.client.SetTransport(o.directTr)
+	}
+	o.client.SetRelayPools(pools)
+}
 
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {
 	// Client-version probe runs alongside the model catalog refresher so

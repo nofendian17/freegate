@@ -35,6 +35,11 @@ type HTTPClient struct {
 	// direct (no relay). Nil follows the global rotation. Atomic so
 	// admin rebuilds can swap it while requests are in flight.
 	relay atomic.Pointer[RelaySelector]
+	// onFreeLimit is called on a 429 whose body looks like an upstream
+	// free-tier usage limit. Returning true makes the client retry once
+	// after the hook refreshed the egress identity. Set at construction;
+	// nil means the upstream has no rotatable exit.
+	onFreeLimit func(ctx context.Context, resp *http.Response) bool
 }
 
 // SetRelay overrides the relay selector for this client. Nil restores the
@@ -52,6 +57,20 @@ func (c *HTTPClient) SetRelayPools(pools []RelayPool) {
 	sel := NewRelaySelector()
 	sel.SetPools(append([]RelayPool(nil), pools...))
 	c.SetRelay(sel)
+}
+
+// SetTransport swaps the underlying HTTP transport used by the client.
+func (c *HTTPClient) SetTransport(tr *http.Transport) {
+	if c == nil || c.client == nil || tr == nil {
+		return
+	}
+	c.client.Transport = tr
+}
+
+// SetFreeLimitHook installs the callback invoked when a 429 looks like a
+// free-tier usage limit. It is set once, before the client serves traffic.
+func (c *HTTPClient) SetFreeLimitHook(fn func(context.Context, *http.Response) bool) {
+	c.onFreeLimit = fn
 }
 
 func (c *HTTPClient) relayOrShared() *RelaySelector {
@@ -209,7 +228,10 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 	if attempts < 1 {
 		attempts = 1
 	}
-	for attempt := 0; attempt < attempts; attempt++ {
+	// One extra attempt is allowed when the free-tier hook rotated the egress
+	// identity: the request is rebuilt and sent out through the new exit.
+	egressRetried := false
+	for attempt := 0; attempt < attempts; {
 		req, err := build()
 		if err != nil {
 			return nil, err
@@ -263,10 +285,24 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 		if err != nil {
 			return nil, err
 		}
-		if resp.StatusCode == http.StatusTooManyRequests && len(c.apiKeys) > 1 && attempt+1 < attempts {
-			c.cooldown.mark(key)
-			_ = resp.Body.Close()
-			continue
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// Free-tier usage limit: rotate the exit and retry once on the
+			// same key. The hook peeks and rewinds the body, so a non-limit
+			// 429 still reaches the caller unchanged.
+			if c.onFreeLimit != nil && !egressRetried && c.onFreeLimit(ctx, resp) {
+				egressRetried = true
+				_ = resp.Body.Close()
+				// A pooled connection opened on the old exit would keep
+				// using it; drop them so the retry dials the new one.
+				c.CloseIdleConnections()
+				continue
+			}
+			if len(c.apiKeys) > 1 && attempt+1 < attempts {
+				c.cooldown.mark(key)
+				_ = resp.Body.Close()
+				attempt++
+				continue
+			}
 		}
 		return resp, nil
 	}

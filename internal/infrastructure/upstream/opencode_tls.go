@@ -44,13 +44,29 @@ func openCodeBunTLSEnabled() bool {
 // hosts reached by this transport keep standard Go TLS, so relay behavior is
 // unchanged.
 func newOpenCodeHTTPClient(baseURL string, apiKeys []string, headers map[string]string, tr *http.Transport) *HTTPClient {
+	return newOpenCodeHTTPClientWithEgress(baseURL, apiKeys, headers, tr, nil)
+}
+
+func newOpenCodeHTTPClientWithEgress(baseURL string, apiKeys []string, headers map[string]string, tr *http.Transport, eg Egress) *HTTPClient {
 	if openCodeBunTLSEnabled() {
-		tr = newOpenCodeBunTransport(baseURL, tr)
+		tr = newOpenCodeBunTransportWithEgress(baseURL, tr, eg)
 	}
 	return NewHTTPClientWithTransport(baseURL, apiKeys, headers, tr)
 }
 
 func newOpenCodeBunTransport(baseURL string, base *http.Transport) *http.Transport {
+	return newOpenCodeBunTransportWithEgress(baseURL, base, nil)
+}
+
+func newOpenCodeBunTransportWithEgress(baseURL string, base *http.Transport, eg Egress) *http.Transport {
+	return newOpenCodeBunTransportWithEgressOpt(baseURL, base, eg, false)
+}
+
+func newOpenCodeBunTransportWithEgressForced(baseURL string, base *http.Transport, eg Egress) *http.Transport {
+	return newOpenCodeBunTransportWithEgressOpt(baseURL, base, eg, true)
+}
+
+func newOpenCodeBunTransportWithEgressOpt(baseURL string, base *http.Transport, eg Egress, forceEgress bool) *http.Transport {
 	if base == nil {
 		base = NewTransport()
 	}
@@ -60,7 +76,7 @@ func newOpenCodeBunTransport(baseURL string, base *http.Transport) *http.Transpo
 	// captured ClientHello never offers.
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
-	tr.DialTLSContext = openCodeBunDialTLS(openCodeTargetHost(baseURL), tr)
+	tr.DialTLSContext = openCodeBunDialTLSOpt(openCodeTargetHost(baseURL), tr, eg, forceEgress)
 	return tr
 }
 
@@ -75,6 +91,17 @@ func openCodeTargetHost(baseURL string) string {
 }
 
 func openCodeBunDialTLS(targetHost string, tr *http.Transport) func(context.Context, string, string) (net.Conn, error) {
+	return openCodeBunDialTLSWithEgress(targetHost, tr, nil)
+}
+
+// openCodeBunDialTLSWithEgress dials through eg when it is set, so the
+// OpenCode host leaves from a WARP exit while every other host keeps the
+// regular path. The uTLS handshake is unchanged: only the raw dial differs.
+func openCodeBunDialTLSWithEgress(targetHost string, tr *http.Transport, eg Egress) func(context.Context, string, string) (net.Conn, error) {
+	return openCodeBunDialTLSOpt(targetHost, tr, eg, false)
+}
+
+func openCodeBunDialTLSOpt(targetHost string, tr *http.Transport, eg Egress, forceEgress bool) func(context.Context, string, string) (net.Conn, error) {
 	dial := tr.DialContext
 	if dial == nil {
 		d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
@@ -104,6 +131,14 @@ func openCodeBunDialTLS(targetHost string, tr *http.Transport) func(context.Cont
 		dialAddr := func() (net.Conn, error) {
 			if !isTarget {
 				return dial(ctx, network, addr)
+			}
+			if eg != nil {
+				// The exit resolves the hostname inside the tunnel, so no
+				// DNS query (and no IPv4/IPv6 family choice) leaks here.
+				return eg.DialContext(ctx, "tcp", addr)
+			}
+			if forceEgress {
+				return nil, ErrNoWarpPool
 			}
 			if !ipv6Broken.Load() {
 				conn, err6 := dial(ctx, "tcp6", addr)
