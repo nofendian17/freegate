@@ -25,6 +25,7 @@ type Handler struct {
 	store     *registry.Store
 	rebuild   func(context.Context) error
 	transport *http.Transport
+	eg        upstream.Egress
 	// warm synchronously loads one custom provider's model catalog so it
 	// routes immediately after add/update/test. Nil in tests that don't
 	// wire a ProviderManager; all uses are best-effort.
@@ -46,6 +47,12 @@ func New(store *registry.Store, rebuild func(context.Context) error, transport *
 // Follows the existing WithX setter pattern (cf. ChatService).
 func (h *Handler) WithWarmer(fn func(context.Context, string) ([]domain.Model, error)) *Handler {
 	h.warm = fn
+	return h
+}
+
+// WithEgress attaches the egress pool used for WARP test probes.
+func (h *Handler) WithEgress(eg upstream.Egress) *Handler {
+	h.eg = eg
 	return h
 }
 
@@ -163,7 +170,7 @@ type providerIn struct {
 // pool details don't query twice.
 func (h *Handler) resolveProxy(ctx context.Context, mode string, poolID *uint) (pools []upstream.RelayPool, pool *registry.ProxyPool, err error) {
 	switch registry.NormalizeProxyMode(mode) {
-	case registry.ProxyModeDirect:
+	case registry.ProxyModeDirect, registry.ProxyModeWarp:
 		return []upstream.RelayPool{}, nil, nil
 	case registry.ProxyModePool:
 		if poolID == nil {
@@ -300,12 +307,12 @@ func (h *Handler) testProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	// Test travels the same relay path as production traffic for this
 	// provider (pinned pool, direct, or global rotation).
-	sel, err := h.selectorForTest(r.Context(), row.ProxyMode, row.ProxyPoolID)
+	sel, tr, err := h.proxyForTest(r.Context(), row.ProxyMode, row.ProxyPoolID)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": probeErrorMessage(err)})
 		return
 	}
-	ids, status, latencyMs, err := h.probeCatalog(r.Context(), row.BaseURL, row.APIKeys, row.Headers, sel)
+	ids, status, latencyMs, err := h.probeCatalog(r.Context(), row.BaseURL, row.APIKeys, row.Headers, sel, tr)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -328,17 +335,44 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	sel, err := h.selectorForTest(r.Context(), in.ProxyMode, in.ProxyPoolID)
+	sel, tr, err := h.proxyForTest(r.Context(), in.ProxyMode, in.ProxyPoolID)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": probeErrorMessage(err)})
 		return
 	}
-	ids, status, latencyMs, err := h.probeCatalog(r.Context(), in.BaseURL, in.APIKeys, in.Headers, sel)
+	ids, status, latencyMs, err := h.probeCatalog(r.Context(), in.BaseURL, in.APIKeys, in.Headers, sel, tr)
 	if err != nil {
 		respond.JSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": status < 300, "modelCount": len(ids), "models": ids, "latencyMs": latencyMs, "status": status})
+}
+
+// proxyForTest resolves a proxy selection to the relay selector and transport a
+// probe should travel through.
+func (h *Handler) proxyForTest(ctx context.Context, mode string, poolID *uint) (*upstream.RelaySelector, *http.Transport, error) {
+	relays, pool, err := h.resolveProxy(ctx, mode, poolID)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch registry.NormalizeProxyMode(mode) {
+	case registry.ProxyModeDirect:
+		return nil, h.transport, nil
+	case registry.ProxyModeWarp:
+		return nil, upstream.NewWarpTransport(h.eg, h.transport), nil
+	case registry.ProxyModePool:
+		if pool == nil {
+			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)
+		}
+		if !pool.Enabled {
+			return nil, nil, fmt.Errorf("%w: proxy pool %q is disabled", registry.ErrInvalidArgument, pool.Name)
+		}
+		sel := upstream.NewRelaySelector()
+		sel.SetPools(relays)
+		return sel, h.transport, nil
+	default:
+		return upstream.SharedRelay, h.transport, nil
+	}
 }
 
 // selectorForTest resolves a proxy selection to the relay selector a
@@ -348,26 +382,8 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 // so the editor surfaces the misconfiguration; production traffic for a
 // disabled pin connects directly instead of using another relay.
 func (h *Handler) selectorForTest(ctx context.Context, mode string, poolID *uint) (*upstream.RelaySelector, error) {
-	relays, pool, err := h.resolveProxy(ctx, mode, poolID)
-	if err != nil {
-		return nil, err
-	}
-	switch registry.NormalizeProxyMode(mode) {
-	case registry.ProxyModeDirect:
-		return nil, nil
-	case registry.ProxyModePool:
-		if pool == nil {
-			return nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)
-		}
-		if !pool.Enabled {
-			return nil, fmt.Errorf("%w: proxy pool %q is disabled", registry.ErrInvalidArgument, pool.Name)
-		}
-		sel := upstream.NewRelaySelector()
-		sel.SetPools(relays)
-		return sel, nil
-	default:
-		return upstream.SharedRelay, nil
-	}
+	sel, _, err := h.proxyForTest(ctx, mode, poolID)
+	return sel, err
 }
 
 // probeCatalog GETs baseURL/models and returns the deduped model IDs in
@@ -376,7 +392,7 @@ func (h *Handler) selectorForTest(ctx context.Context, mode string, poolID *uint
 // key); the first API key takes precedence when both are set.
 // sel carries the relay path (nil = direct); a failed non-strict relay
 // retries direct once, mirroring HTTPClient production behavior.
-func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []string, headers map[string]string, sel *upstream.RelaySelector) (ids []string, status int, latencyMs int64, err error) {
+func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []string, headers map[string]string, sel *upstream.RelaySelector, tr *http.Transport) (ids []string, status int, latencyMs int64, err error) {
 	start := time.Now()
 	build := func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+"/models", nil)
@@ -402,7 +418,9 @@ func (h *Handler) probeCatalog(ctx context.Context, baseURL string, keys []strin
 	if sel != nil {
 		strict, applied = sel.ApplyStrict(req)
 	}
-	tr := h.transport
+	if tr == nil {
+		tr = h.transport
+	}
 	if tr == nil {
 		tr = http.DefaultTransport.(*http.Transport).Clone()
 	}

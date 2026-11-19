@@ -735,6 +735,14 @@ func TestAdmin_ProviderProxyPin(t *testing.T) {
 	if raw.EffectiveProxyMode() != registry.ProxyModeDirect || raw.ProxyPoolID != nil {
 		t.Fatalf("direct must clear pin: %+v", raw)
 	}
+	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1","proxy_mode":"warp"}`, http.StatusOK)
+	raw, err = s.GetProviderRaw(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.EffectiveProxyMode() != registry.ProxyModeWarp || raw.ProxyPoolID != nil {
+		t.Fatalf("warp must clear pin: %+v", raw)
+	}
 	request("PUT", path, `{"name":"pinned","base_url":"https://example.test/v1",`+pin+`}`, http.StatusOK)
 	// Omitted proxy fields keep the stored pin (omit-vs-explicit contract,
 	// same as models): a partial body must not reset the pin to global.
@@ -819,8 +827,13 @@ func TestAdmin_BuiltinProxy(t *testing.T) {
 	if err != nil || got.ProxyMode != "direct" || got.ProxyPoolID != nil {
 		t.Fatalf("direct not stored: %+v %v", got, err)
 	}
-	if rebuilt != 3 {
-		t.Fatalf("rebuilds=%d, want 3", rebuilt)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"warp"}`, http.StatusOK)
+	got, err = s.GetBuiltinProxy(t.Context(), "kilo")
+	if err != nil || got.ProxyMode != "warp" || got.ProxyPoolID != nil {
+		t.Fatalf("warp not stored: %+v %v", got, err)
+	}
+	if rebuilt != 4 {
+		t.Fatalf("rebuilds=%d, want 4", rebuilt)
 	}
 }
 
