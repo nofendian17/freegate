@@ -70,6 +70,10 @@ release:
   github:
     owner: nofendian17
     name: freegate
+  # A tag like v0.23.0-alpha.4 must be published as a prerelease and must
+  # not displace the last stable release from GitHub's "Latest" slot.
+  prerelease: auto
+  make_latest: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
   footer: |
     ## Single binary (no Docker)
 
