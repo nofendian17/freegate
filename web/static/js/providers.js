@@ -158,13 +158,14 @@
   }
 
   // Proxy dropdown: "" = global rotation, "direct" = no relay,
-  // "warp" = WARP egress, "pool:<id>" = pinned pool.
+  // "warp" = env default WARP pool, "warp:<id>" = pinned WARP pool,
+  // "pool:<id>" = pinned relay pool.
   function parseProxy() {
     var v = document.getElementById('f-proxy').value || '';
     if (v === 'direct') return { proxy_mode: 'direct' };
     if (v === 'warp') return { proxy_mode: 'warp' };
-    var m = /^pool:(\d+)$/.exec(v);
-    if (m) return { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };
+    var m = /^(pool|warp):(\d+)$/.exec(v);
+    if (m) return { proxy_mode: m[1], proxy_pool_id: parseInt(m[2], 10) };
     return { proxy_mode: '' };
   }
 
@@ -173,15 +174,57 @@
   // from poolsCache. Preserves the current value, including stale pins.
   var poolsCache = [];
 
+  // The static "warp" option uses the env default pool (ID 0), which only
+  // exists when EGRESS_MODE resolves to warp. Pinned "warp:<id>" entries
+  // come from the DB and work regardless of that env mode. Reflect that in
+  // the UI so the static option cannot silently fail closed.
+  var defaultWarpReady = null; // null until /api/egress responds
+
+  function applyWarpAvailability() {
+    if (defaultWarpReady === null) return;
+    var selects = [document.getElementById('f-proxy')].concat(builtinNames.map(builtinSelect));
+    selects.forEach(function (sel) {
+      if (!sel) return;
+      var opt = sel.querySelector('option[value="warp"]');
+      if (!opt) return;
+      opt.disabled = !defaultWarpReady;
+      opt.textContent = defaultWarpReady
+        ? 'WARP — Cloudflare WARP exit (default pool)'
+        : 'WARP — needs EGRESS_MODE=warp (pin a WARP pool instead)';
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-warp-hint]'), function (hint) {
+      hint.classList.toggle('hidden', defaultWarpReady);
+    });
+  }
+
+  function loadEgress() {
+    return getJSON('/api/egress')
+      .then(function (body) {
+        // /api/egress returns {"data":null} when no pool exists — `||`
+        // would fall through to the wrapper object and .some would throw.
+        var pools = Array.isArray(body.data) ? body.data : (Array.isArray(body) ? body : []);
+        defaultWarpReady = pools.some(function (p) {
+          return p.default && (p.endpoints || []).length > 0;
+        });
+        applyWarpAvailability();
+      })
+      .catch(function () {
+        // Unknown availability: leave the markup untouched rather than
+        // disabling an option that might actually work.
+        defaultWarpReady = null;
+      });
+  }
+
   function renderPoolOptions(sel) {
     if (!sel) return;
     var cur = sel.value;
     Array.prototype.forEach.call(sel.querySelectorAll('option[data-pool]'), function (o) { o.remove(); });
     poolsCache.forEach(function (pl) {
+      var warp = pl.kind === 'warp';
       var opt = document.createElement('option');
-      opt.value = 'pool:' + pl.id;
+      opt.value = (warp ? 'warp:' : 'pool:') + pl.id;
       opt.setAttribute('data-pool', '1');
-      opt.textContent = pl.name + (pl.enabled ? '' : ' (disabled)');
+      opt.textContent = pl.name + (warp ? ' (WARP)' : '') + (pl.enabled ? '' : ' (disabled)');
       sel.appendChild(opt);
     });
     // A stale pin becomes real again when its pool reappears.
@@ -197,13 +240,13 @@
     if (!sel) return;
     var v = '';
     if (mode === 'direct') v = 'direct';
-    else if (mode === 'warp') v = 'warp';
+    else if (mode === 'warp') v = poolId != null ? 'warp:' + poolId : 'warp';
     else if (mode === 'pool' && poolId != null) v = 'pool:' + poolId;
     if (v && !sel.querySelector('option[value="' + v + '"]')) {
       var opt = document.createElement('option');
       opt.value = v;
       opt.setAttribute('data-stale', '1');
-      opt.textContent = 'pool #' + v.slice(5) + ' (unavailable)';
+      opt.textContent = 'pool #' + v.slice(v.indexOf(':') + 1) + ' (unavailable)';
       sel.appendChild(opt);
     }
     sel.value = v;
@@ -357,9 +400,12 @@
     }
     poolTable.innerHTML = rows.map(function (p) {
       var status = p.test_status ? p.test_status : '—';
+      var warp = p.kind === 'warp';
+      var detail = warp ? p.warp_endpoints : p.proxy_url;
       return '<tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">' +
-        '<td class="px-5 py-3 font-mono text-caption">' + esc(p.name) + '</td>' +
-        '<td class="max-w-64 truncate px-5 py-3 font-mono text-caption text-mid-gray">' + esc(p.proxy_url) + '</td>' +
+        '<td class="px-5 py-3 font-mono text-caption">' + esc(p.name) +
+          (warp ? ' <span class="rounded-2xl bg-ink-soft px-1.5 py-0.5 text-caption text-surface-alt">warp</span>' : '') + '</td>' +
+        '<td class="max-w-64 truncate px-5 py-3 font-mono text-caption text-mid-gray">' + esc(detail) + '</td>' +
         '<td class="px-5 py-3 text-caption ' + (p.test_status === 'error' ? 'text-ember' : 'text-mid-gray') + '">' + esc(status) + '</td>' +
         '<td class="px-5 py-3"><span class="inline-flex items-center rounded-2xl px-2 py-0.5 text-caption font-medium ' +
           (p.enabled ? 'bg-ink-soft text-surface-alt">on' : 'bg-canvas text-mid-gray">off') + '</span></td>' +
@@ -392,21 +438,33 @@
     renderPoolOptions(document.getElementById('f-proxy'));
   }
 
+  // Pool kind switch: relay fields vs WARP endpoint fields.
+  function applyPoolKind(kind, deployMode) {
+    var warp = kind === 'warp';
+    document.getElementById('pf-relay-fields').classList.toggle('hidden', warp || !!deployMode);
+    document.getElementById('pf-warp-fields').classList.toggle('hidden', !warp || !!deployMode);
+    document.getElementById('pf-proxy-url').required = !warp && !deployMode;
+    document.getElementById('pf-warp-endpoints').required = warp;
+  }
+
   function openPoolModal(p, deployMode) {
     p = p || {};
     if (!Alpine.store('ui').poolModal) poolLastTrigger = document.activeElement;
     document.getElementById('pf-id').value = p.id || '';
     document.getElementById('pf-name').value = p.name || '';
+    var kind = p.kind === 'warp' ? 'warp' : 'relay';
+    document.getElementById('pf-kind').value = kind;
+    document.getElementById('pf-kind').closest('label').classList.toggle('hidden', !!deployMode);
     document.getElementById('pf-proxy-url').value = p.proxy_url || '';
+    document.getElementById('pf-warp-endpoints').value = p.warp_endpoints || '';
     document.getElementById('pf-no-proxy').value = p.no_proxy || '';
     document.getElementById('pf-enabled').checked = p.enabled !== false;
     document.getElementById('pf-strict').checked = !!p.strict_proxy;
     document.getElementById('pf-token').value = '';
     document.getElementById('pf-token-wrap').classList.toggle('hidden', !deployMode);
     document.getElementById('pf-token-wrap').classList.toggle('flex', !!deployMode);
-    document.getElementById('pf-proxy-url-wrap').classList.toggle('hidden', !!deployMode);
+    applyPoolKind(kind, deployMode);
     document.getElementById('pf-name').required = !deployMode;
-    document.getElementById('pf-proxy-url').required = !deployMode;
     document.getElementById('pf-name-hint').classList.toggle('hidden', !deployMode);
     document.getElementById('pf-explainer').classList.toggle('hidden', !deployMode);
     document.getElementById('pool-deploy-go').classList.toggle('hidden', !deployMode);
@@ -426,6 +484,9 @@
   }
 
   document.getElementById('pool-modal-close').addEventListener('click', closePoolModal);
+  document.getElementById('pf-kind').addEventListener('change', function () {
+    applyPoolKind(this.value, false);
+  });
   document.getElementById('pool-new').addEventListener('click', function () { openPoolModal({}, false); });
   document.getElementById('pool-deploy').addEventListener('click', function () { openPoolModal({}, true); });
 
@@ -463,8 +524,8 @@
     if (v === 'direct') payload = { proxy_mode: 'direct' };
     else if (v === 'warp') payload = { proxy_mode: 'warp' };
     else {
-      var m = /^pool:(\d+)$/.exec(v);
-      if (m) payload = { proxy_mode: 'pool', proxy_pool_id: parseInt(m[1], 10) };
+      var m = /^(pool|warp):(\d+)$/.exec(v);
+      if (m) payload = { proxy_mode: m[1], proxy_pool_id: parseInt(m[2], 10) };
     }
     sel.disabled = true;
     getJSON('/api/builtin-proxies/' + name, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(function () {
@@ -484,8 +545,10 @@
     var slug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
     if (!slug) { show(poolFormErr, 'name must contain a-z0-9'); return; }
     var payload = {
+      kind: document.getElementById('pf-kind').value === 'warp' ? 'warp' : 'relay',
       name: slug,
       proxy_url: document.getElementById('pf-proxy-url').value.trim(),
+      warp_endpoints: document.getElementById('pf-warp-endpoints').value.trim(),
       no_proxy: document.getElementById('pf-no-proxy').value.trim(),
       enabled: document.getElementById('pf-enabled').checked,
       strict_proxy: document.getElementById('pf-strict').checked,
@@ -793,6 +856,7 @@
 
   loadProviders();
   loadPools();
+  loadEgress();
   loadBuiltinProxies();
   loadCombos();
   loadTierEditor();

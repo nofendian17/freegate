@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream/types"
 )
@@ -19,23 +20,21 @@ import (
 type LLM7Upstream struct {
 	client *HTTPClient
 	cache  *ModelCache
-	baseTr *http.Transport
-	warpTr *http.Transport
+	trs    *transportPair
 }
 
 func NewLLM7UpstreamWithTransport(baseURL string, tr *http.Transport) *LLM7Upstream {
 	return NewLLM7UpstreamWithEgress(baseURL, tr, nil)
 }
 
-func NewLLM7UpstreamWithEgress(baseURL string, tr *http.Transport, eg Egress) *LLM7Upstream {
+func NewLLM7UpstreamWithEgress(baseURL string, tr *http.Transport, router *egress.Router) *LLM7Upstream {
 	if tr == nil {
 		tr = NewTransport()
 	}
 	return &LLM7Upstream{
 		client: NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr),
 		cache:  NewModelCache(),
-		baseTr: tr,
-		warpTr: NewWarpTransport(eg, tr),
+		trs:    newTransportPair(tr, router),
 	}
 }
 
@@ -48,13 +47,15 @@ func (u *LLM7Upstream) SetRelayPools(pools []RelayPool) { u.client.SetRelayPools
 // SetProxy sets both the proxy mode and the relay pools for LLM7.
 // When mode is "warp", traffic routes through the WARP exit pool.
 // Otherwise it routes directly or via the given relay pools.
-func (u *LLM7Upstream) SetProxy(mode string, pools []RelayPool) {
+// SetProxy sets the proxy mode, the pinned relay pools, and the WARP pool for
+// LLM7 in one atomic routing swap.
+func (u *LLM7Upstream) SetProxy(mode string, pools []RelayPool, warpPoolID uint) {
 	if registry.NormalizeProxyMode(mode) == registry.ProxyModeWarp {
-		u.client.SetTransport(u.warpTr)
-	} else {
-		u.client.SetTransport(u.baseTr)
+		route := EgressRoute{Router: u.trs.router, PoolID: warpPoolID}
+		u.client.SetRoute(u.trs.Warp(warpPoolID, nil), pools, &route)
+		return
 	}
-	u.client.SetRelayPools(pools)
+	u.client.SetRoute(u.trs.Direct(), pools, nil)
 }
 
 func (u *LLM7Upstream) Start(ctx context.Context, refreshInterval time.Duration) {

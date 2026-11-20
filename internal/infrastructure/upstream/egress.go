@@ -7,34 +7,78 @@ import (
 	"net/http"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 )
 
+// ErrNoWarpPool is returned when WARP is selected but no pool is configured
+// for that route. It is a hard failure: dialing directly would leak the host's
+// own address, which is exactly what WARP is meant to prevent.
 var ErrNoWarpPool = errors.New("egress: WARP pool not configured")
 
-// Egress is the outbound path for upstream connections that must not use the
-// host's own IP. Implemented by egress.Pool; nil means a direct connection.
-type Egress interface {
-	// DialContext opens a connection to addr through the current exit.
+// poolDialer is the runtime surface EgressRoute needs. egress.Pool implements
+// it; tests supply a fake so no real sidecar is required.
+type poolDialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
-	// RotateAsync asks the exit that served the last dial to change identity.
-	// It must not block the caller.
-	RotateAsync(reason string)
+	Acquire(ctx context.Context) (context.Context, *egress.Lease)
+}
+
+// EgressRoute resolves one upstream's WARP pool at dial time. It is a struct,
+// not an interface, so there is no typed-nil trap: a zero value or a nil
+// Router always fails closed.
+type EgressRoute struct {
+	// Router is the live pool registry. Nil is safe and fails closed.
+	Router *egress.Router
+	// PoolID pins the route to one persisted pool. Zero selects the
+	// env-configured default pool.
+	PoolID uint
+	// testDialer overrides Router.Pool for tests. Nil in production.
+	testDialer poolDialer
+}
+
+// dialer resolves the pool, normalizing a nil *egress.Pool to a nil interface
+// so callers never see a typed nil.
+func (r EgressRoute) dialer() poolDialer {
+	if r.testDialer != nil {
+		return r.testDialer
+	}
+	if r.Router == nil {
+		return nil
+	}
+	p := r.Router.Pool(r.PoolID)
+	if p == nil {
+		return nil
+	}
+	return p
+}
+
+// Acquire returns a context carrying a lease for this route's pool, so a
+// free-tier limit rotates the endpoint that served the dial.
+func (r EgressRoute) Acquire(ctx context.Context) (context.Context, *egress.Lease) {
+	d := r.dialer()
+	if d == nil {
+		return ctx, nil
+	}
+	return d.Acquire(ctx)
+}
+
+// DialContext dials addr through the route's pool, failing closed when the
+// pool is missing.
+func (r EgressRoute) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := r.dialer()
+	if d == nil {
+		return nil, ErrNoWarpPool
+	}
+	return d.DialContext(ctx, network, addr)
 }
 
 // NewWarpTransport clones base and overrides DialContext to route outbound
-// connections through the WARP egress pool. When eg is nil, attempts to dial
-// fail closed with ErrNoWarpPool instead of leaking the host's own IP.
-func NewWarpTransport(eg Egress, base *http.Transport) *http.Transport {
+// connections through the route's WARP pool.
+func NewWarpTransport(route EgressRoute, base *http.Transport) *http.Transport {
 	if base == nil {
 		base = NewTransport()
 	}
 	tr := base.Clone()
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if eg == nil {
-			return nil, ErrNoWarpPool
-		}
-		return eg.DialContext(ctx, network, addr)
-	}
+	tr.DialContext = route.DialContext
 	return tr
 }
 

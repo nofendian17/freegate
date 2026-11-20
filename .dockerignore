@@ -4,13 +4,21 @@
 .git
 .worktrees
 
-# Docs, CI, editor noise
+# CodeGraph index is ~24 MB and irrelevant to the binary.
+.codegraph
+.openidea
+
+# CI, docs, editor noise, and files the Go compiler never reads.
 .github
 docs
+deploy
 *.md
 .DS_Store
 .idea
 .vscode
+docker-compose*.yml
+Makefile
+.goreleaser.yaml
 
 # Local runtime state: never bake databases, env files or captures into an image
 *.db
@@ -19,3 +27,8 @@ docs
 .env
 .env.*
 captures/
+data/
+bin/
+coverage.*
+*.test
+trace*.json

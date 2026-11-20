@@ -17,6 +17,7 @@ import (
 
 	"freegate/internal/delivery/respond"
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream"
 )
@@ -25,7 +26,7 @@ type Handler struct {
 	store     *registry.Store
 	rebuild   func(context.Context) error
 	transport *http.Transport
-	eg        upstream.Egress
+	eg        *egress.Router
 	// warm synchronously loads one custom provider's model catalog so it
 	// routes immediately after add/update/test. Nil in tests that don't
 	// wire a ProviderManager; all uses are best-effort.
@@ -50,8 +51,8 @@ func (h *Handler) WithWarmer(fn func(context.Context, string) ([]domain.Model, e
 	return h
 }
 
-// WithEgress attaches the egress pool used for WARP test probes.
-func (h *Handler) WithEgress(eg upstream.Egress) *Handler {
+// WithEgress attaches the WARP pool router used for WARP test probes.
+func (h *Handler) WithEgress(eg *egress.Router) *Handler {
 	h.eg = eg
 	return h
 }
@@ -131,6 +132,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Put("/api/pools/{id}", h.updatePool)
 	r.Delete("/api/pools/{id}", h.deletePool)
 	r.Post("/api/pools/{id}/test", h.testPool)
+	r.Get("/api/egress", h.egressStatus)
 	r.Get("/api/builtin-proxies", h.listBuiltinProxies)
 	r.Put("/api/builtin-proxies/{name}", h.updateBuiltinProxy)
 	r.Get("/api/api-keys", h.listClientKeys)
@@ -166,28 +168,50 @@ type providerIn struct {
 // resolveProxy validates a provider's proxy selection and resolves it to
 // the relay pools the request should travel through: nil follows the
 // global rotation, empty means direct, otherwise the pinned pool. It also
-// returns the pinned pool row (nil unless mode is pool) so callers needing
+// returns the pinned pool row (nil unless a pin is set) so callers needing
 // pool details don't query twice.
 func (h *Handler) resolveProxy(ctx context.Context, mode string, poolID *uint) (pools []upstream.RelayPool, pool *registry.ProxyPool, err error) {
 	switch registry.NormalizeProxyMode(mode) {
-	case registry.ProxyModeDirect, registry.ProxyModeWarp:
+	case registry.ProxyModeDirect:
 		return []upstream.RelayPool{}, nil, nil
+	case registry.ProxyModeWarp:
+		// No pin means the env-configured default pool, which may not
+		// exist; the dial then fails closed instead of leaking the host IP.
+		if poolID == nil {
+			return []upstream.RelayPool{}, nil, nil
+		}
+		p, err := h.getPoolForMode(ctx, *poolID, registry.PoolKindWarp)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []upstream.RelayPool{}, &p, nil
 	case registry.ProxyModePool:
 		if poolID == nil {
 			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)
 		}
-		p, err := h.store.GetPool(ctx, *poolID)
+		p, err := h.getPoolForMode(ctx, *poolID, registry.PoolKindRelay)
 		if err != nil {
-			if errors.Is(err, registry.ErrNotFound) {
-				return nil, nil, fmt.Errorf("%w: proxy pool %d: %w", registry.ErrInvalidArgument, *poolID, registry.ErrNotFound)
-			}
 			return nil, nil, err
 		}
-		pool = &p
-		return []upstream.RelayPool{{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy}}, pool, nil
+		return []upstream.RelayPool{{URL: p.ProxyURL, NoProxy: p.NoProxy, Strict: p.StrictProxy}}, &p, nil
 	default:
 		return nil, nil, nil
 	}
+}
+
+// getPoolForMode loads a pinned pool and checks it matches the mode's kind.
+func (h *Handler) getPoolForMode(ctx context.Context, id uint, wantKind string) (registry.ProxyPool, error) {
+	p, err := h.store.GetPool(ctx, id)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotFound) {
+			return registry.ProxyPool{}, fmt.Errorf("%w: proxy pool %d: %w", registry.ErrInvalidArgument, id, registry.ErrNotFound)
+		}
+		return registry.ProxyPool{}, err
+	}
+	if registry.NormalizePoolKind(p.Kind) != wantKind {
+		return registry.ProxyPool{}, fmt.Errorf("%w: proxy pool %d is %q, not %q", registry.ErrInvalidArgument, id, registry.NormalizePoolKind(p.Kind), wantKind)
+	}
+	return p, nil
 }
 
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +372,14 @@ func (h *Handler) probeProvider(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": status < 300, "modelCount": len(ids), "models": ids, "latencyMs": latencyMs, "status": status})
 }
 
+// pinnedPoolID maps a nil pin to the env-configured default WARP pool (ID 0).
+func pinnedPoolID(id *uint) uint {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 // proxyForTest resolves a proxy selection to the relay selector and transport a
 // probe should travel through.
 func (h *Handler) proxyForTest(ctx context.Context, mode string, poolID *uint) (*upstream.RelaySelector, *http.Transport, error) {
@@ -359,7 +391,8 @@ func (h *Handler) proxyForTest(ctx context.Context, mode string, poolID *uint) (
 	case registry.ProxyModeDirect:
 		return nil, h.transport, nil
 	case registry.ProxyModeWarp:
-		return nil, upstream.NewWarpTransport(h.eg, h.transport), nil
+		route := upstream.EgressRoute{Router: h.eg, PoolID: pinnedPoolID(poolID)}
+		return nil, upstream.NewWarpTransport(route, h.transport), nil
 	case registry.ProxyModePool:
 		if pool == nil {
 			return nil, nil, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", registry.ErrInvalidArgument)

@@ -8,7 +8,30 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"freegate/internal/infrastructure/egress"
+	"freegate/internal/infrastructure/egress/egresstest"
 )
+
+// newWarpClient builds an HTTPClient whose WARP transport dials through a real
+// egress.Pool over a local SOCKS5 server, so rotation and retry can be tested
+// without a sidecar.
+func newWarpClient(t *testing.T, upstreamURL, controlURL string) *HTTPClient {
+	t.Helper()
+	proxy := egresstest.New(t)
+	pool := egress.NewPool(egress.Options{
+		Endpoints: []egress.Endpoint{{Name: "warp-1", Socks: proxy.Addr(), Control: controlURL}},
+	})
+	router := egress.NewRouter()
+	router.SetDefault(pool)
+	route := EgressRoute{Router: router}
+	c := NewHTTPClientWithTransport(upstreamURL, []string{"public"}, nil, nil)
+	c.SetRoute(NewWarpTransport(route, nil), nil, &route)
+	c.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
+		return isFreeUsageLimit(resp)
+	})
+	return c
+}
 
 func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	var calls atomic.Int32
@@ -23,16 +46,16 @@ func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
-	var rotates atomic.Int32
-	c.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
-		if !isFreeUsageLimit(resp) {
-			return false
+	var rotations atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
+			rotations.Add(1)
 		}
-		rotates.Add(1)
-		return true
-	})
+		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
+	}))
+	defer control.Close()
 
+	c := newWarpClient(t, srv.URL, control.URL)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
@@ -44,7 +67,7 @@ func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	if got := calls.Load(); got != 2 {
 		t.Errorf("upstream calls = %d, want 2", got)
 	}
-	if got := rotates.Load(); got != 1 {
+	if got := rotations.Load(); got != 1 {
 		t.Errorf("rotations = %d, want 1", got)
 	}
 }
@@ -58,16 +81,16 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
-	var rotates atomic.Int32
-	c.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
-		if !isFreeUsageLimit(resp) {
-			return false
+	var rotations atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
+			rotations.Add(1)
 		}
-		rotates.Add(1)
-		return true
-	})
+		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
+	}))
+	defer control.Close()
 
+	c := newWarpClient(t, srv.URL, control.URL)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
@@ -79,7 +102,7 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Errorf("upstream calls = %d, want 1 (no retry)", got)
 	}
-	if got := rotates.Load(); got != 0 {
+	if got := rotations.Load(); got != 0 {
 		t.Errorf("rotations = %d, want 0", got)
 	}
 	// The hook must rewind the body so the caller still sees the error.
@@ -101,13 +124,16 @@ func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
-	var rotates atomic.Int32
-	c.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
-		rotates.Add(1)
-		return true
-	})
+	var rotations atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
+			rotations.Add(1)
+		}
+		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
+	}))
+	defer control.Close()
 
+	c := newWarpClient(t, srv.URL, control.URL)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
@@ -116,7 +142,7 @@ func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	if got := calls.Load(); got != 2 {
 		t.Errorf("upstream calls = %d, want 2", got)
 	}
-	if got := rotates.Load(); got != 1 {
+	if got := rotations.Load(); got != 1 {
 		t.Errorf("rotations = %d, want 1", got)
 	}
 }

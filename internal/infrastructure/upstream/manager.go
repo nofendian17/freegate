@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 )
 
@@ -20,11 +21,19 @@ func refreshInterval(sec int) time.Duration {
 	return time.Duration(sec) * time.Second
 }
 
+// pinnedPoolID maps a nil pin to the default WARP pool (ID 0).
+func pinnedPoolID(id *uint) uint {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 type ProviderManager struct {
 	mu        sync.RWMutex
 	store     *registry.Store
 	tr        *http.Transport
-	eg        Egress
+	router    *egress.Router
 	customs   map[string]*CustomUpstream
 	intervals map[string]time.Duration
 	runCtx    context.Context
@@ -39,8 +48,8 @@ func NewProviderManager(s *registry.Store, tr *http.Transport) *ProviderManager 
 	return NewProviderManagerWithEgress(s, tr, nil)
 }
 
-func NewProviderManagerWithEgress(s *registry.Store, tr *http.Transport, eg Egress) *ProviderManager {
-	return &ProviderManager{store: s, tr: tr, eg: eg, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
+func NewProviderManagerWithEgress(s *registry.Store, tr *http.Transport, router *egress.Router) *ProviderManager {
+	return &ProviderManager{store: s, tr: tr, router: router, customs: map[string]*CustomUpstream{}, intervals: map[string]time.Duration{}, runs: map[string]context.CancelFunc{}}
 }
 
 // relayPoolsCached resolves a provider's edge-relay setting to a pool list
@@ -92,7 +101,7 @@ func (m *ProviderManager) Rebuild(ctx context.Context) error {
 		}
 		tr := m.tr
 		if registry.NormalizeProxyMode(full.ProxyMode) == registry.ProxyModeWarp {
-			tr = NewWarpTransport(m.eg, m.tr)
+			tr = NewWarpTransport(EgressRoute{Router: m.router, PoolID: pinnedPoolID(full.ProxyPoolID)}, m.tr)
 		}
 		fresh := NewCustomUpstream(full.Name, full.BaseURL, full.APIKeys, full.Headers, full.Models, tr)
 		fresh.SetRelayPools(m.relayPoolsCached(full, poolsByID))

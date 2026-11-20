@@ -36,6 +36,14 @@ docker compose ps
 docker compose logs --tail=200 proxy
 ```
 
+Build notes: the Dockerfile uses BuildKit cache mounts for the Go module and
+build caches, so a rebuild after a source edit only recompiles the changed
+packages. It also compiles on the host platform via `BUILDPLATFORM` with
+`GOOS/GOARCH` from buildx, so cross-arch images do not need QEMU. The build
+context excludes the CodeGraph index and local runtime state. With the WARP
+override, only `warp-1` carries the `build` key — all three replicas share the
+single `freegate-warp:latest` image.
+
 The compose file is the deployment contract. It pins:
 
 | Service | Image | Port binding | Resources | Depends on |
@@ -134,7 +142,9 @@ The rate limiter is per-IP, sharded 32-way (`middleware.RateLimiter` 32 `shard{m
 The rate limiter is **in-memory only**; restarting the proxy clears all counters.
 
 ### Upstream returns 429 → pass-through or tier failover
-Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client. There is no automatic IP rotation. To change the exit IP, add another relay to the proxy pools (`/providers` → Proxy Pools).
+Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client.
+
+With `EGRESS_MODE=warp`, an OpenCode free-tier 429 (`FreeUsageLimitError`) is the exception: freegate rotates the WARP sidecar that served the request and retries once on the new exit IP. Generic 429s (per-key rate limits) are still passed through. Before rotating, freegate waits for in-flight requests on that sidecar to finish so the WARP tunnel teardown cannot cut a live stream; if they run past `EGRESS_DRAIN_TIMEOUT`, the rotation is skipped and the 429 is returned. See `docs/ENV.md` for the WARP settings and `GET /api/egress` for live endpoint status.
 
 ### Client sees empty replies / tool-call parameter errors
 

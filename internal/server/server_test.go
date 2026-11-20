@@ -10,15 +10,14 @@ import (
 	"time"
 
 	"freegate/internal/config"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream"
 )
 
-// TestBuildUpstreams_WarpWithoutPoolFailsClosed guards the typed-nil interface
-// trap: with EGRESS_MODE=off there is no pool, so buildUpstreams must hand the
-// builtins a truly nil Egress. A typed-nil *egress.Pool in the interface would
-// slip past every `eg == nil` guard and make WARP mode dial the host's own IP
-// instead of failing closed.
+// TestBuildUpstreams_WarpWithoutPoolFailsClosed guards the fail-closed
+// invariant: with EGRESS_MODE=off there is no default pool, so selecting WARP
+// must fail instead of dialing the host's own IP.
 func TestBuildUpstreams_WarpWithoutPoolFailsClosed(t *testing.T) {
 	cfg := &config.Config{
 		UpstreamURLOpenCode: "https://opencode.example/v1",
@@ -28,15 +27,15 @@ func TestBuildUpstreams_WarpWithoutPoolFailsClosed(t *testing.T) {
 		UpstreamURLLLM7:     "https://llm7.example/v1",
 		EgressMode:          "off",
 	}
-	opencode, _, _, eg, err := buildUpstreams(cfg, upstream.NewTransport())
+	opencode, _, _, router, err := buildUpstreams(cfg, upstream.NewTransport())
 	if err != nil {
 		t.Fatalf("build upstreams: %v", err)
 	}
-	if eg != nil {
-		t.Fatalf("expected nil egress with EGRESS_MODE=off, got %#v", eg)
+	if router == nil || router.Pool(0) != nil {
+		t.Fatalf("expected an empty router with EGRESS_MODE=off, got %#v", router)
 	}
 	// Selecting WARP with no pool must fail closed, never dial the host IP.
-	opencode.SetProxy("warp", nil)
+	opencode.SetProxy("warp", nil, 0)
 	_, err = opencode.ListModels(context.Background())
 	if err == nil || !errors.Is(err, upstream.ErrNoWarpPool) {
 		t.Fatalf("warp without pool must fail closed with ErrNoWarpPool, got: %v", err)
@@ -121,5 +120,40 @@ func TestApplyBuiltinProxies_DisabledPinGoesDirect(t *testing.T) {
 	}
 	if relayAHits != 1 || relayBHits != 0 || upstreamHits != 1 {
 		t.Fatalf("disabled builtin pin must go direct: relayA=%d relayB=%d upstream=%d", relayAHits, relayBHits, upstreamHits)
+	}
+}
+
+// TestApplyEgressPools verifies persisted warp pools reach the router and that
+// disabling a pool removes it (pins then fail closed).
+func TestApplyEgressPools(t *testing.T) {
+	s, err := registry.Open(t.Context(), t.TempDir()+"/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	cfg := &config.Config{}
+	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
+		Kind: registry.PoolKindWarp, Name: "warp-1",
+		WarpEndpoints: "warp-1:1080@http://warp-1:8081", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := egress.NewRouter()
+	if err := applyEgressPools(t.Context(), s, cfg, router); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if router.Pool(row.ID) == nil {
+		t.Fatal("enabled warp pool not applied")
+	}
+	row.Enabled = false
+	if _, err := s.UpdatePool(t.Context(), row.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyEgressPools(t.Context(), s, cfg, router); err != nil {
+		t.Fatalf("apply disabled: %v", err)
+	}
+	if router.Pool(row.ID) != nil {
+		t.Fatal("disabled warp pool must be removed")
 	}
 }

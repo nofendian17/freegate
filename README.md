@@ -285,15 +285,19 @@ Configuration is loaded from environment variables. `internal/config/config.go` 
 
 Anonymous OpenCode free-tier requests are automatically shaped like the official CLI: the Bun TLS ClientHello, the exact `read`/`shell` tool fingerprints, and an OpenCode-style `<env>` block are added when the caller does not supply them. Only the configured OpenCode host uses the direct uTLS handshake; relay hosts keep standard Go TLS. The Vercel relay deployed by freegate runs on Bun 1.4.x, so its own `fetch` presents the Bun handshake OpenCode accepts. A third-party relay is outside freegate's control: one whose egress TLS fingerprint, IP, or quota does not satisfy OpenCode's gate still gets 429 for the anonymous free tier. Use direct mode, the auto-deployed Bun relay, or another relay with a compatible handshake.
 
-### WARP egress pool (OpenCode)
+### WARP egress pools
 
-Optional. `EGRESS_MODE=warp` sends OpenCode traffic through one or more WARP sidecars instead of the host's own address. When the upstream answers `429 FreeUsageLimitError` (the free tier is counted per exit IP), freegate rotates the sidecar that served the request and retries once; per-key 429s are left to the existing key cooldown.
+Optional. `EGRESS_MODE=warp` sends traffic through one or more WARP sidecars instead of the host's own address. When the upstream answers `429 FreeUsageLimitError`, freegate rotates the sidecar that served the request and retries once; per-key 429s are left to the existing key cooldown. Rotation is attributed to the exact exit that served the dial, so a burst of 429s rotates one sidecar, not the whole pool.
+
+The free tier is counted per **exit IPv6 /64**, not per exact address. Cloudflare can assign two WARP registrations to the same /64; those sidecars then share one quota. freegate probes each control API's `GET /ip`, flags shared prefixes as `duplicate_prefix` in `GET /api/egress`, and re-rotates when a fresh identity lands in a /64 already used by another endpoint in the pool.
+
+Pools are editable at runtime: create a `warp` pool under Providers → Proxy pools (or `POST /api/pools` with `{"kind":"warp","warp_endpoints":"..."}`), then pin a provider or builtin to it. `EGRESS_WARP_POOL` seeds the default pool for WARP without a pin. Pool edits apply without a restart.
 
 | Variable | Default | Description |
 |---|---:|---|
 | `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for the pool |
-| `EGRESS_WARP_POOL` | — | `host:port[@control-url]` entries, comma-separated |
-| `EGRESS_FALLBACK_DIRECT` | `true` | Fall back to the host IP when the whole pool is unavailable |
+| `EGRESS_WARP_POOL` | — | `host:port[@control-url]` entries for the default pool, comma-separated |
+| `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the whole pool is unavailable; opt in explicitly |
 | `EGRESS_COOLDOWN` | `60s` | How long a failed sidecar is skipped |
 | `EGRESS_ROTATE_TIMEOUT` | `90s` | Upper bound for one rotation |
 

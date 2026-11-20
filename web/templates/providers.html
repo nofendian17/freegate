@@ -69,6 +69,7 @@
               <option value="direct">Direct — no proxy</option>
               <option value="warp">WARP — Cloudflare WARP exit</option>
             </select>
+            <p data-warp-hint class="hidden text-caption text-mid-gray">No default WARP pool (EGRESS_MODE=off). A pinned WARP pool from Proxy Pools still works — choose <span class="font-mono">warp:…</span> above.</p>
           </label>
           <div class="sm:col-span-2">
             <p class="mb-2 text-caption uppercase tracking-[0.05em] text-mid-gray">Models — only checked models are stored and routed</p>
@@ -227,29 +228,43 @@
       <p id="pf-explainer" class="mb-4 hidden text-caption text-mid-gray">Deploys a relay to Vercel — provider requests forward through Vercel's network, masking your IP behind its dynamic egress IPs (100GB/mo and 500K invocations free; deploy on multiple accounts for more diversity). The relay runs on Bun 1.4.x so OpenCode's free tier accepts its TLS fingerprint.</p>
       <form id="pool-form" class="grid gap-5 sm:grid-cols-2">
         <input type="hidden" id="pf-id">
+        <label class="flex flex-col gap-1.5" for="pf-kind">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Kind</span>
+          <select id="pf-kind" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
+            <option value="relay">Relay — HTTP/Vercel proxy</option>
+            <option value="warp">WARP — Cloudflare sidecar</option>
+          </select>
+        </label>
         <label class="flex flex-col gap-1.5" for="pf-name">
           <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Name</span>
           <input id="pf-name" required placeholder="Office Proxy" aria-describedby="pf-name-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
           <span id="pf-name-help" class="text-caption text-mid-gray">Spaces and uppercase are converted to lowercase-dashes.</span>
         </label>
         <span id="pf-name-hint" class="hidden self-end text-caption text-mid-gray">Deploy mode: unique Vercel project name — leave blank to auto-generate.</span>
-        <label id="pf-proxy-url-wrap" class="flex flex-col gap-1.5" for="pf-proxy-url">
-          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Proxy URL</span>
-          <input id="pf-proxy-url" required placeholder="http://127.0.0.1:7897" inputmode="url" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
-        </label>
-        <label class="flex flex-col gap-1.5 sm:col-span-2" for="pf-no-proxy">
-          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">No proxy</span>
-          <input id="pf-no-proxy" placeholder="localhost,127.0.0.1,.internal" aria-describedby="pf-no-proxy-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
-          <span id="pf-no-proxy-help" class="text-caption text-mid-gray">Comma-separated hosts/domains that bypass the proxy.</span>
+        <div id="pf-relay-fields" class="contents">
+          <label id="pf-proxy-url-wrap" class="flex flex-col gap-1.5" for="pf-proxy-url">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Proxy URL</span>
+            <input id="pf-proxy-url" placeholder="http://127.0.0.1:7897" inputmode="url" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+          </label>
+          <label class="flex flex-col gap-1.5 sm:col-span-2" for="pf-no-proxy">
+            <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">No proxy</span>
+            <input id="pf-no-proxy" placeholder="localhost,127.0.0.1,.internal" aria-describedby="pf-no-proxy-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">
+            <span id="pf-no-proxy-help" class="text-caption text-mid-gray">Comma-separated hosts/domains that bypass the proxy.</span>
+          </label>
+          <label class="flex items-center gap-2 text-body">
+            <input id="pf-strict" type="checkbox" aria-describedby="pf-strict-help" class="size-4 accent-[#0a0a0a]"> Strict proxy
+          </label>
+          <span id="pf-strict-help" class="self-center text-caption text-mid-gray">Fail the request if the relay is unreachable instead of falling back to direct.</span>
+        </div>
+        <label id="pf-warp-fields" class="hidden flex-col gap-1.5 sm:col-span-2" for="pf-warp-endpoints">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">WARP endpoints</span>
+          <input id="pf-warp-endpoints" placeholder="warp-1:1080@http://warp-1:8081, warp-2:1080@http://warp-2:8081" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray">
+          <span class="text-caption text-mid-gray">Comma-separated host:port[@control-url]. The control URL rotates the sidecar identity on a free-tier limit.</span>
         </label>
         <label class="flex items-center gap-2 text-body">
           <input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help" class="size-4 accent-[#0a0a0a]"> Active
         </label>
         <span id="pf-enabled-help" class="self-center text-caption text-mid-gray">Inactive pools are ignored at runtime.</span>
-        <label class="flex items-center gap-2 text-body">
-          <input id="pf-strict" type="checkbox" aria-describedby="pf-strict-help" class="size-4 accent-[#0a0a0a]"> Strict proxy
-        </label>
-        <span id="pf-strict-help" class="self-center text-caption text-mid-gray">Fail the request if the relay is unreachable instead of falling back to direct.</span>
         <label id="pf-token-wrap" class="hidden flex-col gap-1.5 sm:col-span-2" for="pf-token">
           <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Vercel token — used once for deployment and not stored</span>
           <input id="pf-token" type="password" placeholder="Paste Vercel API token" autocomplete="off" aria-describedby="pf-token-help" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none placeholder:text-mid-gray">

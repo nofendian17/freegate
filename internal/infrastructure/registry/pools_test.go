@@ -108,12 +108,30 @@ func TestStore_BuiltinProxy(t *testing.T) {
 	if err != nil || b.ProxyMode != ProxyModeDirect || b.ProxyPoolID != nil {
 		t.Fatalf("direct must clear pin: %+v %v", b, err)
 	}
-	if _, err := s.SetBuiltinProxy(t.Context(), "kilo", "warp", &pool.ID); err != nil {
+	// A relay pool cannot back warp mode.
+	if _, err := s.SetBuiltinProxy(t.Context(), "kilo", "warp", &pool.ID); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("warp pin on relay pool error = %v, want ErrInvalidArgument", err)
+	}
+	warpPool, err := s.CreatePool(t.Context(), ProxyPool{
+		Kind: PoolKindWarp, Name: "warp-1", WarpEndpoints: "warp-1:1080@http://warp-1:8081", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create warp pool: %v", err)
+	}
+	if _, err := s.SetBuiltinProxy(t.Context(), "kilo", "warp", &warpPool.ID); err != nil {
 		t.Fatalf("set warp: %v", err)
 	}
 	b, err = s.GetBuiltinProxy(t.Context(), "kilo")
+	if err != nil || b.ProxyMode != ProxyModeWarp || b.ProxyPoolID == nil || *b.ProxyPoolID != warpPool.ID {
+		t.Fatalf("warp pin not stored: %+v %v", b, err)
+	}
+	// Warp without a pin selects the env default pool.
+	if _, err := s.SetBuiltinProxy(t.Context(), "kilo", "warp", nil); err != nil {
+		t.Fatalf("set warp without pin: %v", err)
+	}
+	b, err = s.GetBuiltinProxy(t.Context(), "kilo")
 	if err != nil || b.ProxyMode != ProxyModeWarp || b.ProxyPoolID != nil {
-		t.Fatalf("warp must clear pin: %+v %v", b, err)
+		t.Fatalf("warp default pin: %+v %v", b, err)
 	}
 	if _, err := s.SetBuiltinProxy(t.Context(), "llm7", "pool", &pool.ID); err != nil {
 		t.Fatalf("set pin: %v", err)

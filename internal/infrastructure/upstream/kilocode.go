@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream/types"
 )
@@ -15,23 +16,21 @@ import (
 type KiloUpstream struct {
 	client *HTTPClient
 	cache  *ModelCache
-	baseTr *http.Transport
-	warpTr *http.Transport
+	trs    *transportPair
 }
 
 func NewKiloUpstreamWithTransport(baseURL, apiKey string, tr *http.Transport) *KiloUpstream {
 	return NewKiloUpstreamWithEgress(baseURL, apiKey, tr, nil)
 }
 
-func NewKiloUpstreamWithEgress(baseURL, apiKey string, tr *http.Transport, eg Egress) *KiloUpstream {
+func NewKiloUpstreamWithEgress(baseURL, apiKey string, tr *http.Transport, router *egress.Router) *KiloUpstream {
 	if tr == nil {
 		tr = NewTransport()
 	}
 	return &KiloUpstream{
 		client: NewHTTPClientWithTransport(baseURL, []string{apiKey}, nil, tr),
 		cache:  NewModelCache(),
-		baseTr: tr,
-		warpTr: NewWarpTransport(eg, tr),
+		trs:    newTransportPair(tr, router),
 	}
 }
 
@@ -46,13 +45,15 @@ func (k *KiloUpstream) SetRelayPools(pools []RelayPool) { k.client.SetRelayPools
 // SetProxy sets both the proxy mode and the relay pools for Kilo.
 // When mode is "warp", traffic routes through the WARP exit pool.
 // Otherwise it routes directly or via the given relay pools.
-func (k *KiloUpstream) SetProxy(mode string, pools []RelayPool) {
+// SetProxy sets the proxy mode, the pinned relay pools, and the WARP pool for
+// Kilo in one atomic routing swap.
+func (k *KiloUpstream) SetProxy(mode string, pools []RelayPool, warpPoolID uint) {
 	if registry.NormalizeProxyMode(mode) == registry.ProxyModeWarp {
-		k.client.SetTransport(k.warpTr)
-	} else {
-		k.client.SetTransport(k.baseTr)
+		route := EgressRoute{Router: k.trs.router, PoolID: warpPoolID}
+		k.client.SetRoute(k.trs.Warp(warpPoolID, nil), pools, &route)
+		return
 	}
-	k.client.SetRelayPools(pools)
+	k.client.SetRoute(k.trs.Direct(), pools, nil)
 }
 
 func (k *KiloUpstream) Start(ctx context.Context, refreshInterval time.Duration) {

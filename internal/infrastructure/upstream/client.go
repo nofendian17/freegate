@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"freegate/internal/infrastructure/egress"
 )
 
 const MaxResponseBodySize = 10 << 20 // 10 MB
@@ -23,6 +25,15 @@ const MaxResponseBodySize = 10 << 20 // 10 MB
 // key stays unusable for roughly the rest of its window.
 const keyCooldownTTL = 60 * time.Second
 
+// routeState is the immutable per-request routing snapshot: transport, relay
+// selection, and WARP route. Admin rebuilds swap the whole value atomically so
+// a request never mixes an old transport with a new pool.
+type routeState struct {
+	transport *http.Transport
+	relay     *RelaySelector // nil follows SharedRelay
+	egress    *EgressRoute   // nil means no WARP lease/rotation
+}
+
 type HTTPClient struct {
 	client   *http.Client
 	baseURL  string
@@ -30,21 +41,59 @@ type HTTPClient struct {
 	nextKey  atomic.Uint64
 	headers  map[string]string
 	cooldown *keyCooldown
-	// relay overrides the global SharedRelay when non-nil: a selector
-	// with one pool pins this client to it, an empty selector means
-	// direct (no relay). Nil follows the global rotation. Atomic so
-	// admin rebuilds can swap it while requests are in flight.
-	relay atomic.Pointer[RelaySelector]
-	// onFreeLimit is called on a 429 whose body looks like an upstream
-	// free-tier usage limit. Returning true makes the client retry once
-	// after the hook refreshed the egress identity. Set at construction;
-	// nil means the upstream has no rotatable exit.
+	route    atomic.Pointer[routeState]
+	// onFreeLimit reports whether a 429 looks like an upstream free-tier
+	// usage limit. The client rotates the lease's exit and retries once.
+	// Set at construction; nil means the upstream has no rotatable exit.
 	onFreeLimit func(ctx context.Context, resp *http.Response) bool
+}
+
+func (c *HTTPClient) routeState() *routeState {
+	if st := c.route.Load(); st != nil {
+		return st
+	}
+	return &routeState{transport: NewTransport()}
+}
+
+// updateRoute applies fn to a copy of the current route and swaps it in.
+func (c *HTTPClient) updateRoute(fn func(*routeState)) {
+	for {
+		old := c.route.Load()
+		next := routeState{}
+		if old != nil {
+			next = *old
+		}
+		fn(&next)
+		if c.route.CompareAndSwap(old, &next) {
+			return
+		}
+	}
+}
+
+// SetRoute installs a complete routing snapshot. A nil pools slice follows the
+// global relay rotation; an empty non-nil slice means direct. A nil eg disables
+// WARP rotation for this client.
+func (c *HTTPClient) SetRoute(tr *http.Transport, pools []RelayPool, eg *EgressRoute) {
+	if c == nil || c.client == nil || tr == nil {
+		return
+	}
+	var relay *RelaySelector
+	if pools != nil {
+		relay = NewRelaySelector()
+		relay.SetPools(append([]RelayPool(nil), pools...))
+	}
+	c.updateRoute(func(s *routeState) {
+		s.transport = tr
+		s.relay = relay
+		s.egress = eg
+	})
 }
 
 // SetRelay overrides the relay selector for this client. Nil restores the
 // global SharedRelay. Pass a selector with no pools for direct connections.
-func (c *HTTPClient) SetRelay(s *RelaySelector) { c.relay.Store(s) }
+func (c *HTTPClient) SetRelay(s *RelaySelector) {
+	c.updateRoute(func(st *routeState) { st.relay = s })
+}
 
 // SetRelayPools overrides edge-relay behavior: nil follows the global
 // rotation, an empty slice means direct (no relay), otherwise the client
@@ -59,23 +108,15 @@ func (c *HTTPClient) SetRelayPools(pools []RelayPool) {
 	c.SetRelay(sel)
 }
 
-// SetTransport swaps the underlying HTTP transport used by the client.
-func (c *HTTPClient) SetTransport(tr *http.Transport) {
-	if c == nil || c.client == nil || tr == nil {
-		return
-	}
-	c.client.Transport = tr
-}
-
 // SetFreeLimitHook installs the callback invoked when a 429 looks like a
 // free-tier usage limit. It is set once, before the client serves traffic.
 func (c *HTTPClient) SetFreeLimitHook(fn func(context.Context, *http.Response) bool) {
 	c.onFreeLimit = fn
 }
 
-func (c *HTTPClient) relayOrShared() *RelaySelector {
-	if s := c.relay.Load(); s != nil {
-		return s
+func (c *HTTPClient) relayOrShared(s *routeState) *RelaySelector {
+	if s != nil && s.relay != nil {
+		return s.relay
 	}
 	return SharedRelay
 }
@@ -173,17 +214,19 @@ func NewHTTPClientWithTransport(baseURL string, apiKeys []string, headers map[st
 	if headers == nil {
 		headers = make(map[string]string)
 	}
-	return &HTTPClient{
+	c := &HTTPClient{
 		client:   hc,
 		baseURL:  strings.TrimSuffix(baseURL, "/"),
 		apiKeys:  apiKeys,
 		headers:  headers,
 		cooldown: newKeyCooldown(keyCooldownTTL),
 	}
+	c.route.Store(&routeState{transport: tr})
+	return c
 }
 
 func (c *HTTPClient) Get(ctx context.Context, path string) (*http.Response, error) {
-	return c.do(ctx, func() (*http.Request, error) {
+	return c.do(ctx, func(ctx context.Context) (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, "GET", c.baseURL+path, http.NoBody)
 	})
 }
@@ -202,7 +245,7 @@ func (c *HTTPClient) PostWithHeaders(ctx context.Context, path string, body []by
 	// Probe stream once up front instead of re-unmarshalling on every
 	// retry attempt (429 key rotation rebuilds the request).
 	isStream := isStreamBody(cleaned)
-	return c.doWithHeaders(ctx, func() (*http.Request, error) {
+	return c.doWithHeaders(ctx, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewReader(cleaned))
 		if err != nil {
 			return nil, fmt.Errorf("build POST request: %w", err)
@@ -219,11 +262,49 @@ func (c *HTTPClient) PostWithHeaders(ctx context.Context, path string, body []by
 // account automatically falls over to the next one. Keys that returned 429 go
 // into a short cooldown and are skipped by later requests. A single key keeps
 // the previous behavior: a 429 is returned as-is.
-func (c *HTTPClient) do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+func (c *HTTPClient) do(ctx context.Context, build func(context.Context) (*http.Request, error)) (*http.Response, error) {
 	return c.doWithHeaders(ctx, build, nil)
 }
 
-func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Request, error), extra map[string]string) (*http.Response, error) {
+// applyHeaders sets the auth and static headers for one attempt.
+func (c *HTTPClient) applyHeaders(req *http.Request, key string, extra map[string]string) {
+	req.Header.Set("Authorization", "Bearer "+key)
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
+	// Keep x-api-key in sync with the bearer actually used. When rotation
+	// selects a non-public key — including 429 failover to the next key
+	// — mirror it over a default "public" marker so the pair never
+	// mismatches. An explicitly non-public x-api-key is left untouched.
+	// Conversely, anonymous attempts (public/empty bearer) must NOT
+	// carry `x-api-key: public`: the genuine OpenCode client
+	// authenticates with `Authorization: Bearer` only (anomalyco/opencode
+	// commit 5a83358, session/llm/request.ts: no x-api-key is ever set)
+	// and the free-tier gate treats the public marker as a non-genuine
+	// fingerprint (403 FreeTierError).
+	if key != "" && key != "public" && strings.EqualFold(req.Header.Get("x-api-key"), "public") {
+		req.Header.Set("x-api-key", key)
+	}
+	if key == "" || key == "public" {
+		if cur := req.Header.Get("x-api-key"); cur == "" || strings.EqualFold(cur, "public") {
+			req.Header.Del("x-api-key")
+		}
+	}
+}
+
+// doTransport sends req through the snapshot's transport without mutating the
+// shared http.Client, so concurrent rebuilds cannot change an in-flight
+// request's route.
+func (c *HTTPClient) doTransport(st *routeState, req *http.Request) (*http.Response, error) {
+	hc := *c.client
+	hc.Transport = st.transport
+	return hc.Do(req)
+}
+
+func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Context) (*http.Request, error), extra map[string]string) (*http.Response, error) {
 	attempts := len(c.apiKeys)
 	if attempts < 1 {
 		attempts = 1
@@ -232,66 +313,51 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func() (*http.Requ
 	// identity: the request is rebuilt and sent out through the new exit.
 	egressRetried := false
 	for attempt := 0; attempt < attempts; {
-		req, err := build()
+		st := c.routeState()
+		reqCtx := ctx
+		var lease *egress.Lease
+		if st.egress != nil {
+			reqCtx, lease = st.egress.Acquire(ctx)
+		}
+		req, err := build(reqCtx)
 		if err != nil {
 			return nil, err
 		}
 		key := c.currentKey()
-		req.Header.Set("Authorization", "Bearer "+key)
-		for k, v := range c.headers {
-			req.Header.Set(k, v)
-		}
-		for k, v := range extra {
-			req.Header.Set(k, v)
-		}
-		// Keep x-api-key in sync with the bearer actually used. When rotation
-		// selects a non-public key — including 429 failover to the next key
-		// — mirror it over a default "public" marker so the pair never
-		// mismatches. An explicitly non-public x-api-key is left untouched.
-		// Conversely, anonymous attempts (public/empty bearer) must NOT
-		// carry `x-api-key: public`: the genuine OpenCode client
-		// authenticates with `Authorization: Bearer` only (anomalyco/opencode
-		// commit 5a83358, session/llm/request.ts: no x-api-key is ever set)
-		// and the free-tier gate treats the public marker as a non-genuine
-		// fingerprint (403 FreeTierError).
-		if key != "" && key != "public" && strings.EqualFold(req.Header.Get("x-api-key"), "public") {
-			req.Header.Set("x-api-key", key)
-		}
-		if key == "" || key == "public" {
-			if cur := req.Header.Get("x-api-key"); cur == "" || strings.EqualFold(cur, "public") {
-				req.Header.Del("x-api-key")
-			}
-		}
-		strict, applied := c.relayOrShared().ApplyStrict(req)
+		c.applyHeaders(req, key, extra)
+		strict, applied := c.relayOrShared(st).ApplyStrict(req)
 
-		resp, err := c.client.Do(req)
+		resp, err := c.doTransport(st, req)
 		if err != nil && applied && !strict {
 			// Non-strict relay unreachable: rebuild the request without
 			// relay rewriting and try direct once.
-			directReq, derr := build()
+			directReq, derr := build(reqCtx)
 			if derr != nil {
 				return nil, derr
 			}
 			key = c.currentKey()
-			directReq.Header.Set("Authorization", "Bearer "+key)
-			for k, v := range c.headers {
-				directReq.Header.Set(k, v)
-			}
-			for k, v := range extra {
-				directReq.Header.Set(k, v)
-			}
-			resp, err = c.client.Do(directReq)
+			c.applyHeaders(directReq, key, extra)
+			resp, err = c.doTransport(st, directReq)
 		}
 		if err != nil {
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
-			// Free-tier usage limit: rotate the exit and retry once on the
-			// same key. The hook peeks and rewinds the body, so a non-limit
-			// 429 still reaches the caller unchanged.
-			if c.onFreeLimit != nil && !egressRetried && c.onFreeLimit(ctx, resp) {
+			// Free-tier usage limit: rotate the exit attributed to this
+			// request and retry once on the same key. The hook peeks and
+			// rewinds the body, so a non-limit 429 still reaches the caller.
+			if c.onFreeLimit != nil && !egressRetried && lease != nil && c.onFreeLimit(ctx, resp) {
 				egressRetried = true
 				_ = resp.Body.Close()
+				// Drain in-flight traffic before WARP drops the tunnel: the
+				// transport releases idle connections on every poll so a
+				// finished stream does not stall the rotation.
+				done := lease.RotateAsync("upstream free usage limit", c.CloseIdleConnections)
+				select {
+				case <-done:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 				// A pooled connection opened on the old exit would keep
 				// using it; drop them so the retry dials the new one.
 				c.CloseIdleConnections()
@@ -354,7 +420,7 @@ var errEmptyCatalogBody = errors.New("empty body")
 // readCatalog performs one catalog GET and decodes the response. extra headers
 // override the client defaults (used for the catalog Accept-Encoding).
 func (c *HTTPClient) readCatalog(ctx context.Context, path string, extra map[string]string) ([]byte, error) {
-	resp, err := c.doWithHeaders(ctx, func() (*http.Request, error) {
+	resp, err := c.doWithHeaders(ctx, func(ctx context.Context) (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, http.NoBody)
 	}, extra)
 	if err != nil {
@@ -410,7 +476,7 @@ func (c *HTTPClient) CloseIdleConnections() {
 	if c == nil || c.client == nil {
 		return
 	}
-	if tr, ok := c.client.Transport.(interface{ CloseIdleConnections() }); ok && tr != nil {
+	if tr := c.routeState().transport; tr != nil {
 		tr.CloseIdleConnections()
 	}
 }
