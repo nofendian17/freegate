@@ -37,20 +37,20 @@ func TestLiveRotation(t *testing.T) {
 	p := NewPool(Options{
 		Endpoints:      []Endpoint{{Name: "live", Socks: socks, Control: control}},
 		FallbackDirect: false,
-		WaitReady:      90 * time.Second,
 		RotateTimeout:  90 * time.Second,
 	})
 
-	first := traceIP(t, p)
+	ctx, lease := p.Acquire(context.Background())
+	first := traceIP(t, p, ctx)
 	if first == "" {
 		t.Fatal("no exit IP through the sidecar")
 	}
 	t.Logf("exit before rotation: %s", first)
 
-	p.RotateAsync("live test")
+	<-lease.RotateAsync("live test", nil)
 	waitRotated(t, p, 1)
 
-	second := traceIP(t, p)
+	second := traceIP(t, p, context.Background())
 	if second == "" {
 		t.Fatal("no exit IP after rotation")
 	}
@@ -63,9 +63,9 @@ func TestLiveRotation(t *testing.T) {
 // traceIP reads Cloudflare's /cdn-cgi/trace over plain HTTP through the pool.
 // HTTP keeps the check independent of TLS and of which host name the sidecar
 // can resolve.
-func traceIP(t *testing.T, p *Pool) string {
+func traceIP(t *testing.T, p *Pool, parent context.Context) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
 	defer cancel()
 
 	raw, err := p.DialContext(ctx, "tcp", "[2606:4700:4700::1111]:443")

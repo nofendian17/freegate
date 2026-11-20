@@ -27,6 +27,7 @@ func (s *Store) MarkPoolTest(ctx context.Context, id uint, ok bool, lastErr stri
 }
 
 func (s *Store) CreatePool(ctx context.Context, p ProxyPool) (ProxyPool, error) {
+	p.Kind = NormalizePoolKind(p.Kind)
 	if err := p.Validate(); err != nil {
 		return ProxyPool{}, err
 	}
@@ -81,16 +82,19 @@ func (s *Store) GetPools(ctx context.Context, ids []uint) (map[uint]ProxyPool, e
 }
 
 func (s *Store) UpdatePool(ctx context.Context, id uint, p ProxyPool) (ProxyPool, error) {
+	p.Kind = NormalizePoolKind(p.Kind)
 	if err := p.Validate(); err != nil {
 		return ProxyPool{}, err
 	}
 	p.ID = id
 	result := s.db.WithContext(ctx).Model(&ProxyPool{}).Where("id = ?", id).Updates(map[string]any{
-		"name":         p.Name,
-		"proxy_url":    p.ProxyURL,
-		"no_proxy":     p.NoProxy,
-		"strict_proxy": p.StrictProxy,
-		"enabled":      p.Enabled,
+		"kind":           p.Kind,
+		"name":           p.Name,
+		"proxy_url":      p.ProxyURL,
+		"no_proxy":       p.NoProxy,
+		"strict_proxy":   p.StrictProxy,
+		"warp_endpoints": p.WarpEndpoints,
+		"enabled":        p.Enabled,
 	})
 	if result.Error != nil {
 		return ProxyPool{}, wrapStoreError("update pool", result.Error)
@@ -150,7 +154,7 @@ func (s *Store) GetBuiltinProxy(ctx context.Context, name string) (BuiltinProxy,
 		return BuiltinProxy{}, wrapStoreError("get builtin proxy", err)
 	}
 	b.ProxyMode = NormalizeProxyMode(b.ProxyMode)
-	if b.ProxyMode != ProxyModePool {
+	if b.ProxyMode != ProxyModePool && b.ProxyMode != ProxyModeWarp {
 		b.ProxyPoolID = nil
 	}
 	return b, nil
@@ -180,12 +184,15 @@ func (s *Store) SetBuiltinProxy(ctx context.Context, name, mode string, poolID *
 		return BuiltinProxy{}, err
 	}
 	mode = NormalizeProxyMode(mode)
-	if mode != ProxyModePool {
-		poolID = nil
-	} else {
+	switch mode {
+	case ProxyModePool:
 		if poolID == nil {
 			return BuiltinProxy{}, fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", ErrInvalidArgument)
 		}
+	case ProxyModeWarp:
+		// A warp pin is optional: nil selects the env default pool.
+	default:
+		poolID = nil
 	}
 	b := BuiltinProxy{Name: name, ProxyMode: mode, ProxyPoolID: poolID}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

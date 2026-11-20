@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"freegate/internal/domain"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 	"freegate/internal/infrastructure/upstream/types"
 	"freegate/internal/translate"
@@ -46,8 +47,8 @@ type OpenCodeUpstream struct {
 	// handler.SetResponseModels/SetMessageModels via server wiring.
 	responseModels []string
 	messageModels  []string
-	directTr       *http.Transport
-	warpTr         *http.Transport
+	baseURL        string
+	trs            *transportPair
 }
 
 func NewOpenCodeUpstreamWithTransport(
@@ -60,15 +61,14 @@ func NewOpenCodeUpstreamWithTransport(
 }
 
 // NewOpenCodeUpstreamWithEgress builds the OpenCode upstream with a rotatable
-// exit. When eg is non-nil, connections to the OpenCode host are dialed
-// through it and a free-tier 429 rotates the exit before one retry. eg nil
-// keeps the original direct behavior.
+// WARP route. When router is nil, selecting WARP fails closed. The router
+// resolves the pinned pool at dial time, so pool edits apply without a rebuild.
 func NewOpenCodeUpstreamWithEgress(
 	baseURL string,
 	apiKeys []string,
 	tr *http.Transport,
 	freeAllowlist []string,
-	eg Egress,
+	router *egress.Router,
 ) *OpenCodeUpstream {
 	// Static headers for catalog fetches (/models). Chat requests build
 	// compliant per-request headers in ChatCompletion (see buildOpencodeHeaders),
@@ -89,17 +89,13 @@ func NewOpenCodeUpstreamWithEgress(
 			al[id] = true
 		}
 	}
-	var directTr, warpTr *http.Transport
+	var directTr *http.Transport
 	if openCodeBunTLSEnabled() {
 		directTr = newOpenCodeBunTransport(baseURL, tr)
-		warpTr = newOpenCodeBunTransportWithEgressForced(baseURL, tr, eg)
+	} else if tr == nil {
+		directTr = NewTransport()
 	} else {
-		if tr == nil {
-			directTr = NewTransport()
-		} else {
-			directTr = tr.Clone()
-		}
-		warpTr = NewWarpTransport(eg, tr)
+		directTr = tr.Clone()
 	}
 	o := &OpenCodeUpstream{
 		// newOpenCodeHTTPClient swaps in Bun's captured TLS ClientHello for
@@ -111,24 +107,17 @@ func NewOpenCodeUpstreamWithEgress(
 		allowlist:      al,
 		responseModels: append([]string(nil), defaultOpenCodeResponseModels...),
 		messageModels:  append([]string(nil), defaultOpenCodeMessageModels...),
-		directTr:       directTr,
-		warpTr:         warpTr,
+		baseURL:        baseURL,
+		trs:            newTransportPair(directTr, router),
 	}
-	if eg != nil {
+	if router != nil {
 		if !openCodeBunTLSEnabled() {
-			// The pool is applied by the Bun transport's dialer. Without it
-			// OpenCode dials directly, so rotating would change nothing.
-			slog.Warn("egress: WARP pool configured but UPSTREAM_OPENCODE_BUN_TLS=false; OpenCode traffic will not use it")
-			return o
+			slog.Warn("egress: WARP router configured but UPSTREAM_OPENCODE_BUN_TLS=false; OpenCode keeps the stock TLS handshake")
 		}
 		// Only a genuine free-usage limit rotates the exit. The probe rewinds
 		// the body, so a non-limit 429 still reaches the caller unchanged.
 		o.client.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
-			if !isFreeUsageLimit(resp) {
-				return false
-			}
-			eg.RotateAsync("opencode free usage limit")
-			return true
+			return isFreeUsageLimit(resp)
 		})
 	}
 	return o
@@ -194,13 +183,24 @@ func (o *OpenCodeUpstream) SetRelayPools(pools []RelayPool) { o.client.SetRelayP
 // SetProxy sets both the proxy mode and the relay pools for OpenCode.
 // When mode is "warp", traffic routes through the WARP exit pool.
 // Otherwise it routes directly or via the given relay pools.
-func (o *OpenCodeUpstream) SetProxy(mode string, pools []RelayPool) {
+// SetProxy sets the proxy mode, the pinned relay pools, and the WARP pool for
+// OpenCode in one atomic routing swap.
+func (o *OpenCodeUpstream) SetProxy(mode string, pools []RelayPool, warpPoolID uint) {
 	if registry.NormalizeProxyMode(mode) == registry.ProxyModeWarp {
-		o.client.SetTransport(o.warpTr)
-	} else {
-		o.client.SetTransport(o.directTr)
+		route := EgressRoute{Router: o.trs.router, PoolID: warpPoolID}
+		o.client.SetRoute(o.trs.Warp(warpPoolID, o.bunWarp), pools, &route)
+		return
 	}
-	o.client.SetRelayPools(pools)
+	o.client.SetRoute(o.trs.Direct(), pools, nil)
+}
+
+// bunWarp builds the WARP transport that keeps Bun's TLS ClientHello for the
+// OpenCode host.
+func (o *OpenCodeUpstream) bunWarp(route EgressRoute, base *http.Transport) *http.Transport {
+	if openCodeBunTLSEnabled() {
+		return newOpenCodeBunTransportWithEgressForced(o.baseURL, base, route)
+	}
+	return NewWarpTransport(route, base)
 }
 
 func (o *OpenCodeUpstream) Start(ctx context.Context, refreshInterval time.Duration) {

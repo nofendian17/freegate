@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -195,19 +196,34 @@ func (s *Store) DeleteProvider(ctx context.Context, id uint) error {
 	return wrapStoreError("delete provider", err)
 }
 
+// ensureProxyPool validates a pin against the pool's kind: relay mode pins a
+// relay pool, warp mode pins a warp pool. Warp with no pin selects the
+// env-configured default pool and needs no row.
 func ensureProxyPool(tx *gorm.DB, mode string, poolID *uint) error {
-	if NormalizeProxyMode(mode) != ProxyModePool {
+	var wantKind string
+	switch NormalizeProxyMode(mode) {
+	case ProxyModePool:
+		wantKind = PoolKindRelay
+	case ProxyModeWarp:
+		if poolID == nil {
+			return nil
+		}
+		wantKind = PoolKindWarp
+	default:
 		return nil
 	}
 	if poolID == nil {
-		return fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is pool", ErrInvalidArgument)
+		return fmt.Errorf("%w: proxy_pool_id is required when proxy_mode is %s", ErrInvalidArgument, mode)
 	}
-	var count int64
-	if err := tx.Model(&ProxyPool{}).Where("id = ?", *poolID).Count(&count).Error; err != nil {
+	var p ProxyPool
+	if err := tx.Where("id = ?", *poolID).First(&p).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w: proxy pool %d: %w", ErrInvalidArgument, *poolID, ErrNotFound)
+		}
 		return err
 	}
-	if count == 0 {
-		return fmt.Errorf("%w: proxy pool %d: %w", ErrInvalidArgument, *poolID, ErrNotFound)
+	if NormalizePoolKind(p.Kind) != wantKind {
+		return fmt.Errorf("%w: proxy pool %d is %q, not %q", ErrInvalidArgument, *poolID, NormalizePoolKind(p.Kind), wantKind)
 	}
 	return nil
 }

@@ -915,3 +915,44 @@ func TestAdmin_ClientKeys(t *testing.T) {
 		t.Fatal("deleted key must not verify")
 	}
 }
+
+// TestAdmin_WarpPools covers the warp pool kind end to end at the API level:
+// creation, kind validation, and kind-aware builtin pins.
+func TestAdmin_WarpPools(t *testing.T) {
+	s, err := registry.Open(t.Context(), t.TempDir()+"/providers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	h := New(s, func(context.Context) error { return nil }, nil)
+	r := testRouter(h)
+	request := func(method, path, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+		if w.Code != status {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, w.Code, w.Body.String())
+		}
+		return w
+	}
+	w := request("POST", "/api/pools", `{"kind":"warp","name":"warp-1","warp_endpoints":"warp-1:1080@http://warp-1:8081"}`, http.StatusCreated)
+	var warpPool registry.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &warpPool); err != nil || warpPool.Kind != registry.PoolKindWarp {
+		t.Fatalf("create warp pool: %v %s", err, w.Body.String())
+	}
+	request("POST", "/api/pools", `{"kind":"relay","name":"bad-relay"}`, http.StatusBadRequest)
+	w = request("POST", "/api/pools", `{"kind":"relay","name":"relay-1","proxy_url":"https://relay.test"}`, http.StatusCreated)
+	var relayPool registry.ProxyPool
+	if err := json.Unmarshal(w.Body.Bytes(), &relayPool); err != nil || relayPool.Kind != registry.PoolKindRelay {
+		t.Fatalf("create relay pool: %v %s", err, w.Body.String())
+	}
+	// Kind must match the mode's pool kind.
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"pool","proxy_pool_id":`+strconv.FormatUint(uint64(warpPool.ID), 10)+`}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"warp","proxy_pool_id":`+strconv.FormatUint(uint64(relayPool.ID), 10)+`}`, http.StatusBadRequest)
+	request("PUT", "/api/builtin-proxies/kilo", `{"proxy_mode":"warp","proxy_pool_id":`+strconv.FormatUint(uint64(warpPool.ID), 10)+`}`, http.StatusOK)
+	b, err := s.GetBuiltinProxy(t.Context(), "kilo")
+	if err != nil || b.ProxyMode != registry.ProxyModeWarp || b.ProxyPoolID == nil || *b.ProxyPoolID != warpPool.ID {
+		t.Fatalf("warp pin not stored: %+v %v", b, err)
+	}
+	request("GET", "/api/egress", "", http.StatusOK)
+}

@@ -113,7 +113,7 @@ func applyBuiltinProxies(ctx context.Context, pstore *registry.Store, opencode *
 	for _, b := range settings {
 		byName[b.Name] = b
 	}
-	for name, set := range map[string]func(string, []upstream.RelayPool){
+	for name, set := range map[string]func(string, []upstream.RelayPool, uint){
 		"opencode": opencode.SetProxy,
 		"kilo":     kilo.SetProxy,
 		"llm7":     llm7.SetProxy,
@@ -122,9 +122,18 @@ func applyBuiltinProxies(ctx context.Context, pstore *registry.Store, opencode *
 		pools := upstream.ResolveRelayPools(name, b.ProxyMode, b.ProxyPoolID, func(id uint) (registry.ProxyPool, error) {
 			return pstore.GetPool(ctx, id)
 		})
-		set(b.ProxyMode, pools)
+		set(b.ProxyMode, pools, warpPoolID(b.ProxyMode, b.ProxyPoolID))
 	}
 	return nil
+}
+
+// warpPoolID returns the pinned WARP pool ID, or 0 for the env default when
+// the mode does not pin one.
+func warpPoolID(mode string, id *uint) uint {
+	if registry.NormalizeProxyMode(mode) != registry.ProxyModeWarp || id == nil {
+		return 0
+	}
+	return *id
 }
 
 // New constructs a Server from configuration. It wires all
@@ -145,7 +154,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// pools idle connections once instead of per-upstream.
 	sharedTr := buildSharedTransport()
 
-	opencode, kilo, llm7, infraRouter, egressPool, err := buildUpstreamsAndRouter(cfg, sharedTr)
+	opencode, kilo, llm7, infraRouter, egressRouter, err := buildUpstreamsAndRouter(cfg, sharedTr)
 	if err != nil {
 		return nil, err
 	}
@@ -154,13 +163,16 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open providers db: %w", err)
 	}
+	if err := applyEgressPools(ctx, pstore, cfg, egressRouter); err != nil {
+		logger.Warn("warp pool sync failed, WARP pins will fail closed", "error", err)
+	}
 	storeOpen := true
 	defer func() {
 		if storeOpen {
 			_ = pstore.Close()
 		}
 	}()
-	mgr := upstream.NewProviderManagerWithEgress(pstore, sharedTr, egressPool)
+	mgr := upstream.NewProviderManagerWithEgress(pstore, sharedTr, egressRouter)
 	if err := mgr.Rebuild(ctx); err != nil {
 		logger.Warn("custom providers rebuild failed, keeping legacy", "error", err)
 	}
@@ -245,6 +257,9 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	r.With(rl.Middleware).Get("/ready", apiHandler.Ready)
 
 	rebuild := func(ctx context.Context) error {
+		if err := applyEgressPools(ctx, pstore, cfg, egressRouter); err != nil {
+			return err
+		}
 		if err := mgr.Rebuild(ctx); err != nil {
 			return err
 		}
@@ -267,7 +282,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// catalog; customs report their curated selection (which seeds their
 	// cache at rebuild).
 	adminHandler := admin.New(pstore, rebuild, sharedTr).
-		WithEgress(egressPool).
+		WithEgress(egressRouter).
 		WithWarmer(mgr.Warm).
 		WithCatalog(func() map[string][]string {
 			out := make(map[string][]string, 4)

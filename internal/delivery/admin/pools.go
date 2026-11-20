@@ -11,15 +11,30 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"freegate/internal/delivery/respond"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/registry"
 )
 
 type poolIn struct {
-	Name        string `json:"name" validate:"required,resource_name"`
-	ProxyURL    string `json:"proxy_url" validate:"required,http_url,max=2048"`
-	NoProxy     string `json:"no_proxy" validate:"omitempty,max=2048"`
-	StrictProxy bool   `json:"strict_proxy"`
-	Enabled     bool   `json:"enabled"`
+	Name          string `json:"name" validate:"required,resource_name"`
+	Kind          string `json:"kind"`
+	ProxyURL      string `json:"proxy_url" validate:"omitempty,http_url,max=2048"`
+	NoProxy       string `json:"no_proxy" validate:"omitempty,max=2048"`
+	StrictProxy   bool   `json:"strict_proxy"`
+	WarpEndpoints string `json:"warp_endpoints" validate:"omitempty,max=4096"`
+	Enabled       bool   `json:"enabled"`
+}
+
+func (in poolIn) pool() registry.ProxyPool {
+	return registry.ProxyPool{
+		Kind:          registry.NormalizePoolKind(in.Kind),
+		Name:          in.Name,
+		ProxyURL:      in.ProxyURL,
+		NoProxy:       in.NoProxy,
+		StrictProxy:   in.StrictProxy,
+		WarpEndpoints: in.WarpEndpoints,
+		Enabled:       in.Enabled,
+	}
 }
 
 func (h *Handler) listPools(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +51,7 @@ func (h *Handler) createPool(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.CreatePool(r.Context(), registry.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
+	row, err := h.store.CreatePool(r.Context(), in.pool())
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -64,7 +79,7 @@ func (h *Handler) updatePool(w http.ResponseWriter, r *http.Request) {
 	if !decodeInput(w, r, &in) {
 		return
 	}
-	row, err := h.store.UpdatePool(r.Context(), uint(id), registry.ProxyPool{Name: in.Name, ProxyURL: in.ProxyURL, NoProxy: in.NoProxy, StrictProxy: in.StrictProxy, Enabled: in.Enabled})
+	row, err := h.store.UpdatePool(r.Context(), uint(id), in.pool())
 	if err != nil {
 		respondStoreError(w, err)
 		return
@@ -91,6 +106,12 @@ func (h *Handler) deletePool(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// egressStatus reports the live WARP pool state: the env default plus every
+// persisted pool, with per-endpoint status and rotation counters.
+func (h *Handler) egressStatus(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, map[string]any{"data": h.eg.Snapshot()})
+}
+
 // testPool probes the relay with the same headers production traffic uses
 // and persists the outcome. A failed probe disables the pool so the
 // runtime stops routing to a dead relay.
@@ -99,6 +120,10 @@ func (h *Handler) testPool(w http.ResponseWriter, r *http.Request) {
 	row, err := h.store.GetPool(r.Context(), uint(id))
 	if err != nil {
 		respondStoreError(w, err)
+		return
+	}
+	if registry.NormalizePoolKind(row.Kind) == registry.PoolKindWarp {
+		h.testWarpPool(w, r, row)
 		return
 	}
 	start := time.Now()
@@ -137,8 +162,63 @@ func (h *Handler) testPool(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": ok, "status": resp.StatusCode, "error": lastErr, "elapsedMs": elapsed})
 }
 
+// testWarpPool probes every endpoint's rotation control API (GET /ip). A pool
+// with no control URL cannot verify identity, so it reports failure.
+func (h *Handler) testWarpPool(w http.ResponseWriter, r *http.Request, row registry.ProxyPool) {
+	eps, err := egress.ParsePool(row.WarpEndpoints)
+	if err != nil {
+		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	start := time.Now()
+	ok := false
+	status := 0
+	lastErr := "no control endpoint configured"
+	for _, ep := range eps {
+		if ep.Control == "" {
+			continue
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, ep.Control+"/ip", http.NoBody)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Sprintf("%s: %v", ep.Name, err)
+			continue
+		}
+		status = resp.StatusCode
+		_ = resp.Body.Close()
+		if resp.StatusCode/100 == 2 {
+			ok = true
+			lastErr = ""
+			continue
+		}
+		lastErr = fmt.Sprintf("%s: control API returned %s", ep.Name, resp.Status)
+	}
+	elapsed := time.Since(start).Milliseconds()
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	if !ok {
+		h.persistPoolFailure(persistCtx, row, lastErr)
+	} else if err := h.store.MarkPoolTest(persistCtx, row.ID, true, ""); err != nil {
+		slog.Warn("failed to persist successful pool test", "pool_id", row.ID, "error", err)
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"ok": ok, "status": status, "error": lastErr, "elapsedMs": elapsed})
+}
+
 func (h *Handler) persistPoolFailure(ctx context.Context, row registry.ProxyPool, lastErr string) {
-	if _, err := h.store.UpdatePool(ctx, row.ID, registry.ProxyPool{Name: row.Name, ProxyURL: row.ProxyURL, NoProxy: row.NoProxy, StrictProxy: row.StrictProxy, Enabled: false}); err != nil {
+	if _, err := h.store.UpdatePool(ctx, row.ID, registry.ProxyPool{
+		Kind:          row.Kind,
+		Name:          row.Name,
+		ProxyURL:      row.ProxyURL,
+		NoProxy:       row.NoProxy,
+		StrictProxy:   row.StrictProxy,
+		WarpEndpoints: row.WarpEndpoints,
+		Enabled:       false,
+	}); err != nil {
 		slog.Warn("failed to disable failed pool", "pool_id", row.ID, "error", err)
 	}
 	if err := h.store.MarkPoolTest(ctx, row.ID, false, lastErr); err != nil {

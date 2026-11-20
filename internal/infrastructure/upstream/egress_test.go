@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"freegate/internal/infrastructure/egress"
 )
 
 type testEgress struct {
@@ -29,8 +31,12 @@ func (e *testEgress) RotateAsync(reason string) {
 	e.rotated.Add(1)
 }
 
+func (e *testEgress) Acquire(ctx context.Context) (context.Context, *egress.Lease) {
+	return ctx, nil
+}
+
 func TestWarpTransport_NilEgressFails(t *testing.T) {
-	tr := NewWarpTransport(nil, nil)
+	tr := NewWarpTransport(EgressRoute{}, nil)
 	client := &http.Client{Transport: tr}
 	_, err := client.Get("http://example.com")
 	if err == nil {
@@ -48,7 +54,7 @@ func TestWarpTransport_DialsViaEgress(t *testing.T) {
 	defer srv.Close()
 
 	eg := &testEgress{}
-	tr := NewWarpTransport(eg, nil)
+	tr := NewWarpTransport(EgressRoute{testDialer: eg}, nil)
 	client := &http.Client{Transport: tr}
 
 	resp, err := client.Get(srv.URL)
@@ -62,34 +68,23 @@ func TestWarpTransport_DialsViaEgress(t *testing.T) {
 	}
 }
 
-func TestBuiltinSetProxy_Warp(t *testing.T) {
+// TestBuiltinSetProxy_WarpWithoutRouterFailsClosed guards the whole feature:
+// selecting WARP with no pool must fail, never dial the host IP.
+func TestBuiltinSetProxy_WarpWithoutRouterFailsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	eg := &testEgress{}
-
-	// Kilo
-	kilo := NewKiloUpstreamWithEgress(srv.URL, "k", nil, eg)
-	kilo.SetProxy("warp", nil)
-	_, err := kilo.client.Get(context.Background(), "/")
-	if err != nil {
-		t.Fatalf("kilo request failed: %v", err)
-	}
-	if eg.dialed.Load() == 0 {
-		t.Fatal("expected kilo dial via egress in warp mode")
+	kilo := NewKiloUpstreamWithEgress(srv.URL, "k", nil, nil)
+	kilo.SetProxy("warp", nil, 0)
+	if _, err := kilo.client.Get(context.Background(), "/"); !errors.Is(err, ErrNoWarpPool) {
+		t.Fatalf("kilo warp without pool: got %v, want ErrNoWarpPool", err)
 	}
 
-	// LLM7
-	eg.dialed.Store(0)
-	llm7 := NewLLM7UpstreamWithEgress(srv.URL, nil, eg)
-	llm7.SetProxy("warp", nil)
-	_, err = llm7.client.Get(context.Background(), "/")
-	if err != nil {
-		t.Fatalf("llm7 request failed: %v", err)
-	}
-	if eg.dialed.Load() == 0 {
-		t.Fatal("expected llm7 dial via egress in warp mode")
+	llm7 := NewLLM7UpstreamWithEgress(srv.URL, nil, nil)
+	llm7.SetProxy("warp", nil, 0)
+	if _, err := llm7.client.Get(context.Background(), "/"); !errors.Is(err, ErrNoWarpPool) {
+		t.Fatalf("llm7 warp without pool: got %v, want ErrNoWarpPool", err)
 	}
 }

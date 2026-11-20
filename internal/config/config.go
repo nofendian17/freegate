@@ -63,6 +63,7 @@ type Config struct {
 	EgressCooldown       time.Duration
 	EgressFallbackDirect bool
 	EgressRotateTimeout  time.Duration
+	EgressDrainTimeout   time.Duration
 
 	ProvidersDBPath string
 }
@@ -106,8 +107,9 @@ func Load() *Config {
 		EgressMode:           resolveEgressMode(os.Getenv("EGRESS_MODE"), os.Getenv("EGRESS_WARP_POOL")),
 		EgressWarpPool:       envStr("EGRESS_WARP_POOL", ""),
 		EgressCooldown:       envDuration("EGRESS_COOLDOWN", time.Minute),
-		EgressFallbackDirect: envBool("EGRESS_FALLBACK_DIRECT", true),
+		EgressFallbackDirect: envBool("EGRESS_FALLBACK_DIRECT", false),
 		EgressRotateTimeout:  envDuration("EGRESS_ROTATE_TIMEOUT", 90*time.Second),
+		EgressDrainTimeout:   envDuration("EGRESS_DRAIN_TIMEOUT", 60*time.Second),
 	}
 
 	// API_KEY was removed in favour of DB-managed client keys. Warn loudly so
