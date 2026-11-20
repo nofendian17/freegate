@@ -174,6 +174,45 @@
   // from poolsCache. Preserves the current value, including stale pins.
   var poolsCache = [];
 
+  // The static "warp" option uses the env default pool (ID 0), which only
+  // exists when EGRESS_MODE resolves to warp. Pinned "warp:<id>" entries
+  // come from the DB and work regardless of that env mode. Reflect that in
+  // the UI so the static option cannot silently fail closed.
+  var defaultWarpReady = null; // null until /api/egress responds
+
+  function applyWarpAvailability() {
+    if (defaultWarpReady === null) return;
+    var selects = [document.getElementById('f-proxy')].concat(builtinNames.map(builtinSelect));
+    selects.forEach(function (sel) {
+      if (!sel) return;
+      var opt = sel.querySelector('option[value="warp"]');
+      if (!opt) return;
+      opt.disabled = !defaultWarpReady;
+      opt.textContent = defaultWarpReady
+        ? 'WARP — Cloudflare WARP exit (default pool)'
+        : 'WARP — needs EGRESS_MODE=warp (pin a WARP pool instead)';
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-warp-hint]'), function (hint) {
+      hint.classList.toggle('hidden', defaultWarpReady);
+    });
+  }
+
+  function loadEgress() {
+    return getJSON('/api/egress')
+      .then(function (body) {
+        var pools = body.data || body || [];
+        defaultWarpReady = pools.some(function (p) {
+          return p.default && (p.endpoints || []).length > 0;
+        });
+        applyWarpAvailability();
+      })
+      .catch(function () {
+        // Unknown availability: leave the markup untouched rather than
+        // disabling an option that might actually work.
+        defaultWarpReady = null;
+      });
+  }
+
   function renderPoolOptions(sel) {
     if (!sel) return;
     var cur = sel.value;
@@ -815,6 +854,7 @@
 
   loadProviders();
   loadPools();
+  loadEgress();
   loadBuiltinProxies();
   loadCombos();
   loadTierEditor();
