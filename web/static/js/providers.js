@@ -200,7 +200,9 @@
   function loadEgress() {
     return getJSON('/api/egress')
       .then(function (body) {
-        var pools = body.data || body || [];
+        // /api/egress returns {"data":null} when no pool exists — `||`
+        // would fall through to the wrapper object and .some would throw.
+        var pools = Array.isArray(body.data) ? body.data : (Array.isArray(body) ? body : []);
         defaultWarpReady = pools.some(function (p) {
           return p.default && (p.endpoints || []).length > 0;
         });
