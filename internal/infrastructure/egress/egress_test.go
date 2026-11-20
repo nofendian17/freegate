@@ -21,9 +21,10 @@ func controlAddr(n int) string {
 	return fmt.Sprintf("2a09:bac1:34a%d:10::1", n)
 }
 
-// newControlAPI serves GET /ip (used for collision checks) and counts
-// POST /rotate. Passing nil for calls disables counting.
-func newControlAPI(t *testing.T, ip string, calls *atomic.Int32) *httptest.Server {
+// newControlAPI serves GET /ip with the current address and POST /rotate with
+// a genuinely fresh one, like the real sidecar. rotateTo must be in a
+// different /64 from ip or the rotation-retry logic correctly rejects it.
+func newControlAPI(t *testing.T, ip, rotateTo string, calls *atomic.Int32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -31,6 +32,8 @@ func newControlAPI(t *testing.T, ip string, calls *atomic.Int32) *httptest.Serve
 			if calls != nil {
 				calls.Add(1)
 			}
+			_, _ = w.Write([]byte(`{"ip":"` + rotateTo + `"}`))
+			return
 		case r.Method == http.MethodGet && r.URL.Path == "/ip":
 		default:
 			t.Errorf("unexpected control call %s %s", r.Method, r.URL.Path)
@@ -187,7 +190,7 @@ func TestDialNoEndpointFailsClosed(t *testing.T) {
 
 func TestRotateCallsControlAPI(t *testing.T) {
 	var calls atomic.Int32
-	control := newControlAPI(t, controlAddr(0), &calls)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), &calls)
 	defer control.Close()
 
 	proxy := egresstest.New(t)
@@ -216,7 +219,7 @@ func TestRotateCallsControlAPI(t *testing.T) {
 	for time.Now().Before(deadline) {
 		snap := p.Snapshot()[0]
 		if snap.Status == StatusReady && snap.IP != "" {
-			if snap.IP != "2a09:bac1:34a0:10::1" {
+			if snap.IP != controlAddr(10) {
 				t.Errorf("ip = %q", snap.IP)
 			}
 			if snap.Rotations != 1 {
@@ -258,7 +261,7 @@ func echoTarget(t *testing.T) string {
 // the control API must not be called while a connection is still open.
 func TestRotateWaitsForInFlightConnection(t *testing.T) {
 	var calls atomic.Int32
-	control := newControlAPI(t, controlAddr(0), &calls)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), &calls)
 	defer control.Close()
 
 	proxy := egresstest.New(t)
@@ -302,7 +305,7 @@ func TestRotateWaitsForInFlightConnection(t *testing.T) {
 // back to service and the caller keeps serving the limit response.
 func TestRotateSkippedWhenEndpointBusy(t *testing.T) {
 	var calls atomic.Int32
-	control := newControlAPI(t, controlAddr(0), &calls)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), &calls)
 	defer control.Close()
 
 	proxy := egresstest.New(t)
@@ -335,7 +338,7 @@ func TestRotateSkippedWhenEndpointBusy(t *testing.T) {
 // TestRotateDrainCallsCloseIdle checks that the transport gets a chance to
 // release connections that finish while the drain is in progress.
 func TestRotateDrainCallsCloseIdle(t *testing.T) {
-	control := newControlAPI(t, controlAddr(0), nil)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), nil)
 	defer control.Close()
 
 	proxy := egresstest.New(t)
@@ -389,7 +392,7 @@ func TestRotateWithoutControlKeepsEndpointUsable(t *testing.T) {
 // the exit that most recently served a dial.
 func TestRotateReusedConnectionUsesLastDial(t *testing.T) {
 	var calls atomic.Int32
-	control := newControlAPI(t, controlAddr(0), &calls)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), &calls)
 	defer control.Close()
 
 	proxy := egresstest.New(t)
@@ -432,8 +435,8 @@ func TestRotateOnlyDialedEndpoint(t *testing.T) {
 	calls := map[string]*atomic.Int32{"a": {}, "b": {}}
 	// Distinct /64s: otherwise the served endpoint's fresh IP collides with
 	// the other exit and the collision retry rotates it more than once.
-	ctrlA := newControlAPI(t, controlAddr(1), calls["a"])
-	ctrlB := newControlAPI(t, controlAddr(2), calls["b"])
+	ctrlA := newControlAPI(t, controlAddr(1), controlAddr(11), calls["a"])
+	ctrlB := newControlAPI(t, controlAddr(2), controlAddr(12), calls["b"])
 	defer ctrlA.Close()
 	defer ctrlB.Close()
 	proxy := egresstest.New(t)
@@ -460,7 +463,7 @@ func TestRotateOnlyDialedEndpoint(t *testing.T) {
 
 func TestRotateWithoutDialIsNoop(t *testing.T) {
 	var calls atomic.Int32
-	control := newControlAPI(t, controlAddr(0), &calls)
+	control := newControlAPI(t, controlAddr(0), controlAddr(10), &calls)
 	defer control.Close()
 
 	p := NewPool(Options{
@@ -472,6 +475,50 @@ func TestRotateWithoutDialIsNoop(t *testing.T) {
 	<-lease.RotateAsync("free usage limit", nil)
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("control calls = %d, want 0", got)
+	}
+}
+
+// TestRotateRetriesWhenPrefixMatchesOwnPreviousIP covers the production
+// failure: WARP returns a different exact address inside the SAME /64 as the
+// exhausted exit. The quota bucket is unchanged, so the retry must ask for
+// another identity even though no other endpoint uses that prefix.
+func TestRotateRetriesWhenPrefixMatchesOwnPreviousIP(t *testing.T) {
+	previous := "2a09:bac1:34a1:10::1"
+	samePrefix := "2a09:bac1:34a1:10::9"
+	fresh := controlAddr(2)
+	var calls atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/ip" {
+			_, _ = w.Write([]byte(`{"ip":"` + previous + `"}`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
+			ip := samePrefix
+			if calls.Add(1) > 1 {
+				ip = fresh
+			}
+			_, _ = w.Write([]byte(`{"ip":"` + ip + `"}`))
+			return
+		}
+		t.Errorf("unexpected control call %s %s", r.Method, r.URL.Path)
+	}))
+	defer control.Close()
+
+	proxy := egresstest.New(t)
+	p := NewPool(Options{Endpoints: []Endpoint{{Name: "warp-1", Socks: proxy.Addr(), Control: control.URL}}})
+	ctx, lease := p.Acquire(context.Background())
+	conn, err := p.DialContext(ctx, "tcp", localTarget(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+
+	<-lease.RotateAsync("free usage limit", nil)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("rotations = %d, want 2 (same-/64 identity must be rejected)", got)
+	}
+	if got := p.Snapshot()[0].IP; got != fresh {
+		t.Fatalf("final IP = %q, want fresh /64 %q", got, fresh)
 	}
 }
 
@@ -497,9 +544,9 @@ func TestPrefix64(t *testing.T) {
 // both marked, so the pool's apparent size is not mistaken for quota.
 func TestSnapshotFlagsDuplicatePrefix(t *testing.T) {
 	shared := "2a09:bac1:34a1:10::"
-	a := newControlAPI(t, shared+"1", nil)
+	a := newControlAPI(t, shared+"1", controlAddr(11), nil)
 	defer a.Close()
-	b := newControlAPI(t, shared+"2", nil)
+	b := newControlAPI(t, shared+"2", controlAddr(12), nil)
 	defer b.Close()
 
 	proxy := egresstest.New(t)
@@ -544,7 +591,7 @@ func TestRotateRetriesOnPrefixCollision(t *testing.T) {
 		t.Errorf("unexpected control call %s %s", r.Method, r.URL.Path)
 	}))
 	defer controlA.Close()
-	controlB := newControlAPI(t, controlAddr(1), &bRotations)
+	controlB := newControlAPI(t, controlAddr(1), controlAddr(11), &bRotations)
 	defer controlB.Close()
 
 	proxy := egresstest.New(t)

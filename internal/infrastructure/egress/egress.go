@@ -286,16 +286,21 @@ func (p *Pool) probeIPs(ctx context.Context) {
 	}
 }
 
-// prefixInUse reports whether ip lands in a /64 already used by another
-// endpoint in the pool. OpenCode's free tier is per /64, so two exits sharing
-// a prefix share one quota and rotating into it buys nothing.
-func (p *Pool) prefixInUse(ep *endpoint, ip string) bool {
+// prefixInUse reports whether ip lands in a /64 whose quota is already spent:
+// either the endpoint's own pre-rotation address or another exit's address.
+// A WARP rotation can hand back a different exact address inside the same
+// /64 — that is a new IP string but the same free-tier bucket, so the retry
+// would 429 again. previous is captured before the rotation loop starts.
+func (p *Pool) prefixInUse(exclude *endpoint, ip, previous string) bool {
 	prefix := prefix64(ip)
 	if prefix == "" {
 		return false
 	}
+	if prefix64(previous) == prefix {
+		return true
+	}
 	for _, other := range p.eps {
-		if other == ep {
+		if other == exclude {
 			continue
 		}
 		if prefix64(other.currentIP()) == prefix {
@@ -594,9 +599,11 @@ func (p *Pool) rotate(ep *endpoint, reason string, closeIdle func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.opts.RotateTimeout)
 	defer cancel()
 
-	// Learn the other exits' current addresses so a new identity can be
-	// rejected when it lands in a /64 that is already in use.
+	// Learn every exit's current address. The endpoint's own pre-rotation IP
+	// is the exhausted quota bucket — a new address in that same /64 is not a
+	// fresh identity even though warp-cli reports a changed IP.
 	p.probeIPs(ctx)
+	previous := ep.currentIP()
 
 	for attempt := 1; attempt <= p.opts.RotateAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -609,17 +616,18 @@ func (p *Pool) rotate(ep *endpoint, reason string, closeIdle func()) {
 			slog.Warn("egress: rotation failed", "endpoint", ep.Name, "reason", reason, "error", err)
 			return
 		}
-		if p.prefixInUse(ep, ip) && attempt < p.opts.RotateAttempts {
-			slog.Warn("egress: rotated into a /64 already in use, retrying",
-				"endpoint", ep.Name, "ip", ip, "prefix", prefix64(ip), "attempt", attempt)
+		if p.prefixInUse(ep, ip, previous) && attempt < p.opts.RotateAttempts {
+			slog.Warn("egress: rotated into a /64 with no fresh quota, retrying",
+				"endpoint", ep.Name, "previous", previous, "ip", ip, "prefix", prefix64(ip), "attempt", attempt)
 			continue
 		}
 		ep.markReady(ip)
-		if p.prefixInUse(ep, ip) {
-			slog.Warn("egress: rotation left endpoint sharing a /64 with another exit",
-				"endpoint", ep.Name, "ip", ip, "prefix", prefix64(ip), "attempts", p.opts.RotateAttempts)
+		if p.prefixInUse(ep, ip, previous) {
+			slog.Warn("egress: rotation left endpoint in an already-exhausted /64",
+				"endpoint", ep.Name, "previous", previous, "ip", ip, "prefix", prefix64(ip), "attempts", p.opts.RotateAttempts)
 		}
-		slog.Info("egress: rotated", "endpoint", ep.Name, "reason", reason, "ip", ip, "attempt", attempt)
+		slog.Info("egress: rotated", "endpoint", ep.Name, "reason", reason,
+			"previous", previous, "ip", ip, "prefix", prefix64(ip), "attempt", attempt)
 		return
 	}
 }
