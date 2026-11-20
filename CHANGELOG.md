@@ -31,6 +31,14 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 - A rotation that lands in a /64 already used by another sidecar is retried
   (up to 3 identities) so a shared quota does not silently waste the attempt.
   Documentation now consistently describes the free tier as per /64.
+
+### Fixed
+
+- A rotation that returned a new IP address in the **same /64 as the exiting
+  sidecar's previous address** was accepted: the exact IP changed but the
+  free-tier quota bucket did not, so the retry still got 429. The prefix check
+  now includes the endpoint's own pre-rotation address, and the rotation log
+  reports both `previous` and `prefix`.
 - Docker builds use BuildKit cache mounts for Go modules and compiled packages,
   compile natively on the build platform for any target arch, and ship a much
   smaller build context. The WARP override builds its shared image once instead

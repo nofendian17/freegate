@@ -50,6 +50,8 @@ func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
 			rotations.Add(1)
+			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
+			return
 		}
 		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
 	}))
@@ -85,6 +87,8 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
 			rotations.Add(1)
+			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
+			return
 		}
 		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
 	}))
@@ -128,6 +132,8 @@ func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
 			rotations.Add(1)
+			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
+			return
 		}
 		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
 	}))
