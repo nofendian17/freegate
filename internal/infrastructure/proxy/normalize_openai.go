@@ -13,6 +13,14 @@ import (
 	"freegate/internal/translate/claude"
 )
 
+// SSE framing literals, kept as byte slices so the hot loop can scan and
+// frame records without converting each line to a string first.
+var (
+	sseDataPrefix = []byte("data: ")
+	sseDone       = []byte("[DONE]")
+	sseUsageKey   = []byte(`"usage"`)
+)
+
 // TokenUsage holds token counts extracted from an upstream response.
 type TokenUsage struct {
 	Prompt     int
@@ -109,6 +117,23 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 		}
 	}
 
+	// out is reused across records so each SSE line leaves in one Write
+	// instead of a freshly concatenated "data: "+payload+"\n\n" string.
+	var out []byte
+	writeRecord := func(payload []byte) bool {
+		out = append(out[:0], "data: "...)
+		out = append(out, payload...)
+		out = append(out, "\n\n"...)
+		if _, werr := dst.Write(out); werr != nil {
+			slog.Warn("stream write error", "error", werr)
+			return false
+		}
+		if fl != nil {
+			fl.Flush()
+		}
+		return true
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,14 +141,30 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 			return usage
 		default:
 		}
-		line, err := rd.ReadString('\n')
+		// ReadSlice returns a view into the reader buffer (no per-line
+		// allocation); it stays valid until the next read, which is all the
+		// loop needs. Oversized lines report ErrBufferFull — finish those
+		// off with a copy so large tool-arg deltas still work.
+		raw, err := rd.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			// raw aliases the reader buffer, so copy it before the next read
+			// refills (and overwrites) that buffer.
+			joined := append([]byte(nil), raw...)
+			rest, rerr := rd.ReadString('\n')
+			if rerr != nil && rerr != io.EOF {
+				slog.Warn("stream read error", "error", rerr)
+				break
+			}
+			joined = append(joined, rest...)
+			raw, err = joined, rerr
+		}
 		if err != nil && err != io.EOF {
 			slog.Warn("stream read error", "error", err)
 			break
 		}
 
-		trimmed := strings.TrimRight(line, "\r\n")
-		if trimmed == "" {
+		trimmed := bytes.TrimRight(raw, "\r\n")
+		if len(trimmed) == 0 {
 			if err == io.EOF {
 				break
 			}
@@ -132,13 +173,13 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 
 		// Usage rides on rare terminal chunks only: skip the typed decode
 		// for content/tool deltas (the key is literally present or not).
-		if strings.Contains(line, `"usage"`) {
-			usage = extractUsageFromSSE(line, usage)
+		if bytes.Contains(raw, sseUsageKey) {
+			usage = extractUsageFromSSE(raw, usage)
 		}
 
-		if !strings.HasPrefix(trimmed, "data: ") {
+		if !bytes.HasPrefix(trimmed, sseDataPrefix) {
 			// Non-data line (blank, comments, event: markers) — pass through.
-			if _, werr := io.WriteString(dst, line); werr != nil {
+			if _, werr := dst.Write(raw); werr != nil {
 				slog.Warn("stream write error", "error", werr)
 				break
 			}
@@ -151,9 +192,9 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 			continue
 		}
 
-		data := strings.TrimPrefix(trimmed, "data: ")
-		data = strings.TrimRight(data, "\r\n ")
-		if data == "[DONE]" {
+		data := bytes.TrimPrefix(trimmed, sseDataPrefix)
+		data = bytes.TrimRight(data, "\r\n ")
+		if bytes.Equal(data, sseDone) {
 			if !seenFinish && (metaCaptured || hasToolSeen) {
 				fr := "stop"
 				if hasToolSeen {
@@ -172,20 +213,13 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 				synth["object"] = "chat.completion.chunk"
 				if b, err := json.Marshal(synth); err == nil {
 					emitRepaired()
-					_, _ = io.WriteString(dst, "data: "+string(b)+"\n\n")
-					if fl != nil {
-						fl.Flush()
-					}
+					writeRecord(b)
 				}
 			} else {
 				emitRepaired()
 			}
-			if _, werr := io.WriteString(dst, "data: [DONE]\n\n"); werr != nil {
-				slog.Warn("stream write error", "error", werr)
+			if !writeRecord(sseDone) {
 				break
-			}
-			if fl != nil {
-				fl.Flush()
 			}
 			if err == io.EOF {
 				break
@@ -194,14 +228,10 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 		}
 
 		var chunk map[string]any
-		if json.Unmarshal([]byte(data), &chunk) != nil {
+		if json.Unmarshal(data, &chunk) != nil {
 			// Unparseable data line — pass through unchanged.
-			if _, werr := io.WriteString(dst, "data: "+data+"\n\n"); werr != nil {
-				slog.Warn("stream write error", "error", werr)
+			if !writeRecord(data) {
 				break
-			}
-			if fl != nil {
-				fl.Flush()
 			}
 			if err == io.EOF {
 				break
@@ -274,14 +304,10 @@ func normalizeOpenAIStreamWithMeta(ctx context.Context, dst io.Writer, rd *bufio
 
 		transformed, merr := json.Marshal(chunk)
 		if merr != nil {
-			transformed = []byte(data)
+			transformed = data
 		}
-		if _, werr := io.WriteString(dst, "data: "+string(transformed)+"\n\n"); werr != nil {
-			slog.Warn("stream write error", "error", werr)
+		if !writeRecord(transformed) {
 			break
-		}
-		if fl != nil {
-			fl.Flush()
 		}
 
 		if err == io.EOF {
