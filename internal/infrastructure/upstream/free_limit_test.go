@@ -119,6 +119,53 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	}
 }
 
+// TestFreeLimitHookRotatesUntilSuccess reproduces the production bug: a
+// request that gets a free-usage 429, rotates, and gets another free-usage
+// 429 from the still-limited IP must rotate again rather than dropping the
+// client's connection with a 429.
+func TestFreeLimitHookRotatesUntilSuccess(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"type":"FreeUsageLimitError","message":"free usage limit reached"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	var rotations atomic.Int32
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
+			rotations.Add(1)
+			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
+	}))
+	defer control.Close()
+
+	c := newWarpClient(t, srv.URL, control.URL)
+	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after repeated 429s", resp.StatusCode)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("upstream calls = %d, want 3", got)
+	}
+	if got := rotations.Load(); got != 2 {
+		t.Errorf("rotations = %d, want 2", got)
+	}
+}
+
+// TestFreeLimitHookRetriesOnlyOnce documents the bound: after the configured
+// maximum rotations, a still-limited upstream is returned to the caller
+// unchanged (body intact) rather than retried forever.
 func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,11 +191,14 @@ func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Post: %v", err)
 	}
-	_ = resp.Body.Close()
-	if got := calls.Load(); got != 2 {
-		t.Errorf("upstream calls = %d, want 2", got)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 after retries exhausted", resp.StatusCode)
 	}
-	if got := rotations.Load(); got != 1 {
-		t.Errorf("rotations = %d, want 1", got)
+	if got := calls.Load(); got != maxFreeLimitRetries+1 {
+		t.Errorf("upstream calls = %d, want %d", got, maxFreeLimitRetries+1)
+	}
+	if got := rotations.Load(); got != maxFreeLimitRetries {
+		t.Errorf("rotations = %d, want %d", got, maxFreeLimitRetries)
 	}
 }
