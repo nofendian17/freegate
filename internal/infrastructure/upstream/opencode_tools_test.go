@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -139,15 +140,17 @@ func TestEnsureUpstreamTools_MergesForeignTools(t *testing.T) {
 	}
 }
 
-func TestEnsureUpstreamTools_CaseVariantsUntouched(t *testing.T) {
-	// Claude Code's Read/Bash pass through; lowercase read/shell appended.
-	in := `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"Read","description":"x"}},{"type":"function","function":{"name":"Bash","description":"y"}}]}`
+func TestEnsureUpstreamTools_CaseVariantReadAliased(t *testing.T) {
+	// Claude Code's Read is a case variant of the fingerprint name, so it is
+	// concealed; Bash does not collide and passes through. Upstream rejects a
+	// `Read` tool carrying `file_path` even next to the exact fingerprint.
+	in := `{"model":"m","messages":[],"tools":[{"type":"function","function":{"name":"Read","description":"Reads a file","parameters":{"type":"object","properties":{"file_path":{"type":"string"}}}}},{"type":"function","function":{"name":"Bash","description":"y"}}]}`
 	out, aliases := ensureUpstreamTools([]byte(in), "/chat/completions")
-	if len(aliases) != 0 {
-		t.Fatalf("aliases=%v, want none for case variants", aliases)
+	if aliases["read_client"] != "Read" {
+		t.Fatalf("aliases=%v, want read_client->Read", aliases)
 	}
 	got := toolNames(toolsOf(t, out))
-	want := []string{"Read", "Bash", "read", "shell"}
+	want := []string{"read_client", "Bash", "read", "shell"}
 	if len(got) != len(want) {
 		t.Fatalf("tools=%v, want %v", got, want)
 	}
@@ -155,6 +158,34 @@ func TestEnsureUpstreamTools_CaseVariantsUntouched(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("tools=%v, want %v", got, want)
 		}
+	}
+	// Aliasing must change the name only: description and parameters stay
+	// byte-identical so the model sees exactly the caller's tool definition.
+	origFn := decodeBody(t, []byte(in))["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	sentFn := toolsOf(t, out)[0].(map[string]any)["function"].(map[string]any)
+	if sentFn["description"] != origFn["description"] ||
+		!reflect.DeepEqual(canonicalJSON(sentFn["parameters"]), canonicalJSON(origFn["parameters"])) {
+		t.Fatalf("alias changed tool definition: orig=%v sent=%v", origFn, sentFn)
+	}
+
+	// The response restores the caller's exact spelling, not "read".
+	restored := restoreUpstreamBody([]byte(`{"choices":[{"message":{"tool_calls":[{"function":{"name":"read_client"}}]}}]}`), aliases)
+	if !strings.Contains(string(restored), `"Read"`) || strings.Contains(string(restored), "read_client") {
+		t.Fatalf("response not restored to Read: %s", restored)
+	}
+}
+
+func TestEnsureUpstreamTools_RewritesMessagesHistory(t *testing.T) {
+	in := `{"model":"m","system":"s","messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"hi"}]}],"tools":[{"name":"Read","description":"Reads a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}]}`
+	out, aliases := ensureUpstreamTools([]byte(in), "/messages")
+	if aliases["read_client"] != "Read" {
+		t.Fatalf("aliases=%v, want read_client->Read", aliases)
+	}
+	if strings.Contains(string(out), `"name":"Read"`) {
+		t.Fatalf("history tool_use name not aliased: %s", out)
+	}
+	if !strings.Contains(string(out), `"name":"read_client"`) {
+		t.Fatalf("history tool_use name not aliased: %s", out)
 	}
 }
 
@@ -232,11 +263,14 @@ func TestEnsureUpstreamTools_PlaceholderNote(t *testing.T) {
 	}
 }
 
-func TestFingerprintToolKey_ExactOnly(t *testing.T) {
+func TestFingerprintToolKey_CaseInsensitive(t *testing.T) {
 	if fingerprintToolKey("read") != "read" || fingerprintToolKey(" shell ") != "shell" {
 		t.Fatal("exact match broken")
 	}
-	for _, n := range []string{"Read", "Bash", "bash", "terminal", ""} {
+	if fingerprintToolKey("Read") != "read" || fingerprintToolKey("READ") != "read" || fingerprintToolKey("SHELL") != "shell" {
+		t.Fatal("case-insensitive match broken")
+	}
+	for _, n := range []string{"Bash", "bash", "terminal", ""} {
 		if fingerprintToolKey(n) != "" {
 			t.Fatalf("expected empty for %q", n)
 		}
