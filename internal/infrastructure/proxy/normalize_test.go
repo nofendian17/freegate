@@ -83,6 +83,37 @@ func TestNormalizeStream_SyncsReasoning(t *testing.T) {
 	}
 }
 
+func TestNormalizeStream_HandlesLinesLongerThanReaderBuffer(t *testing.T) {
+	// bufio.Reader's default buffer is 4096 bytes; upstreams emit single
+	// content/tool-arg deltas larger than that. The line reader must stitch
+	// an oversized line back together instead of truncating it.
+	long := strings.Repeat("x", 10_000)
+	input := `data: {"choices":[{"index":0,"delta":{"content":"` + long + `"},"finish_reason":null}]}` + "\n\ndata: [DONE]\n"
+	var buf bytes.Buffer
+	normalizeOpenAIStreamWithMeta(context.Background(), &buf, bufio.NewReader(strings.NewReader(input)), "", "")
+
+	out := buf.String()
+	if !strings.Contains(out, long) {
+		head, tail := out, out
+		if len(head) > 120 {
+			head = head[:120]
+		}
+		if len(tail) > 120 {
+			tail = tail[len(tail)-120:]
+		}
+		t.Fatalf("expected oversized content delta to pass through intact (out len=%d, in len=%d, head=%q tail=%q)", len(out), len(input), head, tail)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
+			continue
+		}
+		var v map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &v); err != nil {
+			t.Fatalf("record is not valid JSON after stitching: %v", err)
+		}
+	}
+}
+
 func TestNormalizeJSON_SyncsMessageReasoning(t *testing.T) {
 	input := `{"choices":[{"message":{"reasoning_content":"analysis"}}]}`
 	var buf bytes.Buffer
@@ -797,6 +828,27 @@ var benchOpenAIStream = func() string {
 	sb.WriteString("data: [DONE]\n\n")
 	return sb.String()
 }()
+
+// benchClaudeStream is a 200-event text-delta stream plus terminal events,
+// representative of a Claude-format upstream on the hot path.
+var benchClaudeStream = func() string {
+	var sb strings.Builder
+	sb.WriteString("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_x\",\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&sb, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"token %d \"}}\n\n", i)
+	}
+	sb.WriteString("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":200}}\n\n")
+	sb.WriteString("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	return sb.String()
+}()
+
+func BenchmarkNormalizeClaudeStream(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		rd := bufio.NewReader(strings.NewReader(benchClaudeStream))
+		normalizeClaudeStreamWithContext(context.Background(), io.Discard, rd)
+	}
+}
 
 func BenchmarkNormalizeOpenAIStream(b *testing.B) {
 	b.ReportAllocs()

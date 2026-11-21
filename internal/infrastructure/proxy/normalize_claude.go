@@ -2,12 +2,12 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"freegate/internal/translate/claude"
 )
@@ -28,14 +28,27 @@ func normalizeClaudeStreamWithContext(ctx context.Context, dst io.Writer, src *b
 			return usage
 		default:
 		}
-		line, err := src.ReadString('\n')
+		// ReadSlice avoids a per-line string allocation; its view into the
+		// reader buffer stays valid until the next read. Oversized events
+		// report ErrBufferFull — copy and finish those off.
+		raw, err := src.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			joined := append([]byte(nil), raw...)
+			rest, rerr := src.ReadString('\n')
+			if rerr != nil && rerr != io.EOF {
+				slog.Warn("claude stream read error", "error", rerr)
+				break
+			}
+			joined = append(joined, rest...)
+			raw, err = joined, rerr
+		}
 		if err != nil && err != io.EOF {
 			slog.Warn("claude stream read error", "error", err)
 			break
 		}
 
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
+		trimmed := bytes.TrimRight(raw, "\r\n")
+		if len(trimmed) == 0 {
 			if err == io.EOF {
 				break
 			}
@@ -55,15 +68,15 @@ func normalizeClaudeStreamWithContext(ctx context.Context, dst io.Writer, src *b
 		}
 
 		// Only process data: lines; skip event: and others
-		if !strings.HasPrefix(line, "data: ") {
+		if !bytes.HasPrefix(trimmed, sseDataPrefix) {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
-		data = strings.TrimRight(data, "\r\n ")
+		data := bytes.TrimPrefix(trimmed, sseDataPrefix)
+		data = bytes.TrimRight(data, "\r\n ")
 
 		var chunk map[string]any
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := json.Unmarshal(data, &chunk); err != nil {
 			continue
 		}
 
@@ -137,13 +150,13 @@ func asInt(v any) (int, bool) {
 }
 
 // extractUsageFromSSE checks if line contains a data: JSON with usage.
-func extractUsageFromSSE(line string, current TokenUsage) TokenUsage {
-	if !strings.HasPrefix(line, "data: ") {
+func extractUsageFromSSE(line []byte, current TokenUsage) TokenUsage {
+	if !bytes.HasPrefix(line, sseDataPrefix) {
 		return current
 	}
-	data := strings.TrimPrefix(line, "data: ")
-	data = strings.TrimRight(data, "\r\n")
-	if data == "[DONE]" {
+	data := bytes.TrimPrefix(line, sseDataPrefix)
+	data = bytes.TrimRight(data, "\r\n")
+	if bytes.Equal(data, sseDone) {
 		return current
 	}
 	var chunk struct {
@@ -155,7 +168,7 @@ func extractUsageFromSSE(line string, current TokenUsage) TokenUsage {
 			OutputTokens     int `json:"output_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+	if err := json.Unmarshal(data, &chunk); err != nil {
 		return current
 	}
 	if chunk.Usage != nil {
