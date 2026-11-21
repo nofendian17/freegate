@@ -22,12 +22,15 @@ import (
 // gate also requires an OpenCode-style <env> block in the system prompt;
 // see ensureOpenCodeEnv.
 //
-// Caller tools pass through verbatim, except one that already uses an exact
-// fingerprint name with a different definition: it travels under an alias
-// (`read_client`, `shell_client`, ...) including its prior calls in history,
-// and the response side restores the original name. Case variants such as
-// Claude Code's Read/Bash pass through untouched; upstream accepts them next
-// to read/shell.
+// Caller tools pass through verbatim, except one whose name matches a
+// fingerprint name (case-insensitively) with a different definition: it
+// travels under an alias (`read_client`, `shell_client`, ...) including its
+// prior calls in history, and the response side restores the original name.
+//
+// Matching is case-insensitive: the gateway appears to treat `Read` as a
+// declaration of `read`. Live probes were not conclusive — the same body
+// alternated between 200 and 429 as WARP exits rotated — so the alias is
+// defensive rather than a confirmed fix.
 var fingerprintToolNames = []string{"read", "shell"}
 
 // Verbatim from the OpenCode v2.3.0 (dev) CLI. Upstream compares description
@@ -123,12 +126,12 @@ func fingerprintWant(name string) (string, map[string]any) {
 	return fingerprintShellDescription, fingerprintShellParameters()
 }
 
-// fingerprintToolKey returns the fingerprint name when name is exactly one;
-// otherwise "". Matching is case-sensitive: Read/Bash pass through untouched.
+// fingerprintToolKey returns the canonical name of a required fingerprint
+// tool (read/shell), case-insensitively; otherwise "".
 func fingerprintToolKey(name string) string {
 	trimmed := strings.TrimSpace(name)
 	for _, n := range fingerprintToolNames {
-		if trimmed == n {
+		if strings.EqualFold(trimmed, n) {
 			return n
 		}
 	}
@@ -256,9 +259,9 @@ func withToolName(tool any, name string) any {
 }
 
 // concealFingerprintToolNames moves caller tools off the fingerprint names
-// when their definition differs from OpenCode's, so the exact definitions
-// can be appended without a duplicate name. Returns the rewritten list and
-// a sent-name -> original-name map.
+// when their definition differs from OpenCode's, so the exact definitions can
+// be appended without a duplicate name. Returns the rewritten list and a
+// sent-name -> original-name map for response restoration.
 func concealFingerprintToolNames(tools []any) ([]any, map[string]string) {
 	aliasToOriginal := make(map[string]string)
 	if len(tools) == 0 {
@@ -278,7 +281,8 @@ func concealFingerprintToolNames(tools []any) ([]any, map[string]string) {
 			out = append(out, tool)
 			continue
 		}
-		key := fingerprintToolKey(upstreamToolName(tool))
+		original := upstreamToolName(tool)
+		key := fingerprintToolKey(original)
 		if key == "" {
 			out = append(out, tool)
 			continue
@@ -288,6 +292,8 @@ func concealFingerprintToolNames(tools []any) ([]any, map[string]string) {
 			continue
 		}
 		seen[key] = true
+		// A genuine OpenCode client already sends the exact fingerprint
+		// definitions; let those pass under their own names.
 		if isFingerprintDefinition(tool, key) {
 			out = append(out, tool)
 			continue
@@ -297,7 +303,9 @@ func concealFingerprintToolNames(tools []any) ([]any, map[string]string) {
 			alias = key + "_client" + strconv.Itoa(i)
 		}
 		taken[alias] = true
-		aliasToOriginal[alias] = key
+		// Restore the caller's exact spelling (e.g. `Read`), not the canonical
+		// lowercase fingerprint name: the client only knows the name it sent.
+		aliasToOriginal[alias] = original
 		out = append(out, withToolName(tool, alias))
 	}
 	return out, aliasToOriginal
@@ -418,6 +426,22 @@ func aliasHistoryToolCalls(raw map[string]any, aliasToOriginal map[string]string
 			m, _ := item.(map[string]any)
 			if m == nil {
 				continue
+			}
+			// Claude Messages: content[].name (tool_use).
+			if content, ok := m["content"].([]any); ok {
+				for j, block := range content {
+					bm, _ := block.(map[string]any)
+					if bm == nil || bm["type"] != "tool_use" {
+						continue
+					}
+					if name, _ := bm["name"].(string); name != "" {
+						if alias, ok := byOriginal[strings.TrimSpace(name)]; ok {
+							bm["name"] = alias
+							content[j] = bm
+						}
+					}
+				}
+				m["content"] = content
 			}
 			tcs, ok := m["tool_calls"].([]any)
 			if !ok {
