@@ -258,6 +258,12 @@ func (c *HTTPClient) PostWithHeaders(ctx context.Context, path string, body []by
 	}, extra)
 }
 
+// maxFreeLimitRetries bounds how many times one request rotates its WARP exit
+// after a free-usage 429. A rotated address can still land in the same /64
+// (shared quota) or another already-exhausted prefix, so a single retry is not
+// enough; the bound prevents an infinite loop when the whole pool is limited.
+const maxFreeLimitRetries = 3
+
 // do sends a request, retrying on 429 with the next API key so a rate-limited
 // account automatically falls over to the next one. Keys that returned 429 go
 // into a short cooldown and are skipped by later requests. A single key keeps
@@ -309,9 +315,11 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 	if attempts < 1 {
 		attempts = 1
 	}
-	// One extra attempt is allowed when the free-tier hook rotated the egress
-	// identity: the request is rebuilt and sent out through the new exit.
-	egressRetried := false
+	// Free-tier usage limits are counted per exit IP, so a request rotates
+	// its own WARP endpoint and retries — up to maxFreeLimitRetries times —
+	// instead of dropping the client's connection on the first limited IP.
+	// Key rotation below is a separate budget.
+	freeRetries := 0
 	for attempt := 0; attempt < attempts; {
 		st := c.routeState()
 		reqCtx := ctx
@@ -343,11 +351,11 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
-			// Free-tier usage limit: rotate the exit attributed to this
-			// request and retry once on the same key. The hook peeks and
-			// rewinds the body, so a non-limit 429 still reaches the caller.
-			if c.onFreeLimit != nil && !egressRetried && lease != nil && c.onFreeLimit(ctx, resp) {
-				egressRetried = true
+			// Free-tier usage limit: rotate the exit that served *this*
+			// attempt and retry on the same key. The hook peeks and rewinds
+			// the body, so a non-limit 429 still reaches the caller.
+			if c.onFreeLimit != nil && freeRetries < maxFreeLimitRetries && lease != nil && c.onFreeLimit(ctx, resp) {
+				freeRetries++
 				_ = resp.Body.Close()
 				// Drain in-flight traffic before WARP drops the tunnel: the
 				// transport releases idle connections on every poll so a
@@ -359,7 +367,9 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 					return nil, ctx.Err()
 				}
 				// A pooled connection opened on the old exit would keep
-				// using it; drop them so the retry dials the new one.
+				// using it; drop them so the retry dials the new exit.
+				// The next loop iteration acquires a fresh lease, which
+				// attributes its dial to the rotated endpoint.
 				c.CloseIdleConnections()
 				continue
 			}

@@ -68,6 +68,47 @@ func TestOpenCode_ListModels_FreeBySuffix(t *testing.T) {
 	}
 }
 
+func TestOpenCode_ListModels_ContextWindow(t *testing.T) {
+	// Live catalogs carry limits.context (and limit.input/output); surface
+	// context in domain.Model so /v1/models clients can size their context.
+	body := `{"object":"list","data":[
+		{"id":"mimo-v2.5-free","object":"model","created":1,"owned_by":"opencode","limit":{"context":200000,"input":160000,"output":32000}},
+		{"id":"x-free","object":"model","created":1,"owned_by":"opencode","limit":{"context":0}},
+		{"id":"y-free","object":"model","created":1,"owned_by":"opencode"}
+	]}`
+	o := newTestOpenCode(t, body)
+
+	models, err := o.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := make(map[string]int64, len(models))
+	for _, m := range models {
+		got[m.ID] = m.ContextWindow
+	}
+	if got["mimo-v2.5-free"] != 200000 {
+		t.Errorf("mimo-v2.5-free context_window = %d, want 200000", got["mimo-v2.5-free"])
+	}
+	if got["x-free"] != 0 {
+		t.Errorf("zero limit.context should stay unknown (0), got %d", got["x-free"])
+	}
+	if got["y-free"] != 0 {
+		t.Errorf("missing limit should stay unknown (0), got %d", got["y-free"])
+	}
+
+	// The native limit object is exposed too: input/output must survive.
+	for _, m := range models {
+		if m.ID == "mimo-v2.5-free" {
+			if m.Limit == nil || m.Limit.Context != 200000 || m.Limit.Input != 160000 || m.Limit.Output != 32000 {
+				t.Errorf("mimo limit = %+v, want context/input/output", m.Limit)
+			}
+		}
+		if m.ID == "y-free" && m.Limit != nil {
+			t.Errorf("missing limit should stay nil, got %+v", m.Limit)
+		}
+	}
+}
+
 func TestOpenCode_ListModels_Dedup(t *testing.T) {
 	body := `{"object":"list","data":[
 		{"id":"x-free","object":"model","created":1,"owned_by":"opencode"},

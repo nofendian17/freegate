@@ -189,6 +189,50 @@ func TestHandler_ListModels_WithData(t *testing.T) {
 	}
 }
 
+func TestHandler_ListModels_IncludesContextWindow(t *testing.T) {
+	h, _, models, _ := newMockHandler()
+	models.models = []domain.Model{
+		{ID: "model-a", Object: "model", OwnedBy: "opencode", IsFree: true, ContextWindow: 200000, Limit: &domain.ModelLimit{Context: 200000, Input: 160000, Output: 32000}},
+		{ID: "model-b", Object: "model", OwnedBy: "kilo", IsFree: true},
+	}
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	w := httptest.NewRecorder()
+
+	testRouter(h).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	// Read the raw wire body: unknown context_window must be omitted, not 0.
+	var envelope struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(envelope.Data) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(envelope.Data))
+	}
+	if n, ok := envelope.Data[0]["context_window"].(float64); !ok || n != 200000 {
+		t.Errorf("model-a context_window = %v (%T), want 200000", envelope.Data[0]["context_window"], envelope.Data[0]["context_window"])
+	}
+	if _, ok := envelope.Data[1]["context_window"]; ok {
+		t.Errorf("model-b context_window should be omitted: %v", envelope.Data[1])
+	}
+	limit, ok := envelope.Data[0]["limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("model-a limit missing: %v", envelope.Data[0])
+	}
+	for key, want := range map[string]float64{"context": 200000, "input": 160000, "output": 32000} {
+		if n, ok := limit[key].(float64); !ok || n != want {
+			t.Errorf("model-a limit.%s = %v, want %v", key, limit[key], want)
+		}
+	}
+	if _, ok := envelope.Data[1]["limit"]; ok {
+		t.Errorf("model-b limit should be omitted: %v", envelope.Data[1])
+	}
+}
+
 func TestHandler_Metrics(t *testing.T) {
 	h, _, _, mtr := newMockHandler()
 	mtr.data = map[string]any{"total_requests": int64(42)}
