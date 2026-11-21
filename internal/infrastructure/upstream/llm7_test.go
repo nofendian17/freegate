@@ -90,6 +90,43 @@ func TestLLM7_ListModels_FiltersFree(t *testing.T) {
 	}
 }
 
+func TestLLM7_ListModels_ContextWindow(t *testing.T) {
+	// Live catalog carries context_window.tokens; it must reach domain.Model.
+	body := `{"object":"list","data":[
+		{"id":"m1","tier":"turbo","context_window":{"tokens":512000,"chars":null}},
+		{"id":"m2","usage_based_only":false,"context_window":{"tokens":8000}},
+		{"id":"m3","tier":"turbo"}
+	]}`
+	u := newTestLLM7(t, body)
+
+	models, err := u.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := make(map[string]int64, len(models))
+	for _, m := range models {
+		got[m.ID] = m.ContextWindow
+	}
+	if got["m1"] != 512000 {
+		t.Errorf("m1 context_window = %d, want 512000", got["m1"])
+	}
+	if got["m2"] != 8000 {
+		t.Errorf("m2 context_window = %d, want 8000", got["m2"])
+	}
+	if got["m3"] != 0 {
+		t.Errorf("missing context_window should stay unknown (0), got %d", got["m3"])
+	}
+	// Native limit object carries the same context; no input/output published.
+	for _, m := range models {
+		if m.ID == "m1" && (m.Limit == nil || m.Limit.Context != 512000) {
+			t.Errorf("m1 limit = %+v, want context=512000", m.Limit)
+		}
+		if m.ID == "m3" && m.Limit != nil {
+			t.Errorf("missing context_window should leave limit nil, got %+v", m.Limit)
+		}
+	}
+}
+
 func TestLLM7_ListModels_Dedup(t *testing.T) {
 	body := `{"object":"list","data":[
 		{"id":"x","tier":"turbo"},

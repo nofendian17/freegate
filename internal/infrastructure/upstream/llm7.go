@@ -105,12 +105,19 @@ func (u *LLM7Upstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 			continue
 		}
 		seen[m.ID] = true
+		contextWindow := max(m.ContextWindow.Tokens, 0)
+		var limit *domain.ModelLimit
+		if contextWindow > 0 {
+			limit = &domain.ModelLimit{Context: contextWindow}
+		}
 		out = append(out, domain.Model{
-			ID:       m.ID,
-			Object:   "model",
-			OwnedBy:  "llm7",
-			IsFree:   true,
-			Provider: "llm7",
+			ID:            m.ID,
+			Object:        "model",
+			OwnedBy:       "llm7",
+			IsFree:        true,
+			Provider:      "llm7",
+			ContextWindow: contextWindow,
+			Limit:         limit,
 		})
 	}
 	return out, nil

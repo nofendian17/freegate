@@ -13,6 +13,9 @@ type KiloModel struct {
 	ContextLength int         `json:"context_length"`
 	Pricing       KiloPricing `json:"pricing"`
 	IsFree        bool        `json:"isFree"`
+	TopProvider   struct {
+		MaxCompletionTokens int64 `json:"max_completion_tokens"`
+	} `json:"top_provider"`
 }
 
 type KiloPricing struct {

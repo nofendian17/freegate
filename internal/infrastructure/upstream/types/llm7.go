@@ -13,4 +13,7 @@ type LLM7Model struct {
 	ID             string `json:"id"`
 	UsageBasedOnly *bool  `json:"usage_based_only,omitempty"`
 	Tier           string `json:"tier,omitempty"`
+	ContextWindow  struct {
+		Tokens int64 `json:"tokens"`
+	} `json:"context_window"`
 }

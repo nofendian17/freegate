@@ -94,13 +94,20 @@ func (k *KiloUpstream) ListModels(ctx context.Context) ([]domain.Model, error) {
 		}
 		seen[m.ID] = true
 		if m.IsFree {
+			contextWindow := max(int64(m.ContextLength), 0)
+			var limit *domain.ModelLimit
+			if contextWindow > 0 || m.TopProvider.MaxCompletionTokens > 0 {
+				limit = &domain.ModelLimit{Context: contextWindow, Output: max(m.TopProvider.MaxCompletionTokens, 0)}
+			}
 			free = append(free, domain.Model{
-				ID:       m.ID,
-				Object:   "model",
-				Created:  m.Created,
-				OwnedBy:  "kilo",
-				IsFree:   true,
-				Provider: "kilo",
+				ID:            m.ID,
+				Object:        "model",
+				Created:       m.Created,
+				OwnedBy:       "kilo",
+				IsFree:        true,
+				Provider:      "kilo",
+				ContextWindow: contextWindow,
+				Limit:         limit,
 			})
 		}
 	}

@@ -262,13 +262,26 @@ func (o *OpenCodeUpstream) ListModels(ctx context.Context) ([]domain.Model, erro
 		}
 		seen[m.ID] = true
 		if strings.HasSuffix(m.ID, "-free") || o.allowlist[m.ID] {
+			// A few image/live entries publish context:0; treat zeros as
+			// unknown so the flat field and the nested limit stay in sync.
+			limit := &domain.ModelLimit{
+				Context: max(m.Limit.Context, 0),
+				Input:   max(m.Limit.Input, 0),
+				Output:  max(m.Limit.Output, 0),
+			}
+			contextWindow := limit.Context
+			if *limit == (domain.ModelLimit{}) {
+				limit = nil
+			}
 			free = append(free, domain.Model{
-				ID:       m.ID,
-				Object:   m.Object,
-				Created:  m.Created,
-				OwnedBy:  m.OwnedBy,
-				IsFree:   true,
-				Provider: "opencode",
+				ID:            m.ID,
+				Object:        m.Object,
+				Created:       m.Created,
+				OwnedBy:       m.OwnedBy,
+				IsFree:        true,
+				Provider:      "opencode",
+				ContextWindow: contextWindow,
+				Limit:         limit,
 			})
 		}
 	}

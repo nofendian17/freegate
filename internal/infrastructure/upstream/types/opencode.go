@@ -10,4 +10,9 @@ type OpenCodeModel struct {
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
+	Limit   struct {
+		Context int64 `json:"context"`
+		Input   int64 `json:"input"`
+		Output  int64 `json:"output"`
+	} `json:"limit"`
 }
