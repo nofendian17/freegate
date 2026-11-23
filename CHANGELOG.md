@@ -5,6 +5,34 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 ## [Unreleased]
 
+### Fixed
+
+- A WARP rotation whose replacement failed no longer stalls the retry for the
+  full `WARP_ROTATE_WAIT`. Rotation now waits on the replacement attempt
+  itself, so a fast registration failure returns immediately (the restored
+  exit is retried without a 30s pause).
+- An explicit `WARP_SOURCE_IPV6` is validated like auto-detection: ULA,
+  link-local, documentation and other non-public prefixes are rejected at
+  startup/API time instead of binding an unroutable source.
+- WARP DNS no longer runs inside the tunnel. Hostnames are resolved with the
+  host resolver and the tunnel dials the resulting literal address, so a
+  dropped in-tunnel UDP query to `2606:4700:4700::1111` cannot fail every
+  request on an exit. The tunnel resolver remains a fallback.
+- Admin pool tests report a successful status only when an exit has a public
+  egress address.
+
+### Changed
+
+- The default WARP stack is now `dual`: IPv6-capable upstreams still use the
+  exit's own /64, while A-only hosts such as `api.kilo.ai` are reachable
+  again. The pool form and docs offer `dual` and `ipv6`; `ipv4` is rejected
+  because Cloudflare's shared IPv4 egress cannot be rotated.
+- Removed the unused response-based rotation path (`Report`,
+  `ReportWithRetryAfter`, `HasUntriedActive`); tests now exercise the same
+  `Fail` path production uses.
+- WARP startup logs once (with resolved source, preload and fallback) instead
+  of repeating the pool summary in three layers.
+
 ## [0.23.0] - 2026-11-24
 
 ### Added

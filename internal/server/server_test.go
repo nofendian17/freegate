@@ -135,7 +135,7 @@ func TestApplyEgressPoolsSkipsLegacyRows(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
 		Kind: registry.PoolKindWarp, Name: "legacy", WarpStack: "ipv6",
-		WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
+		WarpPoolSize: 2, WarpSourceIPv6: "2606:4700:1234:5678::/64", Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestApplyEgressPools(t *testing.T) {
 	cfg := &config.Config{}
 	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
 		Kind: registry.PoolKindWarp, Name: "warp-1",
-		WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
+		WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2606:4700:1234:5678::/64", Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)

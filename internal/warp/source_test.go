@@ -56,3 +56,30 @@ func TestCandidatePrefixNormalizesTo64(t *testing.T) {
 		t.Fatalf("prefix = %s, want %s", got, want)
 	}
 }
+
+func TestValidateSourcePrefix(t *testing.T) {
+	valid := []string{
+		"2606:4700:1234:abcd::/64",
+		"2606:4700:1234:abcd::/48",
+		"2606:4700:1234:abcd::1/64",
+	}
+	for _, raw := range valid {
+		if err := ValidateSourcePrefix(netip.MustParsePrefix(raw)); err != nil {
+			t.Errorf("ValidateSourcePrefix(%s) = %v, want nil", raw, err)
+		}
+	}
+
+	invalid := []string{
+		"2606:4700:1234:abcd::/65", // longer than /64
+		"2001:db8::/64",            // documentation
+		"fd00::/64",                // ULA
+		"fe80::/64",                // link-local
+		"::ffff:10.0.0.0/96",       // IPv4-mapped
+		"10.0.0.0/24",              // not IPv6
+	}
+	for _, raw := range invalid {
+		if err := ValidateSourcePrefix(netip.MustParsePrefix(raw)); err == nil {
+			t.Errorf("ValidateSourcePrefix(%s) accepted an unroutable prefix", raw)
+		}
+	}
+}

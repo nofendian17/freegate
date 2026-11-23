@@ -17,6 +17,7 @@ type fakeBackend struct {
 	failed   int
 	closed   int
 	delay    time.Duration
+	failNoop bool
 }
 
 func newFakeBackend() *fakeBackend {
@@ -38,18 +39,27 @@ func (f *fakeBackend) Acquire(context.Context) (*Lease, error) {
 			f.released++
 			f.mu.Unlock()
 		},
-		fail: func(string) {
+		fail: func(string) <-chan struct{} {
 			f.mu.Lock()
 			f.failed++
+			noop := f.failNoop
 			snaps := []Snapshot{{ID: "fresh", Prefix: "2001:db9::/64", Egress: "2001:db9::1"}}
 			delay := f.delay
 			f.mu.Unlock()
-			if delay > 0 {
-				time.Sleep(delay)
+			if noop {
+				return ClosedSignal()
 			}
-			f.mu.Lock()
-			f.snaps = snaps
-			f.mu.Unlock()
+			done := make(chan struct{})
+			go func() {
+				if delay > 0 {
+					time.Sleep(delay)
+				}
+				f.mu.Lock()
+				f.snaps = snaps
+				f.mu.Unlock()
+				close(done)
+			}()
+			return done
 		},
 	}, nil
 }
@@ -130,6 +140,27 @@ func TestRotateAsyncWaitsForFreshExit(t *testing.T) {
 	}
 	if _, _, failed := backend.counts(); failed != 1 {
 		t.Fatalf("fail calls = %d, want 1", failed)
+	}
+}
+
+func TestRotateAsyncReturnsWhenReplacementFails(t *testing.T) {
+	backend := newFakeBackend()
+	backend.failNoop = true
+	p := newPoolFromBackend(backend, false)
+	// A long wait proves the call returns on the replacement signal instead
+	// of sleeping out the full rotate window.
+	p.rotateWait = 10 * time.Second
+	_, lease := p.Acquire(context.Background())
+	defer lease.Release()
+	started := time.Now()
+	done := lease.RotateAsync(context.Background(), "free usage limit", nil)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rotation did not return after a failed replacement")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("rotation waited %s for a failed replacement", elapsed)
 	}
 }
 

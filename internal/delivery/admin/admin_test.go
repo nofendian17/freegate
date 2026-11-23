@@ -935,7 +935,7 @@ func TestAdmin_WarpPools(t *testing.T) {
 		}
 		return w
 	}
-	w := request("POST", "/api/pools", `{"kind":"warp","name":"warp-1","warp_stack":"ipv6","warp_pool_size":2,"warp_source_ipv6":"2001:db8::/64"}`, http.StatusCreated)
+	w := request("POST", "/api/pools", `{"kind":"warp","name":"warp-1","warp_stack":"ipv6","warp_pool_size":2,"warp_source_ipv6":"2606:4700:1234:5678::/64"}`, http.StatusCreated)
 	var warpPool registry.ProxyPool
 	if err := json.Unmarshal(w.Body.Bytes(), &warpPool); err != nil || warpPool.Kind != registry.PoolKindWarp {
 		t.Fatalf("create warp pool: %v %s", err, w.Body.String())

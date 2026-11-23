@@ -27,7 +27,10 @@ func (d *testWarpDialer) DialContext(ctx context.Context, network, addr string) 
 
 func (d *testWarpDialer) Acquire(ctx context.Context) (context.Context, *egress.Lease) {
 	release := func() { d.released.Add(1) }
-	fail := func(string) { d.rotations.Add(1) }
+	fail := func(string) <-chan struct{} {
+		d.rotations.Add(1)
+		return egress.ClosedSignal()
+	}
 	return ctx, egress.NewTestLease(d.DialContext, release, fail)
 }
 

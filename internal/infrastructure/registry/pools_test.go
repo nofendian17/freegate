@@ -113,7 +113,7 @@ func TestStore_BuiltinProxy(t *testing.T) {
 		t.Fatalf("warp pin on relay pool error = %v, want ErrInvalidArgument", err)
 	}
 	warpPool, err := s.CreatePool(t.Context(), ProxyPool{
-		Kind: PoolKindWarp, Name: "warp-1", WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
+		Kind: PoolKindWarp, Name: "warp-1", WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2606:4700:1234:5678::/64", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create warp pool: %v", err)

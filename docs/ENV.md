@@ -46,19 +46,19 @@ Cloudflare may hand two registrations addresses in the same /64, which makes the
 
 A retired exit is not torn down until its last lease is released, so an in-flight SSE stream is never cut off. The ring grows with demand (preload half of `WARP_POOL_SIZE`, capped at the size), keeps idle exits for 60s after a burst, and cools a rejected /64 for 30 minutes.
 
-Pools are data, not env: create one under Providers → Proxy pools with kind `warp`, or `POST /api/pools` with `{"kind":"warp","name":"warp-1","warp_stack":"ipv6","warp_pool_size":2,"warp_source_ipv6":"2001:db8::/64"}`. A provider or builtin selects WARP with `proxy_mode: "warp"` and an optional `proxy_pool_id`; without a pin it uses the env default pool. Edits apply on the next rebuild without a restart. `GET /api/egress` reports each exit's ID, public egress, /64 prefix and status.
+Pools are data, not env: create one under Providers → Proxy pools with kind `warp`, or `POST /api/pools` with `{"kind":"warp","name":"warp-1","warp_stack":"dual","warp_pool_size":2,"warp_source_ipv6":"2606:4700:1234:5678::/64"}`. A provider or builtin selects WARP with `proxy_mode: "warp"` and an optional `proxy_pool_id`; without a pin it uses the env default pool. Edits apply on the next rebuild without a restart. `GET /api/egress` reports each exit's ID, public egress, /64 prefix and status.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `EGRESS_MODE` | No | `off` | `off` = direct connections; `warp` = in-process WARP exits |
-| `WARP_STACK` | No | `ipv6` | Tunnel address family. `ipv6` is required for outer-source rotation |
+| `WARP_STACK` | No | `dual` | Tunnel address family: `dual` (IPv6 first, IPv4 fallback) or `ipv6` (IPv6 only). Use `dual` when an upstream publishes only A records, such as `api.kilo.ai`; `ipv6` keeps every dial on the exit's own /64 but cannot reach IPv4-only hosts. `ipv4` is rejected because Cloudflare's shared IPv4 egress cannot be rotated |
 | `WARP_POOL_SIZE` | No | `2` | Upper bound on registered exits (1–32) |
-| `WARP_SOURCE_IPV6` | No | `auto` | Outer-source prefix. `auto` discovers a public routed prefix from the host; when none exists WARP runs without source rotation and logs a warning |
+| `WARP_SOURCE_IPV6` | No | `auto` | Outer-source prefix. `auto` discovers a public routed prefix from the host; when none exists WARP runs without source rotation and logs a warning. An explicit value must be a public, globally routable IPv6 `/64` or shorter |
 | `WARP_REGISTRATION_TIMEOUT` | No | `5m` | Startup bound for first registration and Cloudflare rate-limit waits |
 | `WARP_ROTATE_WAIT` | No | `30s` | How long a retry waits for a replacement exit |
 | `EGRESS_FALLBACK_DIRECT` | No | `false` | Dial directly when no exit is available. Opt in explicitly; the default fails closed |
 
-`2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
+`2606:4700:1234:5678::/64` in the API example stands in for a prefix that is actually routed to your host/container; documentation, ULA, link-local and other non-public prefixes are rejected. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
 
 Outer-source rotation requires Linux `IPV6_FREEBIND`. On macOS/Windows, `auto` runs WARP over IPv4 endpoints instead (preferring IPv4 first to avoid "no route to host" handshake noise), and an explicit `WARP_SOURCE_IPV6` is rejected at startup.
 

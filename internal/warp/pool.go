@@ -127,11 +127,8 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 		return nil, fmt.Errorf("WARP outer source requires Linux IPV6_FREEBIND; running on %s", runtime.GOOS)
 	}
 	if sourcePrefix.IsValid() {
-		if !sourcePrefix.Addr().Is6() || sourcePrefix.Bits() > 64 {
-			return nil, fmt.Errorf("WARP outer source must be an IPv6 prefix of /64 or shorter, got %s", sourcePrefix)
-		}
-		if normalized != StackIPv6 {
-			return nil, fmt.Errorf("WARP outer source requires an ipv6 stack, got %q", normalized)
+		if err := ValidateSourcePrefix(sourcePrefix); err != nil {
+			return nil, fmt.Errorf("WARP outer source: %w", err)
 		}
 	}
 	size := opts.Size
@@ -263,7 +260,6 @@ func newPool(ctx context.Context, log *slog.Logger, size int, create func(contex
 		first, err = p.createExit(ctx)
 	}
 	p.active = []*exit{first}
-	p.info("WARP pool ready", "stack", first.stack, "max", size, "preload", preload)
 	p.startRefill()
 	return p, nil
 }
@@ -346,48 +342,18 @@ func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
 	}
 }
 
-// Report feeds the upstream outcome back to the pool.
-func (p *Pool) Report(lease *Lease, status int, body []byte) {
-	p.ReportWithRetryAfter(lease, status, body, 0)
-}
-
-// ReportWithRetryAfter is Report with the upstream's Retry-After hint. A hint
-// longer than egressCooldown keeps the rejected egress cooling for that long.
-func (p *Pool) ReportWithRetryAfter(lease *Lease, status int, body []byte, retryAfter time.Duration) {
-	if lease == nil || lease.exit == nil {
-		return
-	}
-	rotate, reason := lease.exit.observe(status, body)
-	if !rotate {
-		return
-	}
-	p.penalizeFor(lease.exit, reason, max(retryAfter, egressCooldown))
-}
-
-// HasUntriedActive reports whether an active, unpenalized exit sits on an
-// egress key that is not in tried, so another attempt would leave from a
-// different quota scope.
-func (p *Pool) HasUntriedActive(tried map[string]bool) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, active := range p.active {
-		if active.isPenalized() {
-			continue
-		}
-		if key := active.egressKey(); key == "" || !tried[key] {
-			return true
-		}
-	}
-	return false
-}
-
-// Fail drops an exit that cannot carry traffic even though upstream never
-// produced an HTTP response, such as a broken handshake or stalled stream.
-func (p *Pool) Fail(lease *Lease, reason string) {
+// Fail drops the exit that served lease and reports why: a free-tier 429, a
+// broken handshake, or a stalled stream. The returned channel closes when the
+// replacement attempt finishes, whether it produced a new exit or restored the
+// old one, so a retry knows rotation has settled.
+func (p *Pool) Fail(lease *Lease, reason string) <-chan struct{} {
+	done := make(chan struct{})
 	if lease == nil || lease.exit == nil || reason == "" {
-		return
+		close(done)
+		return done
 	}
-	p.penalize(lease.exit, reason)
+	p.penalize(lease.exit, reason, done)
+	return done
 }
 
 func (p *Pool) Size() int { return p.size }
@@ -405,7 +371,8 @@ func (p *Pool) Snapshot() Snapshot {
 		Cooling: len(p.cooling),
 	}
 	for _, active := range p.active {
-		if active.idle() {
+		idle := active.idle()
+		if idle {
 			snapshot.Standby++
 		}
 		key := active.egressKey()
@@ -415,34 +382,33 @@ func (p *Pool) Snapshot() Snapshot {
 			Prefix:    key,
 			Stack:     string(active.stack),
 			Status:    "ready",
-			Idle:      active.idle(),
+			Idle:      idle,
 			Penalized: active.isPenalized(),
 		})
 	}
 	return snapshot
 }
 
-func (p *Pool) penalize(bad *exit, reason string) {
-	p.penalizeFor(bad, reason, egressCooldown)
-}
-
-func (p *Pool) penalizeFor(bad *exit, reason string, cooldown time.Duration) {
+func (p *Pool) penalize(bad *exit, reason string, done chan struct{}) {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
+		close(done)
 		return
 	}
 	index := p.activeIndexLocked(bad)
 	if index < 0 {
 		p.mu.Unlock()
+		close(done)
 		return
 	}
 	if !bad.markPenalized() {
 		p.mu.Unlock()
+		close(done)
 		return
 	}
 	if key := bad.egressKey(); key != "" {
-		p.cooling[key] = time.Now().Add(cooldown)
+		p.cooling[key] = time.Now().Add(egressCooldown)
 		delete(p.reserved, key)
 	}
 	p.active = append(p.active[:index], p.active[index+1:]...)
@@ -456,6 +422,7 @@ func (p *Pool) penalizeFor(bad *exit, reason string, cooldown time.Duration) {
 	p.warn("rotating WARP egress", "exit", bad.id, "reason", reason)
 	go func() {
 		defer p.wait.Done()
+		defer close(done)
 		p.replace(bad, reason)
 	}()
 }
@@ -804,14 +771,6 @@ func (l *Lease) EgressKey() string {
 		return ""
 	}
 	return l.exit.egressKey()
-}
-
-// DialNetwork is the explicit TCP address family for this lease.
-func (l *Lease) DialNetwork() string {
-	if l == nil || l.exit == nil {
-		return ""
-	}
-	return l.exit.dialNetwork()
 }
 
 func (l *Lease) String() string {

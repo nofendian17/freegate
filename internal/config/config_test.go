@@ -224,7 +224,7 @@ func defaultConfig() *Config {
 
 		EgressStack:               "ipv6",
 		EgressPoolSize:            2,
-		EgressSourceIPv6:          "2001:db8::/64",
+		EgressSourceIPv6:          "2606:4700:1234:5678::/64",
 		EgressRegistrationTimeout: 5 * time.Minute,
 		EgressRotateWait:          30 * time.Second,
 	}

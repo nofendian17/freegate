@@ -183,12 +183,13 @@ func (h *Handler) testWarpPool(w http.ResponseWriter, r *http.Request, row regis
 			continue
 		}
 		for _, exit := range pool.Exits {
-			status = 200
-			if exit.Egress != "" {
-				ok = true
-				lastErr = ""
-				break
+			if exit.Egress == "" {
+				continue
 			}
+			ok = true
+			status = 200
+			lastErr = ""
+			break
 		}
 	}
 	elapsed := time.Since(start).Milliseconds()

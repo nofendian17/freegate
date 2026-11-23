@@ -49,7 +49,7 @@ services:
       # through WARP exits that run inside this container. No sidecars,
       # NET_ADMIN or /dev/net/tun are needed.
       - EGRESS_MODE=${EGRESS_MODE:-off}
-      - WARP_STACK=${WARP_STACK:-ipv6}
+      - WARP_STACK=${WARP_STACK:-dual}
       - WARP_POOL_SIZE=${WARP_POOL_SIZE:-2}
       # "auto" discovers a routed public IPv6 /64 from the host. Override it
       # with an explicit prefix when the host prefix is not visible in the

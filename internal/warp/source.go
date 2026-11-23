@@ -150,6 +150,25 @@ func allZero(b []byte) bool {
 	return true
 }
 
+// ValidateSourcePrefix reports whether p can serve as a routed outer IPv6
+// source. It applies the same public/global checks as auto-detection, so an
+// explicit WARP_SOURCE_IPV6 cannot silently bind an unroutable address.
+func ValidateSourcePrefix(p netip.Prefix) error {
+	if !p.IsValid() {
+		return errors.New("not a valid IPv6 prefix")
+	}
+	if !p.Addr().Is6() {
+		return fmt.Errorf("%s is not an IPv6 prefix", p)
+	}
+	if p.Bits() > 64 {
+		return fmt.Errorf("%s must be a /64 or shorter", p)
+	}
+	if !usableSourceAddr(p.Masked().Addr()) {
+		return fmt.Errorf("%s is not a public, globally routable IPv6 prefix", p)
+	}
+	return nil
+}
+
 // SourceError adds context to a failed auto-detection so an operator knows
 // what to set manually.
 func SourceError(err error) error {
