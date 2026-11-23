@@ -134,12 +134,15 @@ func TestApplyEgressPools(t *testing.T) {
 	cfg := &config.Config{}
 	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
 		Kind: registry.PoolKindWarp, Name: "warp-1",
-		WarpEndpoints: "warp-1:1080@http://warp-1:8081", Enabled: true,
+		WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	router := egress.NewRouter()
+	router.SetPoolFactory(func(context.Context, egress.Options) (*egress.Pool, error) {
+		return egress.NewTestPool(), nil
+	})
 	if err := applyEgressPools(t.Context(), s, cfg, router); err != nil {
 		t.Fatalf("apply: %v", err)
 	}

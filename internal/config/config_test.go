@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidate_Valid(t *testing.T) {
@@ -220,5 +221,11 @@ func defaultConfig() *Config {
 		UpstreamURLLLM7: "https://api.llm7.io/v1",
 
 		UpstreamDefault: "opencode",
+
+		EgressStack:               "ipv6",
+		EgressPoolSize:            2,
+		EgressSourceIPv6:          "2001:db8::/64",
+		EgressRegistrationTimeout: 5 * time.Minute,
+		EgressRotateWait:          30 * time.Second,
 	}
 }

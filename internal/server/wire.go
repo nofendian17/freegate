@@ -25,24 +25,19 @@ func buildEgress(cfg *config.Config) (*egress.Pool, error) {
 	if cfg.EgressMode != "warp" {
 		return nil, nil
 	}
-	endpoints, err := egress.ParsePool(cfg.EgressWarpPool)
+	opts, err := egress.ParseConfig(cfg.EgressStack, cfg.EgressPoolSize, cfg.EgressSourceIPv6)
 	if err != nil {
-		return nil, fmt.Errorf("EGRESS_WARP_POOL: %w", err)
+		return nil, fmt.Errorf("WARP config: %w", err)
 	}
-	if len(endpoints) == 0 {
-		// Pools can live in the database; with no env default, only pinned
-		// warp pools route. Unpinned WARP fails closed rather than leaking.
-		slog.Warn("egress: EGRESS_MODE=warp with no EGRESS_WARP_POOL; only pinned warp pools will route")
-		return nil, nil
+	opts.FallbackDirect = cfg.EgressFallbackDirect
+	opts.RegistrationTimeout = cfg.EgressRegistrationTimeout
+	opts.RotateWait = cfg.EgressRotateWait
+	pool, err := egress.NewPool(context.Background(), slog.Default(), opts)
+	if err != nil {
+		return nil, fmt.Errorf("WARP pool: %w", err)
 	}
-	pool := egress.NewPool(egress.Options{
-		Endpoints:      endpoints,
-		FallbackDirect: cfg.EgressFallbackDirect,
-		RotateTimeout:  cfg.EgressRotateTimeout,
-		DrainTimeout:   cfg.EgressDrainTimeout,
-		FailureCool:    cfg.EgressCooldown,
-	})
-	slog.Info("egress: WARP pool enabled", "endpoints", len(endpoints), "fallback_direct", cfg.EgressFallbackDirect)
+	slog.Info("egress: WARP pool enabled", "size", opts.Size, "stack", opts.Stack,
+		"source", opts.SourceIPv6, "fallback_direct", opts.FallbackDirect)
 	return pool, nil
 }
 
@@ -90,20 +85,22 @@ func applyEgressPools(ctx context.Context, pstore *registry.Store, cfg *config.C
 		if registry.NormalizePoolKind(row.Kind) != registry.PoolKindWarp || !row.Enabled {
 			continue
 		}
-		endpoints, err := egress.ParsePool(row.WarpEndpoints)
+		opts, err := egress.ParseConfig(row.WarpStack, row.WarpPoolSize, row.WarpSourceIPv6)
 		if err != nil {
 			return fmt.Errorf("warp pool %q: %w", row.Name, err)
 		}
+		opts.FallbackDirect = cfg.EgressFallbackDirect
+		opts.RegistrationTimeout = cfg.EgressRegistrationTimeout
+		opts.RotateWait = cfg.EgressRotateWait
 		configs = append(configs, egress.PoolConfig{
-			ID:             row.ID,
-			Name:           row.Name,
-			Endpoints:      endpoints,
-			FallbackDirect: cfg.EgressFallbackDirect,
-			RotateTimeout:  cfg.EgressRotateTimeout,
-			DrainTimeout:   cfg.EgressDrainTimeout,
-			FailureCool:    cfg.EgressCooldown,
+			ID:                  row.ID,
+			Name:                row.Name,
+			Stack:               opts.Stack,
+			Size:                opts.Size,
+			SourceIPv6:          opts.SourceIPv6,
+			FallbackDirect:      opts.FallbackDirect,
+			RegistrationTimeout: opts.RegistrationTimeout,
 		})
 	}
-	router.Apply(configs)
-	return nil
+	return router.Apply(ctx, configs)
 }

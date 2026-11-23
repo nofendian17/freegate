@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"freegate/internal/infrastructure/egress"
+	"freegate/internal/warp"
 )
 
 type Config struct {
@@ -55,15 +58,16 @@ type Config struct {
 	// PR #4111). Substrings matched case-insensitively. Defaults to union-alpha.
 	MessageModels []string
 
-	// Egress routes OpenCode traffic through a pool of WARP sidecars so a
+	// Egress routes OpenCode traffic through in-process WARP exits so a
 	// free-tier limit can be answered with a fresh exit IP instead of an
 	// error. "off" (default) keeps direct connections.
-	EgressMode           string
-	EgressWarpPool       string
-	EgressCooldown       time.Duration
-	EgressFallbackDirect bool
-	EgressRotateTimeout  time.Duration
-	EgressDrainTimeout   time.Duration
+	EgressMode                string
+	EgressStack               string
+	EgressPoolSize            int
+	EgressSourceIPv6          string
+	EgressFallbackDirect      bool
+	EgressRegistrationTimeout time.Duration
+	EgressRotateWait          time.Duration
 
 	ProvidersDBPath string
 }
@@ -104,12 +108,13 @@ func Load() *Config {
 
 		ProvidersDBPath: envStr("PROVIDERS_DB_PATH", "./data/providers.db"),
 
-		EgressMode:           resolveEgressMode(os.Getenv("EGRESS_MODE"), os.Getenv("EGRESS_WARP_POOL")),
-		EgressWarpPool:       envStr("EGRESS_WARP_POOL", ""),
-		EgressCooldown:       envDuration("EGRESS_COOLDOWN", time.Minute),
-		EgressFallbackDirect: envBool("EGRESS_FALLBACK_DIRECT", false),
-		EgressRotateTimeout:  envDuration("EGRESS_ROTATE_TIMEOUT", 90*time.Second),
-		EgressDrainTimeout:   envDuration("EGRESS_DRAIN_TIMEOUT", 60*time.Second),
+		EgressMode:                resolveEgressMode(os.Getenv("EGRESS_MODE")),
+		EgressStack:               envStr("WARP_STACK", string(warp.DefaultStack)),
+		EgressPoolSize:            envInt("WARP_POOL_SIZE", warp.DefaultPoolSize),
+		EgressSourceIPv6:          envStr("WARP_SOURCE_IPV6", ""),
+		EgressFallbackDirect:      envBool("EGRESS_FALLBACK_DIRECT", false),
+		EgressRegistrationTimeout: envDuration("WARP_REGISTRATION_TIMEOUT", warp.RegistrationWindow),
+		EgressRotateWait:          envDuration("WARP_ROTATE_WAIT", 30*time.Second),
 	}
 
 	// API_KEY was removed in favour of DB-managed client keys. Warn loudly so
@@ -155,6 +160,17 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Sprintf("EGRESS_MODE must be off or warp, got %q", c.EgressMode))
 	}
+	if c.EgressMode == "warp" {
+		if _, err := egress.ParseConfig(c.EgressStack, c.EgressPoolSize, c.EgressSourceIPv6); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if c.EgressRegistrationTimeout <= 0 {
+			errs = append(errs, "WARP_REGISTRATION_TIMEOUT must be positive")
+		}
+		if c.EgressRotateWait <= 0 {
+			errs = append(errs, "WARP_ROTATE_WAIT must be positive")
+		}
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
@@ -169,13 +185,10 @@ func envStr(key, def string) string {
 	return def
 }
 
-func resolveEgressMode(mode, pool string) string {
+func resolveEgressMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode != "" {
 		return mode
-	}
-	if strings.TrimSpace(pool) != "" {
-		return "warp"
 	}
 	return "off"
 }

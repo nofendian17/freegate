@@ -2,33 +2,34 @@ package egress
 
 import (
 	"context"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"freegate/internal/warp"
 )
 
 // PoolConfig describes one persisted WARP pool. ID 0 is reserved for the
 // env-configured default pool.
 type PoolConfig struct {
-	ID             uint
-	Name           string
-	Endpoints      []Endpoint
-	FallbackDirect bool
-	DialTimeout    time.Duration
-	RotateTimeout  time.Duration
-	DrainTimeout   time.Duration
-	FailureCool    time.Duration
+	ID                  uint
+	Name                string
+	Stack               warp.Stack
+	Size                int
+	SourceIPv6          netip.Prefix
+	FallbackDirect      bool
+	RegistrationTimeout time.Duration
 }
 
 func (c PoolConfig) options() Options {
 	return Options{
-		Endpoints:      c.Endpoints,
-		FallbackDirect: c.FallbackDirect,
-		DialTimeout:    c.DialTimeout,
-		RotateTimeout:  c.RotateTimeout,
-		DrainTimeout:   c.DrainTimeout,
-		FailureCool:    c.FailureCool,
+		Size:                c.Size,
+		Stack:               c.Stack,
+		SourceIPv6:          c.SourceIPv6,
+		FallbackDirect:      c.FallbackDirect,
+		RegistrationTimeout: c.RegistrationTimeout,
 	}
 }
 
@@ -38,20 +39,33 @@ type poolEntry struct {
 }
 
 // Router resolves a WARP pool ID to its current pool and supports hot reload.
-// Transports hold a Router and look the pool up at dial time, so editing a
-// pool in the admin UI takes effect without rebuilding every upstream.
+// Transports hold a Router and look the pool up at dial time, so editing a pool
+// in the admin UI takes effect without rebuilding every upstream.
 //
-// The zero value is usable and fails closed: a nil router, or a missing
-// pool, resolves to a nil *Pool, which never dials directly.
+// The zero value is usable and fails closed: a nil router, or a missing pool,
+// resolves to a nil *Pool, which never dials directly.
 type Router struct {
 	mu          sync.Mutex
 	pools       atomic.Pointer[map[uint]*poolEntry]
 	defaultPool atomic.Pointer[Pool]
+	// newPool is overridden by tests so applying a config never registers a
+	// real Cloudflare device.
+	newPool func(context.Context, Options) (*Pool, error)
+}
+
+// SetPoolFactory overrides pool construction. Tests use it to avoid
+// registering real Cloudflare devices when applying persisted pools.
+func (r *Router) SetPoolFactory(f func(context.Context, Options) (*Pool, error)) {
+	if r != nil {
+		r.newPool = f
+	}
 }
 
 // NewRouter returns an empty router. Pool 0 is unset until SetDefault.
 func NewRouter() *Router {
-	r := &Router{}
+	r := &Router{newPool: func(ctx context.Context, opts Options) (*Pool, error) {
+		return NewPool(ctx, nil, opts)
+	}}
 	empty := map[uint]*poolEntry{}
 	r.pools.Store(&empty)
 	return r
@@ -94,17 +108,18 @@ func (r *Router) Pool(id uint) *Pool {
 	return entry.pool
 }
 
-// Apply replaces the persisted pool set, preserving live pool instances whose
-// configuration did not change so endpoint rotation state and cooldowns
-// survive an admin rebuild.
-func (r *Router) Apply(configs []PoolConfig) {
+// Apply replaces the persisted pool set. Unchanged pools keep their live
+// instances so exit identity and cooldowns survive an admin rebuild. A failed
+// registration aborts the whole swap and closes every pool built in this pass.
+func (r *Router) Apply(ctx context.Context, configs []PoolConfig) error {
 	if r == nil {
-		return
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old := r.pools.Load()
 	next := make(map[uint]*poolEntry, len(configs))
+	built := make([]*Pool, 0, len(configs))
 	for _, cfg := range configs {
 		if cfg.ID == 0 {
 			continue
@@ -113,35 +128,41 @@ func (r *Router) Apply(configs []PoolConfig) {
 			next[cfg.ID] = prev
 			continue
 		}
-		next[cfg.ID] = &poolEntry{cfg: cfg, pool: NewPool(cfg.options())}
+		factory := r.newPool
+		if factory == nil {
+			factory = func(ctx context.Context, opts Options) (*Pool, error) {
+				return NewPool(ctx, nil, opts)
+			}
+		}
+		p, err := factory(ctx, cfg.options())
+		if err != nil {
+			for _, item := range built {
+				item.Close()
+			}
+			return err
+		}
+		built = append(built, p)
+		next[cfg.ID] = &poolEntry{cfg: cfg, pool: p}
 	}
 	r.pools.Store(&next)
+	return nil
 }
 
 func sameConfig(a, b PoolConfig) bool {
-	if a.Name != b.Name ||
-		a.FallbackDirect != b.FallbackDirect ||
-		a.DialTimeout != b.DialTimeout ||
-		a.RotateTimeout != b.RotateTimeout ||
-		a.DrainTimeout != b.DrainTimeout ||
-		a.FailureCool != b.FailureCool ||
-		len(a.Endpoints) != len(b.Endpoints) {
-		return false
-	}
-	for i := range a.Endpoints {
-		if a.Endpoints[i] != b.Endpoints[i] {
-			return false
-		}
-	}
-	return true
+	return a.Name == b.Name &&
+		a.Stack == b.Stack &&
+		a.Size == b.Size &&
+		a.SourceIPv6 == b.SourceIPv6 &&
+		a.FallbackDirect == b.FallbackDirect &&
+		a.RegistrationTimeout == b.RegistrationTimeout
 }
 
 // PoolStatus is a point-in-time view of one configured pool.
 type PoolStatus struct {
-	ID        uint       `json:"id"`
-	Name      string     `json:"name"`
-	Default   bool       `json:"default"`
-	Endpoints []Snapshot `json:"endpoints"`
+	ID      uint       `json:"id"`
+	Name    string     `json:"name"`
+	Default bool       `json:"default"`
+	Exits   []Snapshot `json:"exits"`
 }
 
 // Snapshot returns the default pool and every persisted pool, sorted by ID.
@@ -150,13 +171,8 @@ func (r *Router) Snapshot() []PoolStatus {
 		return nil
 	}
 	var out []PoolStatus
-	// Refresh exit addresses on demand so prefix collisions are visible even
-	// for endpoints that never triggered a rotation through this process.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	if p := r.Default(); p != nil {
-		p.probeIPs(ctx)
-		out = append(out, PoolStatus{ID: 0, Name: "default (env)", Default: true, Endpoints: p.Snapshot()})
+		out = append(out, PoolStatus{ID: 0, Name: "default (env)", Default: true, Exits: p.Snapshot()})
 	}
 	cur := r.pools.Load()
 	if cur == nil {
@@ -166,16 +182,13 @@ func (r *Router) Snapshot() []PoolStatus {
 	for id := range *cur {
 		ids = append(ids, id)
 	}
-	sortUints(ids)
+	slices.Sort(ids)
 	for _, id := range ids {
 		entry := (*cur)[id]
 		if entry == nil {
 			continue
 		}
-		entry.pool.probeIPs(ctx)
-		out = append(out, PoolStatus{ID: id, Name: entry.cfg.Name, Endpoints: entry.pool.Snapshot()})
+		out = append(out, PoolStatus{ID: id, Name: entry.cfg.Name, Exits: entry.pool.Snapshot()})
 	}
 	return out
 }
-
-func sortUints(in []uint) { slices.Sort(in) }

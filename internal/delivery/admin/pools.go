@@ -16,24 +16,28 @@ import (
 )
 
 type poolIn struct {
-	Name          string `json:"name" validate:"required,resource_name"`
-	Kind          string `json:"kind"`
-	ProxyURL      string `json:"proxy_url" validate:"omitempty,http_url,max=2048"`
-	NoProxy       string `json:"no_proxy" validate:"omitempty,max=2048"`
-	StrictProxy   bool   `json:"strict_proxy"`
-	WarpEndpoints string `json:"warp_endpoints" validate:"omitempty,max=4096"`
-	Enabled       bool   `json:"enabled"`
+	Name           string `json:"name" validate:"required,resource_name"`
+	Kind           string `json:"kind"`
+	ProxyURL       string `json:"proxy_url" validate:"omitempty,http_url,max=2048"`
+	NoProxy        string `json:"no_proxy" validate:"omitempty,max=2048"`
+	StrictProxy    bool   `json:"strict_proxy"`
+	WarpStack      string `json:"warp_stack" validate:"omitempty,max=16"`
+	WarpPoolSize   int    `json:"warp_pool_size"`
+	WarpSourceIPv6 string `json:"warp_source_ipv6" validate:"omitempty,max=64"`
+	Enabled        bool   `json:"enabled"`
 }
 
 func (in poolIn) pool() registry.ProxyPool {
 	return registry.ProxyPool{
-		Kind:          registry.NormalizePoolKind(in.Kind),
-		Name:          in.Name,
-		ProxyURL:      in.ProxyURL,
-		NoProxy:       in.NoProxy,
-		StrictProxy:   in.StrictProxy,
-		WarpEndpoints: in.WarpEndpoints,
-		Enabled:       in.Enabled,
+		Kind:           registry.NormalizePoolKind(in.Kind),
+		Name:           in.Name,
+		ProxyURL:       in.ProxyURL,
+		NoProxy:        in.NoProxy,
+		StrictProxy:    in.StrictProxy,
+		WarpStack:      in.WarpStack,
+		WarpPoolSize:   in.WarpPoolSize,
+		WarpSourceIPv6: in.WarpSourceIPv6,
+		Enabled:        in.Enabled,
 	}
 }
 
@@ -162,41 +166,30 @@ func (h *Handler) testPool(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": ok, "status": resp.StatusCode, "error": lastErr, "elapsedMs": elapsed})
 }
 
-// testWarpPool probes every endpoint's rotation control API (GET /ip). A pool
-// with no control URL cannot verify identity, so it reports failure.
+// testWarpPool checks that the pool config is valid and that the live router
+// has at least one verified exit for it. WARP exits are in-process, so there
+// is no sidecar control API to probe.
 func (h *Handler) testWarpPool(w http.ResponseWriter, r *http.Request, row registry.ProxyPool) {
-	eps, err := egress.ParsePool(row.WarpEndpoints)
-	if err != nil {
+	if _, err := egress.ParseConfig(row.WarpStack, row.WarpPoolSize, row.WarpSourceIPv6); err != nil {
 		respond.JSONError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	start := time.Now()
 	ok := false
 	status := 0
-	lastErr := "no control endpoint configured"
-	for _, ep := range eps {
-		if ep.Control == "" {
+	lastErr := "no live WARP exit"
+	for _, pool := range h.eg.Snapshot() {
+		if pool.ID != row.ID {
 			continue
 		}
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, ep.Control+"/ip", http.NoBody)
-		if err != nil {
-			lastErr = err.Error()
-			continue
+		for _, exit := range pool.Exits {
+			status = 200
+			if exit.Egress != "" {
+				ok = true
+				lastErr = ""
+				break
+			}
 		}
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = fmt.Sprintf("%s: %v", ep.Name, err)
-			continue
-		}
-		status = resp.StatusCode
-		_ = resp.Body.Close()
-		if resp.StatusCode/100 == 2 {
-			ok = true
-			lastErr = ""
-			continue
-		}
-		lastErr = fmt.Sprintf("%s: control API returned %s", ep.Name, resp.Status)
 	}
 	elapsed := time.Since(start).Milliseconds()
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
@@ -211,13 +204,15 @@ func (h *Handler) testWarpPool(w http.ResponseWriter, r *http.Request, row regis
 
 func (h *Handler) persistPoolFailure(ctx context.Context, row registry.ProxyPool, lastErr string) {
 	if _, err := h.store.UpdatePool(ctx, row.ID, registry.ProxyPool{
-		Kind:          row.Kind,
-		Name:          row.Name,
-		ProxyURL:      row.ProxyURL,
-		NoProxy:       row.NoProxy,
-		StrictProxy:   row.StrictProxy,
-		WarpEndpoints: row.WarpEndpoints,
-		Enabled:       false,
+		Kind:           row.Kind,
+		Name:           row.Name,
+		ProxyURL:       row.ProxyURL,
+		NoProxy:        row.NoProxy,
+		StrictProxy:    row.StrictProxy,
+		WarpStack:      row.WarpStack,
+		WarpPoolSize:   row.WarpPoolSize,
+		WarpSourceIPv6: row.WarpSourceIPv6,
+		Enabled:        false,
 	}); err != nil {
 		slog.Warn("failed to disable failed pool", "pool_id", row.ID, "error", err)
 	}

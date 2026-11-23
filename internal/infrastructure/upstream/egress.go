@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -79,6 +80,19 @@ func NewWarpTransport(route EgressRoute, base *http.Transport) *http.Transport {
 	}
 	tr := base.Clone()
 	tr.DialContext = route.DialContext
+	// A userspace exit is per-attempt: keep-alives would leave a pooled
+	// connection bound to an exit after it is retired, and h2 over a fresh
+	// netstack connection is not what the upstream path was verified with.
+	tr.DisableKeepAlives = true
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
+	} else {
+		cfg := tr.TLSClientConfig.Clone()
+		cfg.NextProtos = []string{"http/1.1"}
+		tr.TLSClientConfig = cfg
+	}
 	return tr
 }
 

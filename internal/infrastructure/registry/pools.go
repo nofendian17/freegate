@@ -88,13 +88,15 @@ func (s *Store) UpdatePool(ctx context.Context, id uint, p ProxyPool) (ProxyPool
 	}
 	p.ID = id
 	result := s.db.WithContext(ctx).Model(&ProxyPool{}).Where("id = ?", id).Updates(map[string]any{
-		"kind":           p.Kind,
-		"name":           p.Name,
-		"proxy_url":      p.ProxyURL,
-		"no_proxy":       p.NoProxy,
-		"strict_proxy":   p.StrictProxy,
-		"warp_endpoints": p.WarpEndpoints,
-		"enabled":        p.Enabled,
+		"kind":             p.Kind,
+		"name":             p.Name,
+		"proxy_url":        p.ProxyURL,
+		"no_proxy":         p.NoProxy,
+		"strict_proxy":     p.StrictProxy,
+		"warp_stack":       p.WarpStack,
+		"warp_pool_size":   p.WarpPoolSize,
+		"warp_source_ipv6": p.WarpSourceIPv6,
+		"enabled":          p.Enabled,
 	})
 	if result.Error != nil {
 		return ProxyPool{}, wrapStoreError("update pool", result.Error)
