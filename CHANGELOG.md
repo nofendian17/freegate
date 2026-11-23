@@ -18,7 +18,9 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
   `WARP_SOURCE_IPV6` prefix, so a replacement presents a new outer source and
   receives a genuinely different /64 quota bucket. The prefix defaults to
   `auto`, which discovers a public routed prefix from the host; an explicit
-  `/64` still overrides detection.
+  `/64` still overrides detection. When auto-detection finds no public prefix,
+  WARP now runs without source rotation and logs a warning instead of refusing
+  to start.
 - The exit pool scales with demand (preload half of `WARP_POOL_SIZE`, hard
   ceiling at the configured size), cools a rejected /64 for 30 minutes, and
   honors Cloudflare's registration `Retry-After` with backoff.

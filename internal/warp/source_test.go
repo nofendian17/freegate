@@ -27,6 +27,24 @@ func TestCandidatePrefixRejectsUnroutableAddresses(t *testing.T) {
 	}
 }
 
+func TestResolveSourcePrefixFallsBackWhenAutoDetectionFails(t *testing.T) {
+	got := resolveSourcePrefix(Options{AutoSource: true}, nil, func() (netip.Prefix, error) {
+		return netip.Prefix{}, ErrNoSourcePrefix
+	})
+	if got.IsValid() {
+		t.Fatalf("fallback returned prefix %s, want none", got)
+	}
+
+	explicit := netip.MustParsePrefix("2606:4700:1234:abcd::/64")
+	got = resolveSourcePrefix(Options{AutoSource: true, SourceIPv6: explicit}, nil, func() (netip.Prefix, error) {
+		t.Fatal("discovery must not run when a prefix is configured")
+		return netip.Prefix{}, nil
+	})
+	if got != explicit {
+		t.Fatalf("explicit prefix = %s, want %s", got, explicit)
+	}
+}
+
 func TestCandidatePrefixNormalizesTo64(t *testing.T) {
 	prefix, ok := candidatePrefix(netip.MustParseAddr("2606:4700:1234:abcd::1"), 48)
 	if !ok {

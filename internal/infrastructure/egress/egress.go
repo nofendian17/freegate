@@ -181,10 +181,10 @@ func NewPool(ctx context.Context, log *slog.Logger, opts Options) (*Pool, error)
 	p := newPoolFromBackend(&warpBackend{p: wp}, opts.FallbackDirect)
 	p.rotateWait = opts.RotateWait
 	source := "none"
-	if opts.SourceIPv6.IsValid() {
-		source = opts.SourceIPv6.String()
+	if wp.Source().IsValid() {
+		source = wp.Source().String()
 	} else if opts.AutoSource {
-		source = "auto"
+		source = "auto (no public prefix; rotation degraded)"
 	}
 	slog.Info("egress: WARP pool enabled", "size", opts.Size, "stack", opts.Stack,
 		"source", source, "fallback_direct", opts.FallbackDirect)

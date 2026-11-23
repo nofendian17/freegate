@@ -48,6 +48,7 @@ type Pool struct {
 	size    int
 	preload int
 	stack   Stack
+	source  netip.Prefix
 	newExit func(context.Context) (*exit, error)
 
 	mu        sync.Mutex
@@ -120,16 +121,7 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 	if err != nil {
 		return nil, err
 	}
-	sourcePrefix := opts.SourceIPv6
-	if opts.AutoSource && !sourcePrefix.IsValid() {
-		sourcePrefix, err = DiscoverSourcePrefix()
-		if err != nil {
-			return nil, SourceError(err)
-		}
-		if log != nil {
-			log.Info("WARP outer source auto-detected", "prefix", sourcePrefix.String())
-		}
-	}
+	sourcePrefix := resolveSourcePrefix(opts, log, DiscoverSourcePrefix)
 	if sourcePrefix.IsValid() {
 		if !sourcePrefix.Addr().Is6() || sourcePrefix.Bits() > 64 {
 			return nil, fmt.Errorf("WARP outer source must be an IPv6 prefix of /64 or shorter, got %s", sourcePrefix)
@@ -161,7 +153,40 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 		return nil, err
 	}
 	pool.stack = normalized
+	pool.source = sourcePrefix
 	return pool, nil
+}
+
+// Source reports the outer prefix used by exits. An invalid prefix means the
+// pool is running without source rotation.
+func (p *Pool) Source() netip.Prefix {
+	if p == nil {
+		return netip.Prefix{}
+	}
+	return p.source
+}
+
+// resolveSourcePrefix picks the outer source prefix. An explicit prefix always
+// wins; auto-detection failure degrades to no source (WARP still works over
+// IPv4 endpoints, but rotation may stay in the same quota /64).
+func resolveSourcePrefix(opts Options, log *slog.Logger, discover func() (netip.Prefix, error)) netip.Prefix {
+	if opts.SourceIPv6.IsValid() {
+		return opts.SourceIPv6
+	}
+	if !opts.AutoSource {
+		return netip.Prefix{}
+	}
+	prefix, err := discover()
+	if err != nil {
+		if log != nil {
+			log.Warn("WARP outer source unavailable; running without source rotation", "error", SourceError(err).Error())
+		}
+		return netip.Prefix{}
+	}
+	if log != nil {
+		log.Info("WARP outer source auto-detected", "prefix", prefix.String())
+	}
+	return prefix
 }
 
 // randomSource draws one host address from prefix. Bits above the prefix

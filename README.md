@@ -298,7 +298,7 @@ Pools are editable at runtime: create a `warp` pool under Providers → Proxy po
 | `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for in-process WARP |
 | `WARP_STACK` | `ipv6` | Tunnel address family; source rotation requires `ipv6` |
 | `WARP_POOL_SIZE` | `2` | Upper bound on simultaneously registered exits (1–32) |
-| `WARP_SOURCE_IPV6` | `auto` | Outer-source prefix. `auto` detects a public routed prefix from the host; an explicit /64 overrides it |
+| `WARP_SOURCE_IPV6` | `auto` | Outer-source prefix. `auto` detects a public routed prefix from the host; without one, WARP still runs but rotation may reuse the same /64 |
 | `WARP_REGISTRATION_TIMEOUT` | `5m` | Startup window for the first registration and Cloudflare rate-limit waits |
 | `WARP_ROTATE_WAIT` | `30s` | How long a retry waits for a replacement exit |
 | `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the pool is unavailable; opt in explicitly |
