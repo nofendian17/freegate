@@ -88,12 +88,12 @@ type backend interface {
 // Lease attributes one request to the exit that served its dial. It is also
 // the handle used to retire that exit after a free-tier limit.
 type Lease struct {
-	once      sync.Once
-	owner     *Pool
-	dial      func(context.Context, string, string) (net.Conn, error)
-	release   func()
-	fail      func(string)
-	waitFresh func(context.Context, []Snapshot)
+	once       sync.Once
+	owner      *Pool
+	dial       func(context.Context, string, string) (net.Conn, error)
+	release    func()
+	fail       func(string) <-chan struct{}
+	rotateWait time.Duration
 }
 
 // DialContext dials through this lease's exit. A released lease fails closed,
@@ -126,29 +126,37 @@ func (l *Lease) Release() {
 	})
 }
 
-// RotateAsync retires the exit that carried the request and waits for a
-// replacement, so the caller's retry leaves from a new identity.
+// RotateAsync retires the exit that carried the request and returns a channel
+// that closes once the replacement attempt settles, so the caller's retry
+// leaves from a new identity. It is bounded by the pool's rotate wait and the
+// caller's context, so a slow or failed registration cannot stall a retry for
+// longer than that.
 func (l *Lease) RotateAsync(ctx context.Context, reason string, closeIdle func()) <-chan struct{} {
 	done := make(chan struct{})
 	if l == nil || l.fail == nil {
 		close(done)
 		return done
 	}
-	var before []Snapshot
-	if l.owner != nil {
-		before = l.owner.Snapshot()
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	l.fail(reason)
+	replaced := l.fail(reason)
 	if closeIdle != nil {
 		closeIdle()
 	}
-	if l.waitFresh == nil {
-		close(done)
-		return done
+	wait := l.rotateWait
+	if wait <= 0 {
+		wait = 30 * time.Second
 	}
 	go func() {
 		defer close(done)
-		l.waitFresh(ctx, before)
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-replaced:
+		case <-timer.C:
+		case <-ctx.Done():
+		}
 	}()
 	return done
 }
@@ -186,8 +194,9 @@ func NewPool(ctx context.Context, log *slog.Logger, opts Options) (*Pool, error)
 	} else if opts.AutoSource {
 		source = "auto (no public prefix; rotation degraded)"
 	}
-	slog.Info("egress: WARP pool enabled", "size", opts.Size, "stack", opts.Stack,
-		"source", source, "fallback_direct", opts.FallbackDirect)
+	snap := wp.Snapshot()
+	slog.Info("egress: WARP pool enabled", "size", snap.Size, "stack", snap.Stack,
+		"preload", snap.Preload, "source", source, "fallback_direct", opts.FallbackDirect)
 	return p, nil
 }
 
@@ -210,8 +219,8 @@ func (p *Pool) Acquire(ctx context.Context) (context.Context, *Lease) {
 		return ctx, nil
 	}
 	l.owner = p
-	if l.waitFresh == nil {
-		l.waitFresh = p.waitFresh
+	if l.rotateWait <= 0 {
+		l.rotateWait = p.rotateWait
 	}
 	return context.WithValue(ctx, leaseKey{}, l), l
 }
@@ -245,35 +254,6 @@ func (p *Pool) DialContext(ctx context.Context, network, addr string) (net.Conn,
 		return nil, err
 	}
 	return &leaseConn{Conn: conn, lease: l}, nil
-}
-
-// waitFresh waits until a new exit appears, so a retry after a free-tier limit
-// does not leave from the same quota scope.
-func (p *Pool) waitFresh(ctx context.Context, before []Snapshot) {
-	if p == nil || p.backend == nil {
-		return
-	}
-	deadline := time.Now().Add(p.rotateWait)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		for _, now := range p.backend.Snapshot() {
-			seen := false
-			for _, old := range before {
-				if old.ID == now.ID && old.Prefix == now.Prefix {
-					seen = true
-					break
-				}
-			}
-			if !seen {
-				return
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 // Close retires every exit in the pool.
@@ -327,7 +307,7 @@ func (b *warpBackend) Acquire(ctx context.Context) (*Lease, error) {
 	return &Lease{
 		dial:    l.DialContext,
 		release: l.Release,
-		fail:    func(reason string) { b.p.Fail(l, reason) },
+		fail:    func(reason string) <-chan struct{} { return b.p.Fail(l, reason) },
 	}, nil
 }
 

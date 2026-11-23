@@ -36,8 +36,6 @@ func buildEgress(cfg *config.Config) (*egress.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("WARP pool: %w", err)
 	}
-	slog.Info("egress: WARP pool enabled", "size", opts.Size, "stack", opts.Stack,
-		"source", opts.SourceIPv6, "fallback_direct", opts.FallbackDirect)
 	return pool, nil
 }
 

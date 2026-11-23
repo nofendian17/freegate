@@ -2,6 +2,7 @@ package warp
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -106,7 +107,7 @@ func TestPoolAcquireRelease(t *testing.T) {
 	}
 }
 
-func TestPoolReportRotatesAndCoolsEgress(t *testing.T) {
+func TestFailRotatesAndCoolsEgress(t *testing.T) {
 	var created atomic.Int64
 	p, err := newPool(context.Background(), nil, 1, func(context.Context) (*exit, error) {
 		n := created.Add(1)
@@ -122,27 +123,49 @@ func TestPoolReportRotatesAndCoolsEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldKey := lease.EgressKey()
-	p.Report(lease, 429, nil)
+	done := p.Fail(lease, "HTTP 429")
 	lease.Release()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		snap := p.Snapshot()
-		if snap.Active == 1 && len(snap.Exits) == 1 && snap.Exits[0].ID != firstID {
-			if _, cooling := p.cooling[oldKey]; !cooling {
-				t.Fatal("old /64 is not cooling")
-			}
-			if p.HasUntriedActive(map[string]bool{}) != true {
-				t.Fatal("replacement should be untried")
-			}
-			if p.HasUntriedActive(map[string]bool{snap.Exits[0].Prefix: true}) {
-				t.Fatal("tried replacement reported as untried")
-			}
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement did not settle")
 	}
-	t.Fatalf("exit was not replaced: %+v", p.Snapshot())
+
+	snap := p.Snapshot()
+	if snap.Active != 1 || len(snap.Exits) != 1 || snap.Exits[0].ID == firstID {
+		t.Fatalf("exit was not replaced: %+v", snap)
+	}
+	if _, cooling := p.cooling[oldKey]; !cooling {
+		t.Fatal("old /64 is not cooling")
+	}
+}
+
+func TestFailSettlesWhenReplacementFails(t *testing.T) {
+	var created atomic.Int64
+	p, err := newPool(context.Background(), nil, 1, func(context.Context) (*exit, error) {
+		if created.Add(1) == 1 {
+			return fakeExit("only", "2606:4700:1::1"), nil
+		}
+		return nil, errors.New("registration refused")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	lease, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := p.Fail(lease, "HTTP 429")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Fail waited for a replacement that never arrived")
+	}
+	if got := p.Snapshot().Active; got != 1 {
+		t.Fatalf("active exits = %d, want the old exit restored", got)
+	}
+	lease.Release()
 }
 
 func TestFailedExitRetiresAfterLeaseRelease(t *testing.T) {

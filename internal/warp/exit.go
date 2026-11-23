@@ -438,28 +438,6 @@ func (e *exit) close() {
 	})
 }
 
-// observe reports whether an upstream response should retire this exit. A
-// free-tier 429 is scoped to the egress, so retrying on the same tunnel only
-// repeats it.
-func (e *exit) observe(status int, body []byte) (bool, string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.penalized {
-		return false, ""
-	}
-	if status == http.StatusForbidden {
-		reason := "HTTP 403"
-		if strings.Contains(strings.ToLower(string(body)), "network") {
-			reason += " network anomaly"
-		}
-		return true, reason
-	}
-	if status == http.StatusTooManyRequests {
-		return true, "HTTP 429"
-	}
-	return false, ""
-}
-
 func (e *exit) isPenalized() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -500,6 +478,9 @@ func (e *exit) dialContext(ctx context.Context, network, address string) (net.Co
 			return nil, fmt.Errorf("WARP IPv4 stack cannot dial %q", network)
 		}
 	case StackIPv6:
+		// An IPv6 stack has no IPv4 address or route, so a literal IPv4
+		// destination cannot be reached. Fail here instead of falling
+		// back to the host, which would leak the real address.
 		if network != "tcp6" {
 			return nil, fmt.Errorf("WARP IPv6 stack cannot dial %q", network)
 		}

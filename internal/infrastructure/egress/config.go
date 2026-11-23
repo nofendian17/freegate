@@ -31,8 +31,9 @@ func ParseConfig(stack string, size int, source string) (Options, error) {
 	if err != nil {
 		return Options{}, fmt.Errorf("warp source_ipv6: %q is not an IPv6 prefix", source)
 	}
-	if !prefix.Addr().Is6() || prefix.Bits() > 64 {
-		return Options{}, fmt.Errorf("warp source_ipv6: %s must be an IPv6 /64 or shorter", prefix)
+	prefix = prefix.Masked()
+	if err := warp.ValidateSourcePrefix(prefix); err != nil {
+		return Options{}, fmt.Errorf("warp source_ipv6: %w", err)
 	}
-	return Options{Size: size, Stack: parsedStack, SourceIPv6: prefix.Masked()}, nil
+	return Options{Size: size, Stack: parsedStack, SourceIPv6: prefix}, nil
 }
