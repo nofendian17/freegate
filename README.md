@@ -287,7 +287,7 @@ Anonymous OpenCode free-tier requests are automatically shaped like the official
 
 ### WARP egress pools
 
-Optional. `EGRESS_MODE=warp` sends traffic through WARP exits that **run inside freegate** (userspace WireGuard + gVisor netstack) instead of the host's own address. Each exit is an independently registered Cloudflare device. When the upstream answers `429 FreeUsageLimitError`, freegate retires the exit that served the request and retries from a fresh one; per-key 429s are left to the existing key cooldown. A lease is held for the whole response body, so a rotating exit cannot be released while an SSE stream is still using it.
+Optional. `EGRESS_MODE=warp` sends traffic through WARP exits that **run inside freegate** (userspace WireGuard + gVisor netstack) instead of the host's own address. Each exit is an independently registered Cloudflare device. A `429 FreeUsageLimitError` from OpenCode retires the exit that served the request and retries from a fresh one; Kilo and LLM7 429s rotate too. Other per-key 429s stay with the key cooldown. A lease is held for the whole response body, so a rotating exit cannot be released while an SSE stream is still using it.
 
 The free tier is counted per **exit IPv6 /64**, not per exact address. Each exit therefore binds its WireGuard socket to a random address from the routed `WARP_SOURCE_IPV6` prefix using `IPV6_FREEBIND`. Registering a new device that leaves from the same host address would often land in the same /64 — a cosmetic change, not a fresh quota. Exits whose egress key is already active or cooling are discarded during registration, and Cloudflare's registration rate limit is paced by `Retry-After`.
 

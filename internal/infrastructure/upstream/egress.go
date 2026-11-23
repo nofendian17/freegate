@@ -102,6 +102,14 @@ func NewWarpTransport(route EgressRoute, base *http.Transport) *http.Transport {
 	return tr
 }
 
+// anyRateLimit treats any 429 as a rotatable limit. Kilo and LLM7 do not
+// return OpenCode's FreeUsageLimitError marker, and both are free gateways
+// whose 429 is scoped to the calling address, so rotating the WARP exit is
+// the appropriate response.
+func anyRateLimit(_ context.Context, resp *http.Response) bool {
+	return resp != nil && resp.StatusCode == http.StatusTooManyRequests
+}
+
 // isFreeUsageLimit probes resp for a free-tier usage limit and restores its
 // body. domain.IsFreeUsageLimit rewinds the UpstreamResponse it is given, so
 // the restored body must be copied back onto the http.Response the caller

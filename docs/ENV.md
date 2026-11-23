@@ -40,7 +40,7 @@ Address family: the direct OpenCode connection prefers IPv6 and falls back to IP
 
 ### Egress: WARP pools
 
-Optional. When enabled, connections to the configured upstream are dialed through WARP exits that run inside freegate (userspace WireGuard + gVisor netstack), not through sidecars. OpenCode's free tier is counted per **exit IPv6 /64**, so a `429 FreeUsageLimitError` retires the exit that served the request and the retry draws a replacement. Generic 429s (per-key rate limits) never trigger a rotation — freegate's key cooldown handles those.
+Optional. When enabled, connections to the configured upstream are dialed through WARP exits that run inside freegate (userspace WireGuard + gVisor netstack), not through sidecars. OpenCode's free tier is counted per **exit IPv6 /64**, so a `429 FreeUsageLimitError` retires the exit that served the request and the retry draws a replacement. Kilo and LLM7 are keyless/free gateways whose 429 is also scoped to the calling address; any 429 from those upstreams rotates the exit too. Other generic 429s (e.g. per-key rate limits on providers with multiple keys) still go through the key cooldown.
 
 Cloudflare may hand two registrations addresses in the same /64, which makes them share one quota even though their IP addresses differ. Every exit therefore binds its WireGuard socket to a random address from the routed `WARP_SOURCE_IPV6` prefix (`IPV6_FREEBIND` on Linux). A new device leaving from the same host address would frequently repeat the same /64. Exits whose egress key is already active or cooling are discarded during registration, and Cloudflare's registration 429 is paced by `Retry-After` (default pause 12s, max 5m).
 

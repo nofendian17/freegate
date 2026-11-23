@@ -30,7 +30,8 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 - WARP rotation retires the exit that served the request. A per-request lease
   stays alive until the response body is closed, so a rotating exit is never
   released while an SSE stream is still using it; the retry waits for a fresh
-  exit instead of polling a timeout.
+  exit instead of polling a timeout. Kilo and LLM7 now rotate on any 429 as
+  well (their limits are per address); per-key 429s still use key cooldown.
 - WARP transports pin HTTP/1.1 and disable keep-alives so a pooled connection
   can never be reused against a retired exit.
 - `EGRESS_WARP_POOL`, `EGRESS_COOLDOWN`, `EGRESS_ROTATE_TIMEOUT` and

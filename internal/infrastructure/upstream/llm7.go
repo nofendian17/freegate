@@ -31,8 +31,14 @@ func NewLLM7UpstreamWithEgress(baseURL string, tr *http.Transport, router *egres
 	if tr == nil {
 		tr = NewTransport()
 	}
+	client := NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr)
+	if router != nil {
+		// LLM7 is keyless: its 429 is scoped to the calling address, so a
+		// fresh WARP exit is the retry mechanism.
+		client.SetFreeLimitHook(anyRateLimit)
+	}
 	return &LLM7Upstream{
-		client: NewHTTPClientWithTransport(baseURL, []string{"unused"}, nil, tr),
+		client: client,
 		cache:  NewModelCache(),
 		trs:    newTransportPair(tr, router),
 	}

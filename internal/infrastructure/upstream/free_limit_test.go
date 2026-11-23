@@ -153,6 +153,60 @@ func TestFreeLimitHookRotatesUntilSuccess(t *testing.T) {
 
 // TestFreeLimitHookRetriesOnlyOnce documents the bound: after the configured
 // maximum rotations a still-limited upstream is returned unchanged.
+// TestKiloAndLLM7InstallRateLimitHook guards that their free 429s rotate too.
+func TestKiloAndLLM7InstallRateLimitHook(t *testing.T) {
+	ctx := context.Background()
+	check := func(name string, c *HTTPClient) {
+		t.Helper()
+		if c.onFreeLimit == nil {
+			t.Fatalf("%s: rate limit hook not installed", name)
+		}
+		resp := &http.Response{StatusCode: http.StatusTooManyRequests, Body: http.NoBody}
+		if !c.onFreeLimit(ctx, resp) {
+			t.Errorf("%s: generic 429 did not match the hook", name)
+		}
+		resp.StatusCode = http.StatusOK
+		if c.onFreeLimit(ctx, resp) {
+			t.Errorf("%s: 200 matched the rate limit hook", name)
+		}
+	}
+	kilo := NewKiloUpstreamWithEgress("http://example.invalid", "k", nil, egress.NewRouter())
+	check("kilo", kilo.client)
+	llm7 := NewLLM7UpstreamWithEgress("http://example.invalid", nil, egress.NewRouter())
+	check("llm7", llm7.client)
+}
+
+func TestGeneric429RotatesAndRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"too many requests"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	var rotations atomic.Int32
+	released := &atomic.Int32{}
+	d := &testWarpDialer{rotations: &rotations, released: released, dialer: &net.Dialer{}}
+	route := EgressRoute{testDialer: d}
+	c := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
+	c.SetRoute(NewWarpTransport(route, nil), nil, &route)
+	c.SetFreeLimitHook(anyRateLimit)
+
+	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || calls.Load() != 2 || rotations.Load() != 1 {
+		t.Fatalf("status=%d calls=%d rotations=%d", resp.StatusCode, calls.Load(), rotations.Load())
+	}
+}
+
 func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
