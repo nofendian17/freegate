@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +25,8 @@ var ErrNoSourcePrefix = errors.New("warp: no routable public IPv6 /64 prefix fou
 // from it randomly, so a replacement exit presents a new source to Cloudflare
 // and lands in a new egress /64.
 //
-// Candidates come from assigned interface addresses, the Linux IPv6 routing
-// table, and `netstat -rn -f inet6` on BSD/macOS. Link-local, unique-local,
+// Candidates come from assigned interface addresses and the Linux IPv6 routing
+// table. Link-local, unique-local,
 // loopback and documentation addresses are rejected: those cannot be used as
 // a source for a public WireGuard endpoint.
 func DiscoverSourcePrefix() (netip.Prefix, error) {
@@ -107,21 +106,9 @@ func discoverCandidates() []netip.Prefix {
 		}
 	}
 
-	if outb, err := exec.Command("netstat", "-rn", "-f", "inet6").Output(); err == nil {
-		scanner := bufio.NewScanner(strings.NewReader(string(outb)))
-		for scanner.Scan() {
-			fields := strings.Fields(scanner.Text())
-			if len(fields) == 0 {
-				continue
-			}
-			prefix, err := netip.ParsePrefix(fields[0])
-			if err == nil {
-				if p, ok := candidatePrefix(prefix.Addr(), prefix.Bits()); ok {
-					add(p)
-				}
-			}
-		}
-	}
+	// `netstat -f inet6` is intentionally not used here: on macOS it lists
+	// VPN routes such as ::1:0:0:0/68 whose base address is neither assigned
+	// nor public. Interface addresses and the Linux routing table are enough.
 	return out
 }
 
@@ -136,13 +123,27 @@ func candidatePrefix(addr netip.Addr, bits int) (netip.Prefix, bool) {
 }
 
 func usableSourceAddr(addr netip.Addr) bool {
-	return addr.Is6() &&
-		addr.IsGlobalUnicast() &&
-		!addr.IsPrivate() && // fc00::/7 (ULA) cannot reach a public endpoint
-		!addr.IsLinkLocalUnicast() &&
-		!addr.IsLoopback() &&
-		!addr.IsMulticast() &&
-		!documentationPrefix.Contains(addr)
+	if !addr.Is6() || !addr.IsGlobalUnicast() || addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() || addr.IsLoopback() ||
+		addr.IsMulticast() || documentationPrefix.Contains(addr) {
+		return false
+	}
+	// ::/96 (IPv4-compatible) and ::ffff:0:0/96 (IPv4-mapped) are not usable
+	// public IPv6 sources, even though netip calls them global unicast.
+	raw := addr.As16()
+	if allZero(raw[:12]) || (allZero(raw[:10]) && raw[10] == 0xff && raw[11] == 0xff) {
+		return false
+	}
+	return true
+}
+
+func allZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // SourceError adds context to a failed auto-detection so an operator knows
