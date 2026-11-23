@@ -1,9 +1,11 @@
-# syntax=docker/dockerfile:1.7
-
 # Compile on the builder's native platform; only the runtime image is for
 # TARGETPLATFORM. BuildKit supplies TARGETOS/TARGETARCH, so an arm64 image can
 # be cross-compiled from an amd64 machine without QEMU.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine3.22 AS builder
+#
+# No `# syntax=` directive: BuildKit's bundled frontend supports the cache
+# mounts below, and pinning a remote dockerfile frontend makes offline/air-
+# gapped builds fail before they even reach these instructions.
+FROM --platform=$BUILDPLATFORM golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /build
