@@ -22,7 +22,6 @@ func TestParseConfig(t *testing.T) {
 		{"bogus", 2, "2001:db8::/64"},
 		{"ipv6", 0, "2001:db8::/64"},
 		{"ipv6", 33, "2001:db8::/64"},
-		{"ipv6", 2, ""},
 		{"ipv6", 2, "10.0.0.0/24"},
 		{"ipv6", 2, "2001:db8::/65"},
 		{"ipv4", 2, "2001:db8::/64"},
@@ -30,6 +29,18 @@ func TestParseConfig(t *testing.T) {
 	for _, tc := range cases {
 		if _, err := ParseConfig(tc.stack, tc.size, tc.source); err == nil {
 			t.Errorf("ParseConfig(%q, %d, %q) accepted invalid config", tc.stack, tc.size, tc.source)
+		}
+	}
+}
+
+func TestParseConfigAutoSource(t *testing.T) {
+	for _, raw := range []string{"", "auto", " AUTO "} {
+		opts, err := ParseConfig("ipv6", 2, raw)
+		if err != nil {
+			t.Fatalf("ParseConfig(%q): %v", raw, err)
+		}
+		if !opts.AutoSource || opts.SourceIPv6.IsValid() {
+			t.Fatalf("ParseConfig(%q) = %+v, want auto source", raw, opts)
 		}
 	}
 }

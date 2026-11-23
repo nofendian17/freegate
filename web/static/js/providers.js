@@ -402,7 +402,7 @@
       var status = p.test_status ? p.test_status : '—';
       var warp = p.kind === 'warp';
       var detail = warp
-        ? (p.warp_stack || 'ipv6') + ' · ' + (p.warp_pool_size || 2) + ' exits · ' + (p.warp_source_ipv6 || '—')
+        ? (p.warp_stack || 'ipv6') + ' · ' + (p.warp_pool_size || 2) + ' exits · ' + (p.warp_source_ipv6 || 'auto')
         : p.proxy_url;
       return '<tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">' +
         '<td class="px-5 py-3 font-mono text-caption">' + esc(p.name) +
@@ -446,7 +446,7 @@
     document.getElementById('pf-relay-fields').classList.toggle('hidden', warp || !!deployMode);
     document.getElementById('pf-warp-fields').classList.toggle('hidden', !warp || !!deployMode);
     document.getElementById('pf-proxy-url').required = !warp && !deployMode;
-    document.getElementById('pf-warp-source').required = warp && !deployMode;
+
   }
 
   function openPoolModal(p, deployMode) {
@@ -460,7 +460,7 @@
     document.getElementById('pf-proxy-url').value = p.proxy_url || '';
     document.getElementById('pf-warp-stack').value = p.warp_stack || 'ipv6';
     document.getElementById('pf-warp-size').value = p.warp_pool_size || 2;
-    document.getElementById('pf-warp-source').value = p.warp_source_ipv6 || '';
+    document.getElementById('pf-warp-source').value = p.warp_source_ipv6 || 'auto';
     document.getElementById('pf-no-proxy').value = p.no_proxy || '';
     document.getElementById('pf-enabled').checked = p.enabled !== false;
     document.getElementById('pf-strict').checked = !!p.strict_proxy;

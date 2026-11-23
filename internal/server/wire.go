@@ -102,6 +102,7 @@ func applyEgressPools(ctx context.Context, pstore *registry.Store, cfg *config.C
 			Stack:               opts.Stack,
 			Size:                opts.Size,
 			SourceIPv6:          opts.SourceIPv6,
+			AutoSource:          opts.AutoSource,
 			FallbackDirect:      opts.FallbackDirect,
 			RegistrationTimeout: opts.RegistrationTimeout,
 		})

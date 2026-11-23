@@ -111,7 +111,7 @@ func Load() *Config {
 		EgressMode:                resolveEgressMode(os.Getenv("EGRESS_MODE")),
 		EgressStack:               envStr("WARP_STACK", string(warp.DefaultStack)),
 		EgressPoolSize:            envInt("WARP_POOL_SIZE", warp.DefaultPoolSize),
-		EgressSourceIPv6:          envStr("WARP_SOURCE_IPV6", ""),
+		EgressSourceIPv6:          envStr("WARP_SOURCE_IPV6", "auto"),
 		EgressFallbackDirect:      envBool("EGRESS_FALLBACK_DIRECT", false),
 		EgressRegistrationTimeout: envDuration("WARP_REGISTRATION_TIMEOUT", warp.RegistrationWindow),
 		EgressRotateWait:          envDuration("WARP_ROTATE_WAIT", 30*time.Second),

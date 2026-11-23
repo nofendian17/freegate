@@ -8,10 +8,11 @@
 # upstream answers a free-tier 429, freegate retires the exit that served the
 # request and retries from a replacement with a fresh /64.
 #
-# The host must actually be able to use an address from WARP_SOURCE_IPV6 as a
-# source. Without it, replacements share the host address and therefore the
-# same free-tier quota. With Docker, route that prefix to the container (or
-# run the proxy with host networking) — an unrouted prefix fails at bind time.
+# WARP_SOURCE_IPV6 defaults to "auto": freegate discovers a routed public
+# prefix from the host. Without a usable prefix, exits share the host address
+# and therefore the same free-tier quota, so startup fails closed. With
+# Docker, the detected prefix must be routable to the container (or use host
+# networking); an explicit prefix can be provided to override detection.
 
 services:
   proxy:
@@ -19,7 +20,8 @@ services:
       - EGRESS_MODE=warp
       - WARP_STACK=${WARP_STACK:-ipv6}
       - WARP_POOL_SIZE=${WARP_POOL_SIZE:-2}
-      - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:?WARP_SOURCE_IPV6 must be a routed IPv6 /64}
+      # "auto" detects a public prefix from the host; override with a real /64.
+      - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-auto}
       - WARP_REGISTRATION_TIMEOUT=${WARP_REGISTRATION_TIMEOUT:-5m}
       - WARP_ROTATE_WAIT=${WARP_ROTATE_WAIT:-30s}
       # A dead pool fails closed (host IP never leaks). Set true only when

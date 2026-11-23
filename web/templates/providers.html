@@ -271,9 +271,9 @@
             </label>
           </div>
           <label class="text-caption text-mid-gray">Routed IPv6 source prefix
-            <input id="pf-warp-source" placeholder="2001:db8:1234:5678::/64" class="mt-1 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray">
+            <input id="pf-warp-source" placeholder="auto (detect from host)" class="mt-1 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray">
           </label>
-          <span class="text-caption text-mid-gray">Exits run inside this process. Each exit registers its own WARP device and binds a random address from the prefix; a new source is what resets the /64-scoped free quota.</span>
+          <span class="text-caption text-mid-gray">Leave "auto" to detect a public prefix from the host, or set an explicit /64. Each exit binds a random address from it; a new source is what resets the /64-scoped free quota.</span>
         </div>
         <label class="flex items-center gap-2 text-body">
           <input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help" class="size-4 accent-[#0a0a0a]"> Active

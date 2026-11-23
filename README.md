@@ -298,16 +298,17 @@ Pools are editable at runtime: create a `warp` pool under Providers → Proxy po
 | `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for in-process WARP |
 | `WARP_STACK` | `ipv6` | Tunnel address family; source rotation requires `ipv6` |
 | `WARP_POOL_SIZE` | `2` | Upper bound on simultaneously registered exits (1–32) |
-| `WARP_SOURCE_IPV6` | — | Routed IPv6 prefix (/64 or shorter) for outer sources; required in warp mode |
+| `WARP_SOURCE_IPV6` | `auto` | Outer-source prefix. `auto` detects a public routed prefix from the host; an explicit /64 overrides it |
 | `WARP_REGISTRATION_TIMEOUT` | `5m` | Startup window for the first registration and Cloudflare rate-limit waits |
 | `WARP_ROTATE_WAIT` | `30s` | How long a retry waits for a replacement exit |
 | `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the pool is unavailable; opt in explicitly |
 
+`2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
+
 No sidecars, `NET_ADMIN`, `/dev/net/tun`, or per-container volumes are needed. Devices are registered in-process and are not persisted across restarts.
 
 ```bash
-WARP_SOURCE_IPV6=2001:db8:1234:5678::/64 \
-  docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
 ```
 
 The Bun TLS fingerprint is unchanged: WARP only carries the TCP connection, and freegate still performs the ClientHello. See [`docs/ENV.md`](docs/ENV.md) for details and caveats.

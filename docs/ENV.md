@@ -53,18 +53,19 @@ Pools are data, not env: create one under Providers → Proxy pools with kind `w
 | `EGRESS_MODE` | No | `off` | `off` = direct connections; `warp` = in-process WARP exits |
 | `WARP_STACK` | No | `ipv6` | Tunnel address family. `ipv6` is required for outer-source rotation |
 | `WARP_POOL_SIZE` | No | `2` | Upper bound on registered exits (1–32) |
-| `WARP_SOURCE_IPV6` | Yes in warp mode | — | Routed IPv6 prefix (/64 or shorter) used as outer source for exits |
+| `WARP_SOURCE_IPV6` | No | `auto` | Outer-source prefix. `auto` discovers a public routed prefix from the host; an explicit /64 overrides discovery |
 | `WARP_REGISTRATION_TIMEOUT` | No | `5m` | Startup bound for first registration and Cloudflare rate-limit waits |
 | `WARP_ROTATE_WAIT` | No | `30s` | How long a retry waits for a replacement exit |
 | `EGRESS_FALLBACK_DIRECT` | No | `false` | Dial directly when no exit is available. Opt in explicitly; the default fails closed |
+
+`2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
 
 No sidecar containers, `NET_ADMIN`, `/dev/net/tun`, or data volumes are needed. Devices are registered in-process and are **not** persisted: a restart creates new registrations, so Cloudflare's registration rate limit can affect startup.
 
 Enable it with the compose override (the prefix must be set):
 
 ```bash
-WARP_SOURCE_IPV6=2001:db8:1234:5678::/64 \
-  docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
 ```
 
 Notes:
@@ -73,7 +74,7 @@ Notes:
 - A missing pool fails closed: dialing the host IP would defeat the reason WARP was enabled. Set `EGRESS_FALLBACK_DIRECT=true` only when availability matters more than the exit IP.
 - The uTLS Bun handshake is preserved: WARP only carries the TCP bytes, and freegate still performs the ClientHello itself. Do not replace this with `http.Transport.Proxy` (a CONNECT proxy would terminate TLS in the proxy and lose the fingerprint).
 - WARP transports pin HTTP/1.1 and disable keep-alives, so a connection is never reused against a retired exit. In-flight streams keep their lease until the response body is closed.
-- `EGRESS_MODE=warp` with a missing/invalid `WARP_SOURCE_IPV6` or stack is a startup error. Database pools are validated the same way at create/update time; an unpinned WARP selection fails closed.
+- `EGRESS_MODE=warp` fails at startup when `WARP_SOURCE_IPV6=auto` cannot find a public routed prefix, or when an explicit prefix is invalid. Database pools are validated the same way at create/update time; an unpinned WARP selection fails closed.
 - WARP pools are not limited to OpenCode: pin any provider or builtin to a `warp` pool and it dials through that pool. The Bun TLS compatibility layer still applies only to the OpenCode host.
 
 ### Kilo (OpenRouter)

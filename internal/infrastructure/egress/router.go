@@ -19,6 +19,7 @@ type PoolConfig struct {
 	Stack               warp.Stack
 	Size                int
 	SourceIPv6          netip.Prefix
+	AutoSource          bool
 	FallbackDirect      bool
 	RegistrationTimeout time.Duration
 }
@@ -28,6 +29,7 @@ func (c PoolConfig) options() Options {
 		Size:                c.Size,
 		Stack:               c.Stack,
 		SourceIPv6:          c.SourceIPv6,
+		AutoSource:          c.AutoSource,
 		FallbackDirect:      c.FallbackDirect,
 		RegistrationTimeout: c.RegistrationTimeout,
 	}
@@ -190,6 +192,7 @@ func sameConfig(a, b PoolConfig) bool {
 		a.Stack == b.Stack &&
 		a.Size == b.Size &&
 		a.SourceIPv6 == b.SourceIPv6 &&
+		a.AutoSource == b.AutoSource &&
 		a.FallbackDirect == b.FallbackDirect &&
 		a.RegistrationTimeout == b.RegistrationTimeout
 }

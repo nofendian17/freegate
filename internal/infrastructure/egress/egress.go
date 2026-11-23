@@ -36,7 +36,10 @@ type Options struct {
 	// Stack selects the address family inside the tunnel.
 	Stack warp.Stack
 	// SourceIPv6 is the routed prefix each exit draws its outer source from.
+	// Leave unset (or use "auto" in config) to discover it from the host.
 	SourceIPv6 netip.Prefix
+	// AutoSource discovers a routed public prefix when SourceIPv6 is unset.
+	AutoSource bool
 	// FallbackDirect dials without WARP when the pool is empty. It is opt-in:
 	// the zero value fails closed instead of leaking the host IP.
 	FallbackDirect bool
@@ -170,14 +173,21 @@ func NewPool(ctx context.Context, log *slog.Logger, opts Options) (*Pool, error)
 		Size:       opts.Size,
 		Stack:      opts.Stack,
 		SourceIPv6: opts.SourceIPv6,
+		AutoSource: opts.AutoSource,
 	})
 	if err != nil {
 		return nil, err
 	}
 	p := newPoolFromBackend(&warpBackend{p: wp}, opts.FallbackDirect)
 	p.rotateWait = opts.RotateWait
+	source := "none"
+	if opts.SourceIPv6.IsValid() {
+		source = opts.SourceIPv6.String()
+	} else if opts.AutoSource {
+		source = "auto"
+	}
 	slog.Info("egress: WARP pool enabled", "size", opts.Size, "stack", opts.Stack,
-		"source", opts.SourceIPv6.String(), "fallback_direct", opts.FallbackDirect)
+		"source", source, "fallback_direct", opts.FallbackDirect)
 	return p, nil
 }
 

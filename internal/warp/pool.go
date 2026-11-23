@@ -108,6 +108,9 @@ type Options struct {
 	// to. Every exit draws its own address from it, so a replacement reaches
 	// Cloudflare from a new source and receives a new public egress.
 	SourceIPv6 netip.Prefix
+	// AutoSource discovers a routed public prefix from the host when
+	// SourceIPv6 is unset. Explicit configuration always wins.
+	AutoSource bool
 }
 
 // NewWithOptions creates a WARP pool whose exits use the selected IP stack
@@ -117,8 +120,23 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 	if err != nil {
 		return nil, err
 	}
-	if opts.SourceIPv6.IsValid() && (!opts.SourceIPv6.Addr().Is6() || opts.SourceIPv6.Bits() > 64) {
-		return nil, fmt.Errorf("WARP outer source must be an IPv6 prefix of /64 or shorter, got %s", opts.SourceIPv6)
+	sourcePrefix := opts.SourceIPv6
+	if opts.AutoSource && !sourcePrefix.IsValid() {
+		sourcePrefix, err = DiscoverSourcePrefix()
+		if err != nil {
+			return nil, SourceError(err)
+		}
+		if log != nil {
+			log.Info("WARP outer source auto-detected", "prefix", sourcePrefix.String())
+		}
+	}
+	if sourcePrefix.IsValid() {
+		if !sourcePrefix.Addr().Is6() || sourcePrefix.Bits() > 64 {
+			return nil, fmt.Errorf("WARP outer source must be an IPv6 prefix of /64 or shorter, got %s", sourcePrefix)
+		}
+		if normalized != StackIPv6 {
+			return nil, fmt.Errorf("WARP outer source requires an ipv6 stack, got %q", normalized)
+		}
 	}
 	size := opts.Size
 	if size <= 0 {
@@ -131,8 +149,8 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 			return nil, err
 		}
 		var source netip.Addr
-		if opts.SourceIPv6.IsValid() {
-			source, err = randomSource(opts.SourceIPv6)
+		if sourcePrefix.IsValid() {
+			source, err = randomSource(sourcePrefix)
 			if err != nil {
 				return nil, err
 			}
