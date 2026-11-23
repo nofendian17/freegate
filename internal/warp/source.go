@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,9 @@ var ErrNoSourcePrefix = errors.New("warp: no routable public IPv6 /64 prefix fou
 // loopback and documentation addresses are rejected: those cannot be used as
 // a source for a public WireGuard endpoint.
 func DiscoverSourcePrefix() (netip.Prefix, error) {
+	if !sourceBindingSupported() {
+		return netip.Prefix{}, ErrNoSourcePrefix
+	}
 	candidates := discoverCandidates()
 	if len(candidates) == 0 {
 		return netip.Prefix{}, ErrNoSourcePrefix
@@ -151,6 +155,9 @@ func allZero(b []byte) bool {
 func SourceError(err error) error {
 	if !errors.Is(err, ErrNoSourcePrefix) {
 		return err
+	}
+	if !sourceBindingSupported() {
+		return fmt.Errorf("%w (outer-source binding requires Linux IPV6_FREEBIND; this host is %s)", err, runtime.GOOS)
 	}
 	return fmt.Errorf("%w; set WARP_SOURCE_IPV6 to a routed public IPv6 prefix (e.g. a /64 delegated to this host)", err)
 }

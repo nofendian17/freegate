@@ -133,6 +133,11 @@ func newExit(ctx context.Context, reg registration, stack Stack, source netip.Ad
 	}
 	if source.IsValid() {
 		endpoints = preferIPv6Endpoints(endpoints)
+	} else {
+		// No pinned source: try IPv4 endpoints first. On hosts without a
+		// public IPv6 route, trying IPv6 first produces noisy "no route to
+		// host" handshake errors and delays the working IPv4 fallback.
+		endpoints = preferIPv4Endpoints(endpoints)
 	}
 	wg := device.NewDevice(tunDevice, &simpleBind{source: source}, device.NewLogger(device.LogLevelError, "warp: "))
 	uapi := fmt.Sprintf(
@@ -180,6 +185,29 @@ func preferIPv6Endpoints(endpoints []string) []string {
 		}
 	}
 	return append(ordered, ipv4...)
+}
+
+// preferIPv4Endpoints keeps IPv4 endpoints first and IPv6 ones after them,
+// retaining both families so a tunnel still comes up if IPv4 is unusable.
+func preferIPv4Endpoints(endpoints []string) []string {
+	ordered := make([]string, 0, len(endpoints))
+	ipv6 := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		host, _, err := net.SplitHostPort(endpoint)
+		if err != nil {
+			continue
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil || addr.Is4In6() {
+			continue
+		}
+		if addr.Is4() {
+			ordered = append(ordered, endpoint)
+		} else if addr.Is6() {
+			ipv6 = append(ipv6, endpoint)
+		}
+	}
+	return append(ordered, ipv6...)
 }
 
 func resolveEndpoints(ctx context.Context, candidates []string, fallback string) ([]string, error) {

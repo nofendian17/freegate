@@ -60,6 +60,8 @@ Pools are data, not env: create one under Providers → Proxy pools with kind `w
 
 `2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
 
+Outer-source rotation requires Linux `IPV6_FREEBIND`. On macOS/Windows, `auto` runs WARP over IPv4 endpoints instead (preferring IPv4 first to avoid "no route to host" handshake noise), and an explicit `WARP_SOURCE_IPV6` is rejected at startup.
+
 No sidecar containers, `NET_ADMIN`, `/dev/net/tun`, or data volumes are needed. Devices are registered in-process and are **not** persisted: a restart creates new registrations, so Cloudflare's registration rate limit can affect startup.
 
 Everything lives in one `docker-compose.yml`. Set `EGRESS_MODE=warp` in `.env` (or inline) and start normally:

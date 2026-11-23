@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -122,6 +123,9 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 		return nil, err
 	}
 	sourcePrefix := resolveSourcePrefix(opts, log, DiscoverSourcePrefix)
+	if sourcePrefix.IsValid() && !sourceBindingSupported() {
+		return nil, fmt.Errorf("WARP outer source requires Linux IPV6_FREEBIND; running on %s", runtime.GOOS)
+	}
 	if sourcePrefix.IsValid() {
 		if !sourcePrefix.Addr().Is6() || sourcePrefix.Bits() > 64 {
 			return nil, fmt.Errorf("WARP outer source must be an IPv6 prefix of /64 or shorter, got %s", sourcePrefix)

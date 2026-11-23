@@ -303,7 +303,7 @@ Pools are editable at runtime: create a `warp` pool under Providers → Proxy po
 | `WARP_ROTATE_WAIT` | `30s` | How long a retry waits for a replacement exit |
 | `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the pool is unavailable; opt in explicitly |
 
-`2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container.
+`2001:db8::/64` in the API example is a documentation prefix, not a routable address. Prefer `warp_source_ipv6: "auto"`; only set an explicit `/64` that is actually routed to your host/container. Outer-source rotation needs Linux `IPV6_FREEBIND`; macOS/Windows run WARP over IPv4 endpoints without source rotation.
 
 No sidecars, `NET_ADMIN`, `/dev/net/tun`, or per-container volumes are needed. Devices are registered in-process and are not persisted across restarts.
 
