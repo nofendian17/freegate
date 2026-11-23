@@ -20,8 +20,12 @@ func ParseConfig(stack string, size int, source string) (Options, error) {
 	if size < 1 || size > 32 {
 		return Options{}, fmt.Errorf("warp pool size must be between 1 and 32, got %d", size)
 	}
-	if parsedStack != warp.StackIPv6 {
-		return Options{}, fmt.Errorf("warp source rotation requires an ipv6 stack, got %q", parsedStack)
+	// An IPv4-only stack egresses through Cloudflare's shared public IPv4,
+	// so its free quota cannot be rotated and is usually already spent.
+	// IPv6 and dual are supported; dual reaches A-only hosts while keeping
+	// IPv6 upstreams on the exit's own /64.
+	if parsedStack == warp.StackIPv4 {
+		return Options{}, fmt.Errorf("warp stack %q is not supported; use ipv6 or dual", parsedStack)
 	}
 	raw := strings.ToLower(strings.TrimSpace(source))
 	if raw == "" || raw == "auto" {

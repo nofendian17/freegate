@@ -130,9 +130,6 @@ func NewWithOptions(ctx context.Context, log *slog.Logger, opts Options) (*Pool,
 		if err := ValidateSourcePrefix(sourcePrefix); err != nil {
 			return nil, fmt.Errorf("WARP outer source: %w", err)
 		}
-		if normalized != StackIPv6 {
-			return nil, fmt.Errorf("WARP outer source requires an ipv6 stack, got %q", normalized)
-		}
 	}
 	size := opts.Size
 	if size <= 0 {
@@ -774,14 +771,6 @@ func (l *Lease) EgressKey() string {
 		return ""
 	}
 	return l.exit.egressKey()
-}
-
-// DialNetwork is the explicit TCP address family for this lease.
-func (l *Lease) DialNetwork() string {
-	if l == nil || l.exit == nil {
-		return ""
-	}
-	return l.exit.dialNetwork()
 }
 
 func (l *Lease) String() string {

@@ -291,12 +291,12 @@ Optional. `EGRESS_MODE=warp` sends traffic through WARP exits that **run inside 
 
 The free tier is counted per **exit IPv6 /64**, not per exact address. Each exit therefore binds its WireGuard socket to a random address from the routed `WARP_SOURCE_IPV6` prefix using `IPV6_FREEBIND`. Registering a new device that leaves from the same host address would often land in the same /64 — a cosmetic change, not a fresh quota. Exits whose egress key is already active or cooling are discarded during registration, and Cloudflare's registration rate limit is paced by `Retry-After`.
 
-Pools are editable at runtime: create a `warp` pool under Providers → Proxy pools (or `POST /api/pools` with `{"kind":"warp","warp_stack":"ipv6","warp_pool_size":2,"warp_source_ipv6":"2001:db8::/64"}`), then pin a provider or builtin to it. The env settings seed the default pool for WARP without a pin. Pool edits apply without a restart.
+Pools are editable at runtime: create a `warp` pool under Providers → Proxy pools (or `POST /api/pools` with `{"kind":"warp","warp_stack":"dual","warp_pool_size":2,"warp_source_ipv6":"2001:db8::/64"}`), then pin a provider or builtin to it. The env settings seed the default pool for WARP without a pin. Pool edits apply without a restart.
 
 | Variable | Default | Description |
 |---|---:|---|
 | `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for in-process WARP |
-| `WARP_STACK` | `ipv6` | Tunnel address family; source rotation requires `ipv6` |
+| `WARP_STACK` | `dual` | Tunnel address family: `dual` for IPv6-first with IPv4 fallback, `ipv6` for IPv6 only |
 | `WARP_POOL_SIZE` | `2` | Upper bound on simultaneously registered exits (1–32) |
 | `WARP_SOURCE_IPV6` | `auto` | Outer-source prefix. `auto` detects a public routed prefix from the host; without one, WARP still runs but rotation may reuse the same /64 |
 | `WARP_REGISTRATION_TIMEOUT` | `5m` | Startup window for the first registration and Cloudflare rate-limit waits |

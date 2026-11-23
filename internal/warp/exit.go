@@ -33,10 +33,12 @@ const (
 	StackIPv6 Stack = "ipv6"
 	StackDual Stack = "dual"
 
-	// DefaultStack is IPv6: an IPv4 WARP egress is a public address shared by
-	// every user behind Cloudflare's NAT, so its free quota is usually already
-	// spent. The IPv6 egress belongs to the tunnel.
-	DefaultStack = StackIPv6
+	// DefaultStack is dual: IPv6-capable upstreams (OpenCode, LLM7) keep the
+	// per-tunnel IPv6 egress and its /64 quota scope, while IPv4-only hosts
+	// (for example api.kilo.ai) remain reachable. An IPv4-only stack is not a
+	// good default because Cloudflare's public IPv4 egress is shared by many
+	// users and its free quota is usually already spent.
+	DefaultStack = StackDual
 )
 
 var (
@@ -297,9 +299,12 @@ func probeTargets(stack Stack) []probeTarget {
 	case StackIPv4:
 		return []probeTarget{{network: "tcp4", url: "https://1.1.1.1/cdn-cgi/trace"}}
 	case StackDual:
+		// Probe IPv6 first: a dual-stack tunnel should report its /64-scoped
+		// IPv6 egress, which is the quota identity for IPv6 upstreams. The
+		// IPv4 trace stays as a fallback for hosts where WARP IPv6 is down.
 		return []probeTarget{
-			{network: "tcp4", url: "https://1.1.1.1/cdn-cgi/trace"},
 			{network: "tcp6", url: "https://[2606:4700:4700::1111]/cdn-cgi/trace"},
+			{network: "tcp4", url: "https://1.1.1.1/cdn-cgi/trace"},
 		}
 	default:
 		return []probeTarget{{network: "tcp6", url: "https://[2606:4700:4700::1111]/cdn-cgi/trace"}}
@@ -466,44 +471,124 @@ func (e *exit) dialContext(ctx context.Context, network, address string) (net.Co
 	}
 	network = strings.ToLower(strings.TrimSpace(network))
 	switch network {
-	case "tcp":
-		network = e.dialNetwork()
-	case "tcp4", "tcp6":
+	case "tcp", "tcp4", "tcp6":
 	default:
 		return nil, fmt.Errorf("WARP supports TCP only, got %q", network)
 	}
-	switch e.stack {
-	case StackIPv4:
-		if network != "tcp4" {
-			return nil, fmt.Errorf("WARP IPv4 stack cannot dial %q", network)
-		}
-	case StackIPv6:
-		// An IPv6 stack has no IPv4 address or route, so a literal IPv4
-		// destination cannot be reached. Fail here instead of falling
-		// back to the host, which would leak the real address.
-		if network != "tcp6" {
-			return nil, fmt.Errorf("WARP IPv6 stack cannot dial %q", network)
-		}
-	case StackDual:
-		// Both address families are present in the netstack.
-	default:
-		return nil, fmt.Errorf("unsupported WARP stack %q", e.stack)
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("WARP dial address %q: %w", address, err)
 	}
-	return e.network.DialContext(ctx, network, address)
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return e.dialAddr(ctx, network, ip, port)
+	}
+	addrs, err := e.resolve(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, ip := range addrs {
+		conn, derr := e.dialAddr(ctx, network, ip, port)
+		if derr == nil {
+			return conn, nil
+		}
+		lastErr = derr
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("WARP %s stack has no usable address for %s", e.stack, host)
+	}
+	return nil, lastErr
 }
 
-func (e *exit) dialNetwork() string {
+// dialAddr connects to one literal address inside the tunnel. The stack must
+// hold an address of that family; this is what keeps a misconfigured family
+// from falling back to the host.
+func (e *exit) dialAddr(ctx context.Context, network string, ip netip.Addr, port string) (net.Conn, error) {
+	ip = ip.Unmap()
+	family := "tcp6"
+	if ip.Is4() {
+		family = "tcp4"
+	}
+	if network != "tcp" && network != family {
+		return nil, fmt.Errorf("WARP cannot dial %s as %s", ip, network)
+	}
+	if !e.supports(family) {
+		return nil, fmt.Errorf("WARP %s stack cannot dial %s", e.stack, ip)
+	}
+	// Dial by the address family of the resolved literal. A bare "tcp"
+	// would leave the family implicit, and gVisor resolves that from the
+	// stack rather than from the address.
+	return e.network.DialContext(ctx, family, net.JoinHostPort(ip.String(), port))
+}
+
+func (e *exit) supports(family string) bool {
 	switch e.stack {
 	case StackIPv4:
-		return "tcp4"
+		return family == "tcp4"
+	case StackIPv6:
+		return family == "tcp6"
 	case StackDual:
-		if e.egress.Is4() {
-			return "tcp4"
-		}
-		return "tcp6"
+		return true
 	default:
-		return "tcp6"
+		return false
 	}
+}
+
+// resolve returns destination addresses in preference order. DNS runs on the
+// host, not inside the tunnel: the netstack resolver sends UDP to the WARP DNS
+// server, and a single dropped query fails every dial on that exit. Host DNS is
+// reliable and the connection still leaves from the exit. The tunnel resolver
+// remains a fallback for hosts without a working system resolver.
+func (e *exit) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil || len(addrs) == 0 {
+		if fallback, ferr := e.network.LookupContextHost(ctx, host); ferr == nil && len(fallback) > 0 {
+			addrs = addrs[:0]
+			for _, raw := range fallback {
+				if ip, perr := netip.ParseAddr(raw); perr == nil {
+					addrs = append(addrs, ip.Unmap())
+				}
+			}
+			err = nil
+		}
+	}
+	if len(addrs) == 0 {
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", host, err)
+		}
+		return nil, fmt.Errorf("resolve %s: no addresses", host)
+	}
+	ordered := orderByStack(addrs, e.stack)
+	if len(ordered) == 0 {
+		return nil, fmt.Errorf("resolve %s: no %s address", host, e.stack)
+	}
+	return ordered, nil
+}
+
+// orderByStack filters addresses to the families the stack can reach and
+// prefers IPv6, so IPv6-capable upstreams stay on the per-tunnel /64 quota
+// while IPv4-only hosts still connect over IPv4.
+func orderByStack(addrs []netip.Addr, stack Stack) []netip.Addr {
+	seen := make(map[netip.Addr]bool, len(addrs))
+	var v6, v4 []netip.Addr
+	for _, ip := range addrs {
+		ip = ip.Unmap()
+		if seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		switch {
+		case ip.Is6():
+			if stack == StackIPv6 || stack == StackDual {
+				v6 = append(v6, ip)
+			}
+		case ip.Is4():
+			if stack == StackIPv4 || stack == StackDual {
+				v4 = append(v4, ip)
+			}
+		}
+	}
+	return append(v6, v4...)
 }
 
 // egressKey is the free-tier quota scope: a /64 for IPv6, a /32 for IPv4. A

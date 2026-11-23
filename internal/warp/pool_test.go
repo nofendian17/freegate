@@ -38,7 +38,7 @@ func TestRandomSourceKeepsPrefixAndDiffers(t *testing.T) {
 
 func TestParseStack(t *testing.T) {
 	cases := map[string]Stack{
-		"":      StackIPv6,
+		"":      StackDual,
 		"v6":    StackIPv6,
 		"IPV4":  StackIPv4,
 		"dual":  StackDual,

@@ -8,12 +8,14 @@ import (
 const publicPrefix = "2606:4700:1234:5678::/64"
 
 func TestParseConfig(t *testing.T) {
-	opts, err := ParseConfig("ipv6", 2, publicPrefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.Size != 2 || opts.Stack != "ipv6" || opts.SourceIPv6.String() != publicPrefix {
-		t.Fatalf("options = %+v", opts)
+	for _, stack := range []string{"ipv6", "dual"} {
+		opts, err := ParseConfig(stack, 2, publicPrefix)
+		if err != nil {
+			t.Fatalf("ParseConfig(%q): %v", stack, err)
+		}
+		if opts.Size != 2 || string(opts.Stack) != stack || opts.SourceIPv6.String() != publicPrefix {
+			t.Fatalf("options = %+v", opts)
+		}
 	}
 
 	cases := []struct {
@@ -26,8 +28,8 @@ func TestParseConfig(t *testing.T) {
 		{"ipv6", 33, publicPrefix},
 		{"ipv6", 2, "10.0.0.0/24"},
 		{"ipv6", 2, "2606:4700:1234:5678::/65"},
+		// Cloudflare's IPv4 egress is shared and cannot be rotated.
 		{"ipv4", 2, publicPrefix},
-		{"dual", 2, publicPrefix},
 		// Non-public prefixes cannot be routed sources; auto-detection
 		// rejects them, and so must explicit configuration.
 		{"ipv6", 2, "2001:db8::/64"},
@@ -43,7 +45,7 @@ func TestParseConfig(t *testing.T) {
 
 func TestParseConfigAutoSource(t *testing.T) {
 	for _, raw := range []string{"", "auto", " AUTO "} {
-		opts, err := ParseConfig("ipv6", 2, raw)
+		opts, err := ParseConfig("dual", 2, raw)
 		if err != nil {
 			t.Fatalf("ParseConfig(%q): %v", raw, err)
 		}

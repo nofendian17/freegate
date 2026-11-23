@@ -14,13 +14,19 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 - An explicit `WARP_SOURCE_IPV6` is validated like auto-detection: ULA,
   link-local, documentation and other non-public prefixes are rejected at
   startup/API time instead of binding an unroutable source.
-- The WARP pool form only offers the `ipv6` stack, matching what the backend
-  accepts, and docs no longer use a documentation prefix in the API example.
+- WARP DNS no longer runs inside the tunnel. Hostnames are resolved with the
+  host resolver and the tunnel dials the resulting literal address, so a
+  dropped in-tunnel UDP query to `2606:4700:4700::1111` cannot fail every
+  request on an exit. The tunnel resolver remains a fallback.
 - Admin pool tests report a successful status only when an exit has a public
   egress address.
 
 ### Changed
 
+- The default WARP stack is now `dual`: IPv6-capable upstreams still use the
+  exit's own /64, while A-only hosts such as `api.kilo.ai` are reachable
+  again. The pool form and docs offer `dual` and `ipv6`; `ipv4` is rejected
+  because Cloudflare's shared IPv4 egress cannot be rotated.
 - Removed the unused response-based rotation path (`Report`,
   `ReportWithRetryAfter`, `HasUntriedActive`); tests now exercise the same
   `Fail` path production uses.
@@ -51,6 +57,10 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 ### Changed
 
+- The default WARP stack is now `dual`: IPv6-capable upstreams still use the
+  exit's own /64, while A-only hosts such as `api.kilo.ai` are reachable
+  again. The pool form and docs offer `dual` and `ipv6`; `ipv4` is rejected
+  because Cloudflare's shared IPv4 egress cannot be rotated.
 - WARP rotation retires the exit that served the request. A per-request lease
   stays alive until the response body is closed, so a rotating exit is never
   released while an SSE stream is still using it; the retry waits for a fresh
@@ -96,6 +106,10 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 ### Changed
 
+- The default WARP stack is now `dual`: IPv6-capable upstreams still use the
+  exit's own /64, while A-only hosts such as `api.kilo.ai` are reachable
+  again. The pool form and docs offer `dual` and `ipv6`; `ipv4` is rejected
+  because Cloudflare's shared IPv4 egress cannot be rotated.
 - The direct OpenCode connection no longer follows the OS dual-stack default:
   IPv6 is attempted first, with IPv4 as the fallback. No configuration is
   required; `UPSTREAM_OPENCODE_NETWORK` does not exist.
