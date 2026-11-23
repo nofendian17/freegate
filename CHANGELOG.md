@@ -5,6 +5,8 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-11-24
+
 ### Fixed
 
 - A WARP rotation whose replacement failed no longer stalls the retry for the
