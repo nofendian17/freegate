@@ -5,6 +5,8 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-24
+
 ### Added
 
 - WARP egress is now a first-class routing target. Create `warp` pools under
