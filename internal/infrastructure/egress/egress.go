@@ -90,7 +90,25 @@ type Lease struct {
 	dial      func(context.Context, string, string) (net.Conn, error)
 	release   func()
 	fail      func(string)
-	waitFresh func([]Snapshot)
+	waitFresh func(context.Context, []Snapshot)
+}
+
+// DialContext dials through this lease's exit. A released lease fails closed,
+// so a connection is never silently redirected to another exit.
+func (l *Lease) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if l == nil || l.dial == nil {
+		return nil, ErrNoEndpoint
+	}
+	return l.dial(ctx, network, addr)
+}
+
+// LeaseFromContext returns the lease recorded by Pool.Acquire, if any.
+func LeaseFromContext(ctx context.Context) *Lease {
+	if ctx == nil {
+		return nil
+	}
+	l, _ := ctx.Value(leaseKey{}).(*Lease)
+	return l
 }
 
 // Release returns the lease to its pool. Safe to call more than once.
@@ -107,7 +125,7 @@ func (l *Lease) Release() {
 
 // RotateAsync retires the exit that carried the request and waits for a
 // replacement, so the caller's retry leaves from a new identity.
-func (l *Lease) RotateAsync(reason string, closeIdle func()) <-chan struct{} {
+func (l *Lease) RotateAsync(ctx context.Context, reason string, closeIdle func()) <-chan struct{} {
 	done := make(chan struct{})
 	if l == nil || l.fail == nil {
 		close(done)
@@ -127,7 +145,7 @@ func (l *Lease) RotateAsync(reason string, closeIdle func()) <-chan struct{} {
 	}
 	go func() {
 		defer close(done)
-		l.waitFresh(before)
+		l.waitFresh(ctx, before)
 	}()
 	return done
 }
@@ -198,7 +216,7 @@ func (p *Pool) DialContext(ctx context.Context, network, addr string) (net.Conn,
 		}
 		return nil, ErrNoEndpoint
 	}
-	if l, _ := ctx.Value(leaseKey{}).(*Lease); l != nil && l.owner == p && l.dial != nil {
+	if l := LeaseFromContext(ctx); l != nil && l.owner == p && l.dial != nil {
 		return l.dial(ctx, network, addr)
 	}
 	l, err := p.backend.Acquire(ctx)
@@ -221,12 +239,17 @@ func (p *Pool) DialContext(ctx context.Context, network, addr string) (net.Conn,
 
 // waitFresh waits until a new exit appears, so a retry after a free-tier limit
 // does not leave from the same quota scope.
-func (p *Pool) waitFresh(before []Snapshot) {
+func (p *Pool) waitFresh(ctx context.Context, before []Snapshot) {
 	if p == nil || p.backend == nil {
 		return
 	}
 	deadline := time.Now().Add(p.rotateWait)
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		for _, now := range p.backend.Snapshot() {
 			seen := false
 			for _, old := range before {

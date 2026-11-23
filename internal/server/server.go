@@ -25,6 +25,7 @@ import (
 	"freegate/internal/delivery/ui"
 	"freegate/internal/domain"
 	"freegate/internal/httputil"
+	"freegate/internal/infrastructure/egress"
 	"freegate/internal/infrastructure/metrics"
 	"freegate/internal/infrastructure/recorder"
 	"freegate/internal/infrastructure/registry"
@@ -42,19 +43,20 @@ const (
 // Server owns the freegate HTTP server: configuration, dependencies,
 // and lifecycle. Build it with New, then call Run.
 type Server struct {
-	cfg       *config.Config
-	httpSrv   *http.Server
-	Handler   http.Handler
-	logger    *slog.Logger
-	opencode  *upstream.OpenCodeUpstream
-	kilo      *upstream.KiloUpstream
-	llm7      *upstream.LLM7Upstream
-	pstore    *registry.Store
-	manager   *upstream.ProviderManager
-	combo     *upstream.ComboRouter
-	rec       *recorder.Recorder
-	rateLimit *middleware.RateLimiter
-	wg        sync.WaitGroup // tracks background workers
+	cfg          *config.Config
+	httpSrv      *http.Server
+	Handler      http.Handler
+	logger       *slog.Logger
+	opencode     *upstream.OpenCodeUpstream
+	kilo         *upstream.KiloUpstream
+	llm7         *upstream.LLM7Upstream
+	pstore       *registry.Store
+	manager      *upstream.ProviderManager
+	combo        *upstream.ComboRouter
+	rec          *recorder.Recorder
+	rateLimit    *middleware.RateLimiter
+	egressRouter *egress.Router
+	wg           sync.WaitGroup // tracks background workers
 }
 
 // upstreamToDomain flattens custom providers into the domain upstream list.
@@ -158,6 +160,12 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	egressOpen := false
+	defer func() {
+		if !egressOpen {
+			egressRouter.Close()
+		}
+	}()
 
 	pstore, err := registry.Open(ctx, cfg.ProvidersDBPath)
 	if err != nil {
@@ -333,20 +341,22 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	}
 
 	server := &Server{
-		cfg:       cfg,
-		httpSrv:   httpSrv,
-		Handler:   r,
-		logger:    logger,
-		opencode:  opencode,
-		kilo:      kilo,
-		llm7:      llm7,
-		pstore:    pstore,
-		manager:   mgr,
-		combo:     combo,
-		rec:       rec,
-		rateLimit: rl,
+		cfg:          cfg,
+		httpSrv:      httpSrv,
+		Handler:      r,
+		logger:       logger,
+		opencode:     opencode,
+		kilo:         kilo,
+		llm7:         llm7,
+		pstore:       pstore,
+		manager:      mgr,
+		combo:        combo,
+		rec:          rec,
+		rateLimit:    rl,
+		egressRouter: egressRouter,
 	}
 	storeOpen = false
+	egressOpen = true
 	return server, nil
 }
 
@@ -393,6 +403,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			cancelBG()
 			s.manager.Stop()
+			s.egressRouter.Close()
 			storeErr := s.pstore.Close()
 			s.wg.Wait()
 			s.rateLimit.Stop()
@@ -411,6 +422,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// But first wait for HTTP server to shut down
 	if err := s.httpSrv.Shutdown(shutdownCtx); err != nil {
 		s.logger.Error("server forced to shutdown", "error", err)
+		s.egressRouter.Close()
 		storeErr := s.pstore.Close()
 		s.rateLimit.Stop()
 		return errors.Join(err, storeErr)
@@ -418,6 +430,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Wait for background workers to complete
 	s.wg.Wait()
+
+	// No requests remain, so every WARP lease has been released.
+	s.egressRouter.Close()
 
 	storeErr := s.pstore.Close()
 	s.rateLimit.Stop()

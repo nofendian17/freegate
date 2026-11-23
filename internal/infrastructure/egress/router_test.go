@@ -41,6 +41,39 @@ func TestRouterAppliesAndPreservesPools(t *testing.T) {
 	}
 }
 
+func TestRouterClosesPoolsItDrops(t *testing.T) {
+	r := NewRouter()
+	backends := make([]*fakeBackend, 0, 2)
+	r.newPool = func(context.Context, Options) (*Pool, error) {
+		b := newFakeBackend()
+		backends = append(backends, b)
+		return newPoolFromBackend(b, false), nil
+	}
+	cfg := PoolConfig{ID: 1, Name: "one", Size: 2}
+	if err := r.Apply(context.Background(), []PoolConfig{cfg}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Size = 3
+	if err := r.Apply(context.Background(), []PoolConfig{cfg}); err != nil {
+		t.Fatal(err)
+	}
+	if got := backends[0].closeCount(); got != 1 {
+		t.Fatalf("replaced pool close count = %d, want 1", got)
+	}
+	if err := r.Apply(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := backends[1].closeCount(); got != 1 {
+		t.Fatalf("removed pool close count = %d, want 1", got)
+	}
+	defaultBackend := newFakeBackend()
+	r.SetDefault(newPoolFromBackend(defaultBackend, false))
+	r.Close()
+	if got := defaultBackend.closeCount(); got != 1 {
+		t.Fatalf("default pool close count = %d, want 1", got)
+	}
+}
+
 func TestRouterApplyFailureKeepsPreviousPools(t *testing.T) {
 	r := NewRouter()
 	r.newPool = fakeFactory

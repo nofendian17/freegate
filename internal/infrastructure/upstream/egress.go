@@ -65,6 +65,12 @@ func (r EgressRoute) Acquire(ctx context.Context) (context.Context, *egress.Leas
 // DialContext dials addr through the route's pool, failing closed when the
 // pool is missing.
 func (r EgressRoute) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	// The lease was acquired from the route snapshot for this attempt. Use
+	// its exit even if an admin rebuild swapped the pool in the meantime, so
+	// rotation still targets the exit that actually carried the request.
+	if l := egress.LeaseFromContext(ctx); l != nil {
+		return l.DialContext(ctx, network, addr)
+	}
 	d := r.dialer()
 	if d == nil {
 		return nil, ErrNoWarpPool

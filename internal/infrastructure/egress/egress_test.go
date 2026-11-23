@@ -15,6 +15,7 @@ type fakeBackend struct {
 	acquired int
 	released int
 	failed   int
+	closed   int
 	delay    time.Duration
 }
 
@@ -59,12 +60,22 @@ func (f *fakeBackend) Snapshot() []Snapshot {
 	return append([]Snapshot(nil), f.snaps...)
 }
 
-func (f *fakeBackend) Close() {}
+func (f *fakeBackend) Close() {
+	f.mu.Lock()
+	f.closed++
+	f.mu.Unlock()
+}
 
 func (f *fakeBackend) counts() (int, int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.acquired, f.released, f.failed
+}
+
+func (f *fakeBackend) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
 }
 
 func TestDialWithoutLeaseReleasesTemporaryLease(t *testing.T) {
@@ -108,7 +119,7 @@ func TestRotateAsyncWaitsForFreshExit(t *testing.T) {
 	_, lease := p.Acquire(context.Background())
 	defer lease.Release()
 	started := time.Now()
-	done := lease.RotateAsync("free usage limit", nil)
+	done := lease.RotateAsync(context.Background(), "free usage limit", nil)
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):

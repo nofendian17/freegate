@@ -144,8 +144,45 @@ func (r *Router) Apply(ctx context.Context, configs []PoolConfig) error {
 		built = append(built, p)
 		next[cfg.ID] = &poolEntry{cfg: cfg, pool: p}
 	}
+	// Closing an old pool only retires its exits: a tunnel with a live lease
+	// stays up until the response body is closed, so an in-flight stream is
+	// not cut off by an admin rebuild.
+	reused := make(map[*Pool]bool, len(next))
+	for _, entry := range next {
+		reused[entry.pool] = true
+	}
+	if old != nil {
+		for _, entry := range *old {
+			if !reused[entry.pool] {
+				entry.pool.Close()
+			}
+		}
+	}
 	r.pools.Store(&next)
 	return nil
+}
+
+// Close retires the default pool and every persisted pool. Safe to call more
+// than once; it is used during server shutdown.
+func (r *Router) Close() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	cur := r.pools.Load()
+	pools := make([]*Pool, 0, 1)
+	if cur != nil {
+		for _, entry := range *cur {
+			pools = append(pools, entry.pool)
+		}
+	}
+	r.mu.Unlock()
+	for _, p := range pools {
+		p.Close()
+	}
+	if def := r.Default(); def != nil {
+		def.Close()
+	}
 }
 
 func sameConfig(a, b PoolConfig) bool {

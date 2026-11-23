@@ -352,6 +352,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			// relay rewriting and try direct once.
 			directReq, derr := build(reqCtx)
 			if derr != nil {
+				release()
 				return nil, derr
 			}
 			key = c.currentKey()
@@ -369,7 +370,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			if c.onFreeLimit != nil && freeRetries < maxFreeLimitRetries && lease != nil && c.onFreeLimit(ctx, resp) {
 				freeRetries++
 				_ = resp.Body.Close()
-				done := lease.RotateAsync("upstream free usage limit", c.CloseIdleConnections)
+				done := lease.RotateAsync(ctx, "upstream free usage limit", c.CloseIdleConnections)
 				select {
 				case <-done:
 				case <-ctx.Done():

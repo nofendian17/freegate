@@ -13,9 +13,8 @@ import (
 )
 
 type testEgress struct {
-	dialed  atomic.Int32
-	rotated atomic.Int32
-	dialFn  func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialed atomic.Int32
+	dialFn func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func (e *testEgress) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -25,10 +24,6 @@ func (e *testEgress) DialContext(ctx context.Context, network, addr string) (net
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, addr)
-}
-
-func (e *testEgress) RotateAsync(reason string) {
-	e.rotated.Add(1)
 }
 
 func (e *testEgress) Acquire(ctx context.Context) (context.Context, *egress.Lease) {

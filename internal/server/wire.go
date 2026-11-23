@@ -87,7 +87,11 @@ func applyEgressPools(ctx context.Context, pstore *registry.Store, cfg *config.C
 		}
 		opts, err := egress.ParseConfig(row.WarpStack, row.WarpPoolSize, row.WarpSourceIPv6)
 		if err != nil {
-			return fmt.Errorf("warp pool %q: %w", row.Name, err)
+			// Legacy rows created with the old sidecar schema have no new
+			// fields. Skipping them keeps admin rebuilds working; pins to
+			// such a pool fail closed until it is edited.
+			slog.Warn("egress: skipping invalid WARP pool", "name", row.Name, "error", err)
+			continue
 		}
 		opts.FallbackDirect = cfg.EgressFallbackDirect
 		opts.RegistrationTimeout = cfg.EgressRegistrationTimeout
