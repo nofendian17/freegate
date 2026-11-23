@@ -35,6 +35,8 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
   `EGRESS_DRAIN_TIMEOUT` were replaced by `WARP_STACK`, `WARP_POOL_SIZE`,
   `WARP_SOURCE_IPV6`, `WARP_REGISTRATION_TIMEOUT` and `WARP_ROTATE_WAIT`.
   The warp pool form in the admin UI uses the same fields.
+- WARP variables now live in the single `docker-compose.yml`;
+  `docker-compose.warp.yml` was removed. Enable WARP with `EGRESS_MODE=warp`.
 - Devices are not persisted: a restart re-registers exits, so Cloudflare's
   registration rate limit can delay startup (bounded by
   `WARP_REGISTRATION_TIMEOUT`).

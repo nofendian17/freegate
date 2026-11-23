@@ -41,8 +41,8 @@ build caches, so a rebuild after a source edit only recompiles the changed
 packages. It also compiles on the host platform via `BUILDPLATFORM` with
 `GOOS/GOARCH` from buildx, so cross-arch images do not need QEMU. The build
 context excludes the CodeGraph index and local runtime state. The WARP
-compose override only sets environment variables; WARP exits run inside the
-freegate process, so there is no separate image to build.
+single compose file sets the WARP environment variables; WARP exits run inside
+the freegate process, so there is no separate image to build.
 
 The compose file is the deployment contract. It pins:
 

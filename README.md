@@ -308,7 +308,8 @@ Pools are editable at runtime: create a `warp` pool under Providers → Proxy po
 No sidecars, `NET_ADMIN`, `/dev/net/tun`, or per-container volumes are needed. Devices are registered in-process and are not persisted across restarts.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
+# one compose file for both direct and WARP modes
+EGRESS_MODE=warp docker compose up -d
 ```
 
 The Bun TLS fingerprint is unchanged: WARP only carries the TCP connection, and freegate still performs the ClientHello. See [`docs/ENV.md`](docs/ENV.md) for details and caveats.

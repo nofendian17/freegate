@@ -62,10 +62,11 @@ Pools are data, not env: create one under Providers → Proxy pools with kind `w
 
 No sidecar containers, `NET_ADMIN`, `/dev/net/tun`, or data volumes are needed. Devices are registered in-process and are **not** persisted: a restart creates new registrations, so Cloudflare's registration rate limit can affect startup.
 
-Enable it with the compose override (the prefix must be set):
+Everything lives in one `docker-compose.yml`. Set `EGRESS_MODE=warp` in `.env` (or inline) and start normally:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
+EGRESS_MODE=warp docker compose up -d
+# or: make up-warp
 ```
 
 Notes:
