@@ -47,6 +47,22 @@ func TestWarpTransport_NilEgressFails(t *testing.T) {
 	}
 }
 
+func TestWarpTransportPinsHTTP11AndDisablesKeepAlives(t *testing.T) {
+	tr := NewWarpTransport(EgressRoute{}, nil)
+	if !tr.DisableKeepAlives {
+		t.Error("WARP transport keeps connections alive; a retired exit could be reused")
+	}
+	if tr.ForceAttemptHTTP2 {
+		t.Error("WARP transport still attempts HTTP/2")
+	}
+	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
+		t.Error("WARP transport did not clear HTTP/2 next-protos")
+	}
+	if tr.TLSClientConfig == nil || len(tr.TLSClientConfig.NextProtos) != 1 || tr.TLSClientConfig.NextProtos[0] != "http/1.1" {
+		t.Error("WARP transport does not pin ALPN to http/1.1")
+	}
+}
+
 func TestWarpTransport_DialsViaEgress(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

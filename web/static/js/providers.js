@@ -204,7 +204,7 @@
         // would fall through to the wrapper object and .some would throw.
         var pools = Array.isArray(body.data) ? body.data : (Array.isArray(body) ? body : []);
         defaultWarpReady = pools.some(function (p) {
-          return p.default && (p.endpoints || []).length > 0;
+          return p.default && (p.exits || []).length > 0;
         });
         applyWarpAvailability();
       })
@@ -401,7 +401,9 @@
     poolTable.innerHTML = rows.map(function (p) {
       var status = p.test_status ? p.test_status : '—';
       var warp = p.kind === 'warp';
-      var detail = warp ? p.warp_endpoints : p.proxy_url;
+      var detail = warp
+        ? (p.warp_stack || 'ipv6') + ' · ' + (p.warp_pool_size || 2) + ' exits · ' + (p.warp_source_ipv6 || '—')
+        : p.proxy_url;
       return '<tr class="border-b border-hairline last:border-0 hover:bg-surface-alt">' +
         '<td class="px-5 py-3 font-mono text-caption">' + esc(p.name) +
           (warp ? ' <span class="rounded-2xl bg-ink-soft px-1.5 py-0.5 text-caption text-surface-alt">warp</span>' : '') + '</td>' +
@@ -438,13 +440,13 @@
     renderPoolOptions(document.getElementById('f-proxy'));
   }
 
-  // Pool kind switch: relay fields vs WARP endpoint fields.
+  // Pool kind switch: relay fields vs WARP tunnel fields.
   function applyPoolKind(kind, deployMode) {
     var warp = kind === 'warp';
     document.getElementById('pf-relay-fields').classList.toggle('hidden', warp || !!deployMode);
     document.getElementById('pf-warp-fields').classList.toggle('hidden', !warp || !!deployMode);
     document.getElementById('pf-proxy-url').required = !warp && !deployMode;
-    document.getElementById('pf-warp-endpoints').required = warp;
+    document.getElementById('pf-warp-source').required = warp && !deployMode;
   }
 
   function openPoolModal(p, deployMode) {
@@ -456,7 +458,9 @@
     document.getElementById('pf-kind').value = kind;
     document.getElementById('pf-kind').closest('label').classList.toggle('hidden', !!deployMode);
     document.getElementById('pf-proxy-url').value = p.proxy_url || '';
-    document.getElementById('pf-warp-endpoints').value = p.warp_endpoints || '';
+    document.getElementById('pf-warp-stack').value = p.warp_stack || 'ipv6';
+    document.getElementById('pf-warp-size').value = p.warp_pool_size || 2;
+    document.getElementById('pf-warp-source').value = p.warp_source_ipv6 || '';
     document.getElementById('pf-no-proxy').value = p.no_proxy || '';
     document.getElementById('pf-enabled').checked = p.enabled !== false;
     document.getElementById('pf-strict').checked = !!p.strict_proxy;
@@ -548,7 +552,9 @@
       kind: document.getElementById('pf-kind').value === 'warp' ? 'warp' : 'relay',
       name: slug,
       proxy_url: document.getElementById('pf-proxy-url').value.trim(),
-      warp_endpoints: document.getElementById('pf-warp-endpoints').value.trim(),
+      warp_stack: document.getElementById('pf-warp-stack').value,
+      warp_pool_size: Number(document.getElementById('pf-warp-size').value) || 2,
+      warp_source_ipv6: document.getElementById('pf-warp-source').value.trim(),
       no_proxy: document.getElementById('pf-no-proxy').value.trim(),
       enabled: document.getElementById('pf-enabled').checked,
       strict_proxy: document.getElementById('pf-strict').checked,

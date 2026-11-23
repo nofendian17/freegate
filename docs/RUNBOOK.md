@@ -40,9 +40,9 @@ Build notes: the Dockerfile uses BuildKit cache mounts for the Go module and
 build caches, so a rebuild after a source edit only recompiles the changed
 packages. It also compiles on the host platform via `BUILDPLATFORM` with
 `GOOS/GOARCH` from buildx, so cross-arch images do not need QEMU. The build
-context excludes the CodeGraph index and local runtime state. With the WARP
-override, only `warp-1` carries the `build` key — all three replicas share the
-single `freegate-warp:latest` image.
+context excludes the CodeGraph index and local runtime state. The WARP
+compose override only sets environment variables; WARP exits run inside the
+freegate process, so there is no separate image to build.
 
 The compose file is the deployment contract. It pins:
 
@@ -144,7 +144,7 @@ The rate limiter is **in-memory only**; restarting the proxy clears all counters
 ### Upstream returns 429 → pass-through or tier failover
 Direct model requests forward upstream responses — including 429 — to the client verbatim. Tiered combo requests (`model=<combo>`) instead fail over to the next tier on transport errors, 429s, and 5xx; only the last failure (or a non-retryable 4xx like 401, which passes through immediately) reaches the client.
 
-With `EGRESS_MODE=warp`, an OpenCode free-tier 429 (`FreeUsageLimitError`) is the exception: freegate rotates the WARP sidecar that served the request and retries once on the new exit IP. Generic 429s (per-key rate limits) are still passed through. Before rotating, freegate waits for in-flight requests on that sidecar to finish so the WARP tunnel teardown cannot cut a live stream; if they run past `EGRESS_DRAIN_TIMEOUT`, the rotation is skipped and the 429 is returned. See `docs/ENV.md` for the WARP settings and `GET /api/egress` for live endpoint status.
+With `EGRESS_MODE=warp`, an OpenCode free-tier 429 (`FreeUsageLimitError`) is the exception: freegate retires the in-process WARP exit that served the request and retries once from a replacement with a different /64. Generic 429s (per-key rate limits) are still passed through. The exit is not torn down until the response body is closed, so an in-flight stream keeps its tunnel; a registration pause is bounded by `WARP_REGISTRATION_TIMEOUT` and a retry waits up to `WARP_ROTATE_WAIT` for a fresh exit. See `docs/ENV.md` for the WARP settings and `GET /api/egress` for live exit status.
 
 ### Client sees empty replies / tool-call parameter errors
 

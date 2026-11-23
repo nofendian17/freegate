@@ -145,6 +145,53 @@ func TestPoolReportRotatesAndCoolsEgress(t *testing.T) {
 	t.Fatalf("exit was not replaced: %+v", p.Snapshot())
 }
 
+func TestFailedExitRetiresAfterLeaseRelease(t *testing.T) {
+	var created atomic.Int64
+	var first *exit
+	p, err := newPool(context.Background(), nil, 1, func(context.Context) (*exit, error) {
+		n := created.Add(1)
+		e := fakeExit(string(rune('a'+n)), "2606:4700:"+string(rune('0'+n))+"::1")
+		if n == 1 {
+			first = e
+		}
+		return e, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	lease, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Fail(lease, "transport error")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(p.Snapshot().Exits) == 1 && p.Snapshot().Exits[0].ID != first.id {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	first.mu.Lock()
+	closedWhileLeased := first.closed
+	first.mu.Unlock()
+	if closedWhileLeased {
+		t.Fatal("failed exit was closed while a lease was still held")
+	}
+	lease.Release()
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		first.mu.Lock()
+		closed := first.closed
+		first.mu.Unlock()
+		if closed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("failed exit was not closed after lease release")
+}
+
 func TestPoolDiscardsDuplicateEgress(t *testing.T) {
 	var created atomic.Int64
 	p, err := newPool(context.Background(), nil, 2, func(context.Context) (*exit, error) {

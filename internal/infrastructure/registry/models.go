@@ -140,7 +140,7 @@ type RouteCombo struct {
 }
 
 // Proxy pool kinds. "relay" pools rewrite the request URL through a Vercel
-// edge relay; "warp" pools dial through WARP sidecars. One pin column
+// edge relay; "warp" pools dial through in-process WARP exits. One pin column
 // (ProxyPoolID) addresses both, and the mode decides which kind is valid.
 const (
 	PoolKindRelay = "relay"

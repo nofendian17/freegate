@@ -50,7 +50,6 @@ func (f *fakeBackend) Acquire(context.Context) (*Lease, error) {
 			f.snaps = snaps
 			f.mu.Unlock()
 		},
-		egressKey: func() string { return "2001:db8::/64" },
 	}, nil
 }
 

@@ -67,8 +67,8 @@ compose-build: ## Build service images
 compose-pull: ## Pull service images
 	$(COMPOSE) pull
 
-up-warp: ## Start with the WARP egress pool (builds the sidecars)
-	$(WARP_COMPOSE) up -d --build
+up-warp: ## Start with in-process WARP egress (needs WARP_SOURCE_IPV6)
+	$(WARP_COMPOSE) up -d
 
 down-warp: ## Stop the WARP stack
 	$(WARP_COMPOSE) down

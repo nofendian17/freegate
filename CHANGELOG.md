@@ -9,50 +9,48 @@ v0.22.0 are documented in [GitHub Releases](https://github.com/nofendian17/freeg
 
 - WARP egress is now a first-class routing target. Create `warp` pools under
   Providers → Proxy pools and pin any provider or builtin to one; pool edits
-  apply on the next rebuild without a restart. `GET /api/egress` reports live
-  endpoint status, exit IP, and rotation counters.
-- WARP rotation is attributed to the exact endpoint that served the dial, via a
-  per-request lease. A burst of 429s rotates one sidecar instead of whichever
-  exit dialed last. The retry waits for the rotation to finish through an
-  explicit channel instead of polling a timeout.
-- `EGRESS_DRAIN_TIMEOUT` (default `60s`) bounds how long a rotation waits for
-  in-flight requests on a sidecar before giving up.
-- WARP exit addresses are probed via `GET /ip` and reported with their IPv6 /64
-  in `GET /api/egress`. Sidecars sharing a /64 are flagged with
-  `duplicate_prefix`, since they share one free-tier quota.
+  apply on the next rebuild without a restart. `GET /api/egress` reports each
+  exit's ID, public egress address, /64 prefix and status.
+- WARP runs **in-process** (userspace WireGuard + gVisor netstack). Each exit is
+  an independently registered Cloudflare device; no sidecars, `NET_ADMIN`, TUN
+  device, or per-container registration volumes are needed.
+- Each exit binds its WireGuard socket to a random address from a routed
+  `WARP_SOURCE_IPV6` prefix, so a replacement presents a new outer source and
+  receives a genuinely different /64 quota bucket.
+- The exit pool scales with demand (preload half of `WARP_POOL_SIZE`, hard
+  ceiling at the configured size), cools a rejected /64 for 30 minutes, and
+  honors Cloudflare's registration `Retry-After` with backoff.
 
 ### Changed
 
-- WARP rotation now drains in-flight connections before asking the sidecar to
-  change identity. Since WARP tears down the whole tunnel, rotating while a
-  request is streaming cut that request off. If the drain exceeds
-  `EGRESS_DRAIN_TIMEOUT`, the rotation is skipped and the 429 is returned
-  rather than interrupting a live stream.
-- A rotation that lands in a /64 already used by another sidecar is retried
-  (up to 3 identities) so a shared quota does not silently waste the attempt.
-  Documentation now consistently describes the free tier as per /64.
+- WARP rotation retires the exit that served the request. A per-request lease
+  stays alive until the response body is closed, so a rotating exit is never
+  released while an SSE stream is still using it; the retry waits for a fresh
+  exit instead of polling a timeout.
+- WARP transports pin HTTP/1.1 and disable keep-alives so a pooled connection
+  can never be reused against a retired exit.
+- `EGRESS_WARP_POOL`, `EGRESS_COOLDOWN`, `EGRESS_ROTATE_TIMEOUT` and
+  `EGRESS_DRAIN_TIMEOUT` were replaced by `WARP_STACK`, `WARP_POOL_SIZE`,
+  `WARP_SOURCE_IPV6`, `WARP_REGISTRATION_TIMEOUT` and `WARP_ROTATE_WAIT`.
+  The warp pool form in the admin UI uses the same fields.
+- Devices are not persisted: a restart re-registers exits, so Cloudflare's
+  registration rate limit can delay startup (bounded by
+  `WARP_REGISTRATION_TIMEOUT`).
+- `EGRESS_FALLBACK_DIRECT` defaults to `false`. A dead WARP pool fails closed
+  instead of leaking the host IP; opt in explicitly when availability matters
+  more than the exit address.
+- Pool selection and transports remain one atomic routing snapshot per request.
+  Egress is a concrete route, not an interface, so a missing configuration can
+  no longer hide behind a typed nil and dial the host address.
 
 ### Fixed
 
-- A rotation that returned a new IP address in the **same /64 as the exiting
-  sidecar's previous address** was accepted: the exact IP changed but the
-  free-tier quota bucket did not, so the retry still got 429. The prefix check
-  now includes the endpoint's own pre-rotation address, and the rotation log
-  reports both `previous` and `prefix`.
+- A rotation that returned a new IP in the **same /64 as the exiting device's
+  previous address** was accepted: the IP changed but the quota bucket did not.
+  Registration now discards exits whose /64 is already active or cooling.
 - Docker builds use BuildKit cache mounts for Go modules and compiled packages,
   compile natively on the build platform for any target arch, and ship a much
-  smaller build context. The WARP override builds its shared image once instead
-  of once per replica.
-
-- `EGRESS_FALLBACK_DIRECT` now defaults to `false`. A dead WARP pool fails
-  closed instead of leaking the host IP; opt in explicitly when availability
-  matters more than the exit address.
-- `EGRESS_MODE=warp` no longer requires `EGRESS_WARP_POOL` when pools are
-  managed in the database. An unpinned WARP selection fails closed instead of
-  dialing the host address.
-- Pool selection and transports are one atomic routing snapshot per request.
-  Egress is a concrete route, not an interface, so a missing configuration can
-  no longer hide behind a typed nil and dial the host address.
+  smaller build context.
 
 ## [0.22.0] - 2026-11-18
 

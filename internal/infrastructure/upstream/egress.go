@@ -17,7 +17,7 @@ import (
 var ErrNoWarpPool = errors.New("egress: WARP pool not configured")
 
 // poolDialer is the runtime surface EgressRoute needs. egress.Pool implements
-// it; tests supply a fake so no real sidecar is required.
+// it; tests supply a fake so no real device is required.
 type poolDialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
 	Acquire(ctx context.Context) (context.Context, *egress.Lease)

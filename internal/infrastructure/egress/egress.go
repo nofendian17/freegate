@@ -90,7 +90,6 @@ type Lease struct {
 	dial      func(context.Context, string, string) (net.Conn, error)
 	release   func()
 	fail      func(string)
-	egressKey func() string
 	waitFresh func([]Snapshot)
 }
 
@@ -104,13 +103,6 @@ func (l *Lease) Release() {
 			l.release()
 		}
 	})
-}
-
-func (l *Lease) egress() string {
-	if l == nil || l.egressKey == nil {
-		return ""
-	}
-	return l.egressKey()
 }
 
 // RotateAsync retires the exit that carried the request and waits for a
@@ -300,10 +292,9 @@ func (b *warpBackend) Acquire(ctx context.Context) (*Lease, error) {
 		return nil, err
 	}
 	return &Lease{
-		dial:      l.DialContext,
-		release:   l.Release,
-		fail:      func(reason string) { b.p.Fail(l, reason) },
-		egressKey: l.EgressKey,
+		dial:    l.DialContext,
+		release: l.Release,
+		fail:    func(reason string) { b.p.Fail(l, reason) },
 	}, nil
 }
 

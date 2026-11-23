@@ -8,7 +8,7 @@ import (
 // NewTestLease builds a Lease from callbacks. Consumers of this package use
 // it to exercise dial/rotation/retry paths without registering a WARP device.
 func NewTestLease(dial func(context.Context, string, string) (net.Conn, error), release func(), fail func(string)) *Lease {
-	return &Lease{dial: dial, release: release, fail: fail, egressKey: func() string { return "test" }}
+	return &Lease{dial: dial, release: release, fail: fail}
 }
 
 type testBackend struct{}

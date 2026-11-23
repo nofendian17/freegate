@@ -287,27 +287,30 @@ Anonymous OpenCode free-tier requests are automatically shaped like the official
 
 ### WARP egress pools
 
-Optional. `EGRESS_MODE=warp` sends traffic through one or more WARP sidecars instead of the host's own address. When the upstream answers `429 FreeUsageLimitError`, freegate rotates the sidecar that served the request and retries once; per-key 429s are left to the existing key cooldown. Rotation is attributed to the exact exit that served the dial, so a burst of 429s rotates one sidecar, not the whole pool.
+Optional. `EGRESS_MODE=warp` sends traffic through WARP exits that **run inside freegate** (userspace WireGuard + gVisor netstack) instead of the host's own address. Each exit is an independently registered Cloudflare device. When the upstream answers `429 FreeUsageLimitError`, freegate retires the exit that served the request and retries from a fresh one; per-key 429s are left to the existing key cooldown. A lease is held for the whole response body, so a rotating exit cannot be released while an SSE stream is still using it.
 
-The free tier is counted per **exit IPv6 /64**, not per exact address. Cloudflare can assign two WARP registrations to the same /64; those sidecars then share one quota. freegate probes each control API's `GET /ip`, flags shared prefixes as `duplicate_prefix` in `GET /api/egress`, and re-rotates when a fresh identity lands in a /64 already used by another endpoint in the pool.
+The free tier is counted per **exit IPv6 /64**, not per exact address. Each exit therefore binds its WireGuard socket to a random address from the routed `WARP_SOURCE_IPV6` prefix using `IPV6_FREEBIND`. Registering a new device that leaves from the same host address would often land in the same /64 — a cosmetic change, not a fresh quota. Exits whose egress key is already active or cooling are discarded during registration, and Cloudflare's registration rate limit is paced by `Retry-After`.
 
-Pools are editable at runtime: create a `warp` pool under Providers → Proxy pools (or `POST /api/pools` with `{"kind":"warp","warp_endpoints":"..."}`), then pin a provider or builtin to it. `EGRESS_WARP_POOL` seeds the default pool for WARP without a pin. Pool edits apply without a restart.
+Pools are editable at runtime: create a `warp` pool under Providers → Proxy pools (or `POST /api/pools` with `{"kind":"warp","warp_stack":"ipv6","warp_pool_size":2,"warp_source_ipv6":"2001:db8::/64"}`), then pin a provider or builtin to it. The env settings seed the default pool for WARP without a pin. Pool edits apply without a restart.
 
 | Variable | Default | Description |
 |---|---:|---|
-| `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for the pool |
-| `EGRESS_WARP_POOL` | — | `host:port[@control-url]` entries for the default pool, comma-separated |
-| `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the whole pool is unavailable; opt in explicitly |
-| `EGRESS_COOLDOWN` | `60s` | How long a failed sidecar is skipped |
-| `EGRESS_ROTATE_TIMEOUT` | `90s` | Upper bound for one rotation |
+| `EGRESS_MODE` | `off` | `off` for direct connections, `warp` for in-process WARP |
+| `WARP_STACK` | `ipv6` | Tunnel address family; source rotation requires `ipv6` |
+| `WARP_POOL_SIZE` | `2` | Upper bound on simultaneously registered exits (1–32) |
+| `WARP_SOURCE_IPV6` | — | Routed IPv6 prefix (/64 or shorter) for outer sources; required in warp mode |
+| `WARP_REGISTRATION_TIMEOUT` | `5m` | Startup window for the first registration and Cloudflare rate-limit waits |
+| `WARP_ROTATE_WAIT` | `30s` | How long a retry waits for a replacement exit |
+| `EGRESS_FALLBACK_DIRECT` | `false` | Fall back to the host IP when the pool is unavailable; opt in explicitly |
 
-The sidecars live in `deploy/warp-control` (official Cloudflare client + a small `POST /rotate` / `GET /ip` API). Rotation uses `warp-cli tunnel rotate-keys` + endpoint reset, which keeps the device registration, so containers reuse one volume each instead of re-registering against Cloudflare's rate-limited API.
+No sidecars, `NET_ADMIN`, `/dev/net/tun`, or per-container volumes are needed. Devices are registered in-process and are not persisted across restarts.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d --build
+WARP_SOURCE_IPV6=2001:db8:1234:5678::/64 \
+  docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
 ```
 
-The Bun TLS fingerprint is unchanged: the sidecar only carries the TCP connection, and freegate still performs the ClientHello. See [`docs/ENV.md`](docs/ENV.md) for details and caveats.
+The Bun TLS fingerprint is unchanged: WARP only carries the TCP connection, and freegate still performs the ClientHello. See [`docs/ENV.md`](docs/ENV.md) for details and caveats.
 
 ### Routing and persistence
 

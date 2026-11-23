@@ -1,81 +1,27 @@
-# Optional WARP egress pool for the OpenCode upstream.
+# Optional WARP egress for the OpenCode upstream.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.warp.yml up -d
 #
-# Each warp-N is an independent Cloudflare WARP registration behind a SOCKS5
-# listener. freegate dials the OpenCode host through them and, when the
-# upstream answers with a free-tier usage limit, rotates only the endpoint
-# that served the request. The rest of the pool keeps serving while that
-# container changes identity, so a limit costs one failed request instead of
-# a stall.
+# WARP exits run inside freegate: no sidecar containers, no NET_ADMIN, no TUN
+# device. Each exit registers its own Cloudflare device and binds a random
+# address from WARP_SOURCE_IPV6 (a routed /64) as its outer source. When the
+# upstream answers a free-tier 429, freegate retires the exit that served the
+# request and retries from a replacement with a fresh /64.
 #
-# Registration is persisted per container: restarts reuse the same device
-# instead of calling Cloudflare's registration API again (that API is rate
-# limited, and repeated registration is what breaks wgcf-based setups).
-#
-# Add more replicas by copying a warp-N block and appending it to
-# EGRESS_WARP_POOL in the proxy service below.
-
-x-warp: &warp
-  # Only warp-1 carries the build key. All three replicas share one image;
-  # building it once avoids two redundant context uploads and builds.
-  image: freegate-warp:latest
-  cap_add:
-    - NET_ADMIN
-    - SYS_MODULE
-  devices:
-    - /dev/net/tun:/dev/net/tun
-  restart: unless-stopped
-  healthcheck:
-    test: ["CMD", "/usr/local/bin/healthcheck-control.sh"]
-    interval: 15s
-    timeout: 5s
-    start_period: 30s
-    retries: 3
+# The host must actually be able to use an address from WARP_SOURCE_IPV6 as a
+# source. Without it, replacements share the host address and therefore the
+# same free-tier quota. With Docker, route that prefix to the container (or
+# run the proxy with host networking) — an unrouted prefix fails at bind time.
 
 services:
   proxy:
     environment:
       - EGRESS_MODE=warp
-      - EGRESS_WARP_POOL=warp-1:1080@http://warp-1:8081,warp-2:1080@http://warp-2:8081,warp-3:1080@http://warp-3:8081
+      - WARP_STACK=${WARP_STACK:-ipv6}
+      - WARP_POOL_SIZE=${WARP_POOL_SIZE:-2}
+      - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:?WARP_SOURCE_IPV6 must be a routed IPv6 /64}
+      - WARP_REGISTRATION_TIMEOUT=${WARP_REGISTRATION_TIMEOUT:-5m}
+      - WARP_ROTATE_WAIT=${WARP_ROTATE_WAIT:-30s}
       # A dead pool fails closed (host IP never leaks). Set true only when
       # availability matters more than the exit address.
       - EGRESS_FALLBACK_DIRECT=${EGRESS_FALLBACK_DIRECT:-false}
-      # How long a failed endpoint is skipped before it is tried again.
-      - EGRESS_COOLDOWN=${EGRESS_COOLDOWN:-60s}
-      # Upper bound for one rotation (rotate-keys + endpoint reset + reconnect
-      # + verification).
-      - EGRESS_ROTATE_TIMEOUT=${EGRESS_ROTATE_TIMEOUT:-90s}
-      # A rotation drops the WARP tunnel. Wait up to this long for requests
-      # still streaming through that sidecar before rotating; if they are
-      # still busy, skip the rotation instead of cutting them off.
-      - EGRESS_DRAIN_TIMEOUT=${EGRESS_DRAIN_TIMEOUT:-60s}
-    depends_on:
-      warp-1:
-        condition: service_healthy
-      warp-2:
-        condition: service_healthy
-      warp-3:
-        condition: service_healthy
-
-  warp-1:
-    <<: *warp
-    build:
-      context: ./deploy/warp-control
-    volumes:
-      - warp-1-data:/var/lib/cloudflare-warp
-
-  warp-2:
-    <<: *warp
-    volumes:
-      - warp-2-data:/var/lib/cloudflare-warp
-
-  warp-3:
-    <<: *warp
-    volumes:
-      - warp-3-data:/var/lib/cloudflare-warp
-
-volumes:
-  warp-1-data:
-  warp-2-data:
-  warp-3-data:
