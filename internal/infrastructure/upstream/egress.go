@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 var ErrNoWarpPool = errors.New("egress: WARP pool not configured")
 
 // poolDialer is the runtime surface EgressRoute needs. egress.Pool implements
-// it; tests supply a fake so no real sidecar is required.
+// it; tests supply a fake so no real device is required.
 type poolDialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
 	Acquire(ctx context.Context) (context.Context, *egress.Lease)
@@ -64,6 +65,12 @@ func (r EgressRoute) Acquire(ctx context.Context) (context.Context, *egress.Leas
 // DialContext dials addr through the route's pool, failing closed when the
 // pool is missing.
 func (r EgressRoute) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	// The lease was acquired from the route snapshot for this attempt. Use
+	// its exit even if an admin rebuild swapped the pool in the meantime, so
+	// rotation still targets the exit that actually carried the request.
+	if l := egress.LeaseFromContext(ctx); l != nil {
+		return l.DialContext(ctx, network, addr)
+	}
 	d := r.dialer()
 	if d == nil {
 		return nil, ErrNoWarpPool
@@ -79,7 +86,28 @@ func NewWarpTransport(route EgressRoute, base *http.Transport) *http.Transport {
 	}
 	tr := base.Clone()
 	tr.DialContext = route.DialContext
+	// A userspace exit is per-attempt: keep-alives would leave a pooled
+	// connection bound to an exit after it is retired, and h2 over a fresh
+	// netstack connection is not what the upstream path was verified with.
+	tr.DisableKeepAlives = true
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{NextProtos: []string{"http/1.1"}}
+	} else {
+		cfg := tr.TLSClientConfig.Clone()
+		cfg.NextProtos = []string{"http/1.1"}
+		tr.TLSClientConfig = cfg
+	}
 	return tr
+}
+
+// anyRateLimit treats any 429 as a rotatable limit. Kilo and LLM7 do not
+// return OpenCode's FreeUsageLimitError marker, and both are free gateways
+// whose 429 is scoped to the calling address, so rotating the WARP exit is
+// the appropriate response.
+func anyRateLimit(_ context.Context, resp *http.Response) bool {
+	return resp != nil && resp.StatusCode == http.StatusTooManyRequests
 }
 
 // isFreeUsageLimit probes resp for a free-tier usage limit and restores its

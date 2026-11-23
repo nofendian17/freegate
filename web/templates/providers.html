@@ -232,7 +232,7 @@
           <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">Kind</span>
           <select id="pf-kind" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 text-body text-ink outline-none">
             <option value="relay">Relay — HTTP/Vercel proxy</option>
-            <option value="warp">WARP — Cloudflare sidecar</option>
+            <option value="warp">WARP — in-process Cloudflare exit</option>
           </select>
         </label>
         <label class="flex flex-col gap-1.5" for="pf-name">
@@ -256,11 +256,25 @@
           </label>
           <span id="pf-strict-help" class="self-center text-caption text-mid-gray">Fail the request if the relay is unreachable instead of falling back to direct.</span>
         </div>
-        <label id="pf-warp-fields" class="hidden flex-col gap-1.5 sm:col-span-2" for="pf-warp-endpoints">
-          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">WARP endpoints</span>
-          <input id="pf-warp-endpoints" placeholder="warp-1:1080@http://warp-1:8081, warp-2:1080@http://warp-2:8081" class="rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray">
-          <span class="text-caption text-mid-gray">Comma-separated host:port[@control-url]. The control URL rotates the sidecar identity on a free-tier limit.</span>
-        </label>
+        <div id="pf-warp-fields" class="hidden flex-col gap-1.5 sm:col-span-2">
+          <span class="text-caption uppercase tracking-[0.05em] text-mid-gray">WARP tunnel</span>
+          <div class="flex gap-2">
+            <label class="flex-1 text-caption text-mid-gray">Stack
+              <select id="pf-warp-stack" class="mt-1 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none">
+                <option value="ipv6" selected>ipv6</option>
+                <option value="ipv4">ipv4</option>
+                <option value="dual">dual</option>
+              </select>
+            </label>
+            <label class="flex-1 text-caption text-mid-gray">Max exits
+              <input id="pf-warp-size" type="number" min="1" max="32" value="2" class="mt-1 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none">
+            </label>
+          </div>
+          <label class="text-caption text-mid-gray">Routed IPv6 source prefix
+            <input id="pf-warp-source" placeholder="auto (detect from host)" class="mt-1 w-full rounded-2xl border border-hairline bg-canvas px-3 py-2.5 font-mono text-caption text-ink outline-none placeholder:text-mid-gray">
+          </label>
+          <span class="text-caption text-mid-gray">Leave "auto" to detect a public prefix from the host, or set an explicit /64. Each exit binds a random address from it; a new source is what resets the /64-scoped free quota.</span>
+        </div>
         <label class="flex items-center gap-2 text-body">
           <input id="pf-enabled" type="checkbox" checked aria-describedby="pf-enabled-help" class="size-4 accent-[#0a0a0a]"> Active
         </label>

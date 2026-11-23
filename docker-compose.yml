@@ -1,3 +1,6 @@
+# Single compose file for freegate. WARP egress is optional and controlled by
+# EGRESS_MODE / WARP_* below; set EGRESS_MODE=warp in .env to enable it.
+
 services:
   proxy:
     # Published by GoReleaser to GHCR on every tagged release.
@@ -41,6 +44,22 @@ services:
       # false; lines contain full conversation content, enable only while
       # debugging.
       - UPSTREAM_CAPTURE=${UPSTREAM_CAPTURE:-false}
+      # === Egress: in-process WARP (optional) ===
+      # off = direct connections (default). Set EGRESS_MODE=warp to route
+      # through WARP exits that run inside this container. No sidecars,
+      # NET_ADMIN or /dev/net/tun are needed.
+      - EGRESS_MODE=${EGRESS_MODE:-off}
+      - WARP_STACK=${WARP_STACK:-ipv6}
+      - WARP_POOL_SIZE=${WARP_POOL_SIZE:-2}
+      # "auto" discovers a routed public IPv6 /64 from the host. Override it
+      # with an explicit prefix when the host prefix is not visible in the
+      # container. Without a usable prefix, warp mode fails closed.
+      - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-auto}
+      - WARP_REGISTRATION_TIMEOUT=${WARP_REGISTRATION_TIMEOUT:-5m}
+      - WARP_ROTATE_WAIT=${WARP_ROTATE_WAIT:-30s}
+      # When no WARP exit is available, fail closed by default. Set true only
+      # when availability matters more than hiding the host address.
+      - EGRESS_FALLBACK_DIRECT=${EGRESS_FALLBACK_DIRECT:-false}
       - PROVIDERS_DB_PATH=/data/providers.db
     volumes:
       - fg-data:/data

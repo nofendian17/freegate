@@ -13,9 +13,8 @@ import (
 )
 
 type testEgress struct {
-	dialed  atomic.Int32
-	rotated atomic.Int32
-	dialFn  func(ctx context.Context, network, addr string) (net.Conn, error)
+	dialed atomic.Int32
+	dialFn func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func (e *testEgress) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -25,10 +24,6 @@ func (e *testEgress) DialContext(ctx context.Context, network, addr string) (net
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, addr)
-}
-
-func (e *testEgress) RotateAsync(reason string) {
-	e.rotated.Add(1)
 }
 
 func (e *testEgress) Acquire(ctx context.Context) (context.Context, *egress.Lease) {
@@ -44,6 +39,22 @@ func TestWarpTransport_NilEgressFails(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoWarpPool) {
 		t.Fatalf("expected ErrNoWarpPool, got: %v", err)
+	}
+}
+
+func TestWarpTransportPinsHTTP11AndDisablesKeepAlives(t *testing.T) {
+	tr := NewWarpTransport(EgressRoute{}, nil)
+	if !tr.DisableKeepAlives {
+		t.Error("WARP transport keeps connections alive; a retired exit could be reused")
+	}
+	if tr.ForceAttemptHTTP2 {
+		t.Error("WARP transport still attempts HTTP/2")
+	}
+	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
+		t.Error("WARP transport did not clear HTTP/2 next-protos")
+	}
+	if tr.TLSClientConfig == nil || len(tr.TLSClientConfig.NextProtos) != 1 || tr.TLSClientConfig.NextProtos[0] != "http/1.1" {
+		t.Error("WARP transport does not pin ALPN to http/1.1")
 	}
 }
 

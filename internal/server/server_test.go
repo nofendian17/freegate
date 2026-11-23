@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -123,6 +124,41 @@ func TestApplyBuiltinProxies_DisabledPinGoesDirect(t *testing.T) {
 	}
 }
 
+// TestApplyEgressPoolsSkipsLegacyRows keeps an old sidecar-era pool from
+// breaking every admin rebuild after the in-process cutover.
+func TestApplyEgressPoolsSkipsLegacyRows(t *testing.T) {
+	path := t.TempDir() + "/providers.db"
+	s, err := registry.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
+		Kind: registry.PoolKindWarp, Name: "legacy", WarpStack: "ipv6",
+		WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a row created before the cutover: AutoMigrate added the new
+	// columns but left them at their zero values.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE proxy_pools SET warp_stack='', warp_pool_size=0, warp_source_ipv6='' WHERE id=?`, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	router := egress.NewRouter()
+	if err := applyEgressPools(t.Context(), s, &config.Config{}, router); err != nil {
+		t.Fatalf("legacy row must not break rebuild: %v", err)
+	}
+	if router.Pool(row.ID) != nil {
+		t.Fatal("invalid legacy pool was installed")
+	}
+}
+
 // TestApplyEgressPools verifies persisted warp pools reach the router and that
 // disabling a pool removes it (pins then fail closed).
 func TestApplyEgressPools(t *testing.T) {
@@ -134,12 +170,15 @@ func TestApplyEgressPools(t *testing.T) {
 	cfg := &config.Config{}
 	row, err := s.CreatePool(t.Context(), registry.ProxyPool{
 		Kind: registry.PoolKindWarp, Name: "warp-1",
-		WarpEndpoints: "warp-1:1080@http://warp-1:8081", Enabled: true,
+		WarpStack: "ipv6", WarpPoolSize: 2, WarpSourceIPv6: "2001:db8::/64", Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	router := egress.NewRouter()
+	router.SetPoolFactory(func(context.Context, egress.Options) (*egress.Pool, error) {
+		return egress.NewTestPool(), nil
+	})
 	if err := applyEgressPools(t.Context(), s, cfg, router); err != nil {
 		t.Fatalf("apply: %v", err)
 	}

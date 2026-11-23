@@ -140,7 +140,7 @@ type RouteCombo struct {
 }
 
 // Proxy pool kinds. "relay" pools rewrite the request URL through a Vercel
-// edge relay; "warp" pools dial through WARP sidecars. One pin column
+// edge relay; "warp" pools dial through in-process WARP exits. One pin column
 // (ProxyPoolID) addresses both, and the mode decides which kind is valid.
 const (
 	PoolKindRelay = "relay"
@@ -158,15 +158,17 @@ type ProxyPool struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// Kind selects the pool implementation: "relay" (legacy zero value) or
 	// "warp". Existing rows have no kind and read as relay.
-	Kind          string `gorm:"default:relay" json:"kind"`
-	Name          string `gorm:"uniqueIndex;not null" json:"name" validate:"required,resource_name"`
-	ProxyURL      string `json:"proxy_url,omitempty" validate:"omitempty,http_url,max=2048"`
-	NoProxy       string `json:"no_proxy,omitempty" validate:"omitempty,max=2048"`
-	StrictProxy   bool   `json:"strict_proxy"`
-	WarpEndpoints string `json:"warp_endpoints,omitempty" validate:"omitempty,max=4096"`
-	Enabled       bool   `gorm:"default:true" json:"enabled"`
-	TestStatus    string `json:"test_status,omitempty"`
-	LastError     string `json:"last_error,omitempty"`
+	Kind           string `gorm:"default:relay" json:"kind"`
+	Name           string `gorm:"uniqueIndex;not null" json:"name" validate:"required,resource_name"`
+	ProxyURL       string `json:"proxy_url,omitempty" validate:"omitempty,http_url,max=2048"`
+	NoProxy        string `json:"no_proxy,omitempty" validate:"omitempty,max=2048"`
+	StrictProxy    bool   `json:"strict_proxy"`
+	WarpStack      string `json:"warp_stack,omitempty" validate:"omitempty,max=16"`
+	WarpPoolSize   int    `json:"warp_pool_size,omitempty"`
+	WarpSourceIPv6 string `json:"warp_source_ipv6,omitempty" validate:"omitempty,max=64"`
+	Enabled        bool   `gorm:"default:true" json:"enabled"`
+	TestStatus     string `json:"test_status,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
 }
 
 func (p *ProxyPool) Validate() error {
@@ -179,10 +181,7 @@ func (p *ProxyPool) Validate() error {
 			return fmt.Errorf("%w: relay pool needs proxy_url", ErrInvalidArgument)
 		}
 	case PoolKindWarp:
-		if strings.TrimSpace(p.WarpEndpoints) == "" {
-			return fmt.Errorf("%w: warp pool needs warp_endpoints", ErrInvalidArgument)
-		}
-		if _, err := egress.ParsePool(p.WarpEndpoints); err != nil {
+		if _, err := egress.ParseConfig(p.WarpStack, p.WarpPoolSize, p.WarpSourceIPv6); err != nil {
 			return fmt.Errorf("%w: invalid warp pool: %w", ErrInvalidArgument, err)
 		}
 	}

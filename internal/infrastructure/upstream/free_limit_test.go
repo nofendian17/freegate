@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,27 +11,36 @@ import (
 	"testing"
 
 	"freegate/internal/infrastructure/egress"
-	"freegate/internal/infrastructure/egress/egresstest"
 )
 
-// newWarpClient builds an HTTPClient whose WARP transport dials through a real
-// egress.Pool over a local SOCKS5 server, so rotation and retry can be tested
-// without a sidecar.
-func newWarpClient(t *testing.T, upstreamURL, controlURL string) *HTTPClient {
-	t.Helper()
-	proxy := egresstest.New(t)
-	pool := egress.NewPool(egress.Options{
-		Endpoints: []egress.Endpoint{{Name: "warp-1", Socks: proxy.Addr(), Control: controlURL}},
-	})
-	router := egress.NewRouter()
-	router.SetDefault(pool)
-	route := EgressRoute{Router: router}
+// testWarpDialer is a poolDialer that dials the local test server directly and
+// counts rotations, so the retry path can be tested without a WARP device.
+type testWarpDialer struct {
+	rotations *atomic.Int32
+	released  *atomic.Int32
+	dialer    *net.Dialer
+}
+
+func (d *testWarpDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return d.dialer.DialContext(ctx, network, addr)
+}
+
+func (d *testWarpDialer) Acquire(ctx context.Context) (context.Context, *egress.Lease) {
+	release := func() { d.released.Add(1) }
+	fail := func(string) { d.rotations.Add(1) }
+	return ctx, egress.NewTestLease(d.DialContext, release, fail)
+}
+
+func newWarpClient(upstreamURL string, rotations *atomic.Int32) (*HTTPClient, *atomic.Int32) {
+	released := &atomic.Int32{}
+	d := &testWarpDialer{rotations: rotations, released: released, dialer: &net.Dialer{}}
+	route := EgressRoute{testDialer: d}
 	c := NewHTTPClientWithTransport(upstreamURL, []string{"public"}, nil, nil)
 	c.SetRoute(NewWarpTransport(route, nil), nil, &route)
 	c.SetFreeLimitHook(func(_ context.Context, resp *http.Response) bool {
 		return isFreeUsageLimit(resp)
 	})
-	return c
+	return c, released
 }
 
 func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
@@ -47,22 +57,13 @@ func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	defer srv.Close()
 
 	var rotations atomic.Int32
-	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
-			rotations.Add(1)
-			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
-	}))
-	defer control.Close()
-
-	c := newWarpClient(t, srv.URL, control.URL)
+	c, released := newWarpClient(srv.URL, &rotations)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -71,6 +72,9 @@ func TestFreeLimitHookRotatesAndRetries(t *testing.T) {
 	}
 	if got := rotations.Load(); got != 1 {
 		t.Errorf("rotations = %d, want 1", got)
+	}
+	if got := released.Load(); got != 2 {
+		t.Errorf("released leases = %d, want 2", got)
 	}
 }
 
@@ -84,17 +88,7 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	defer srv.Close()
 
 	var rotations atomic.Int32
-	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
-			rotations.Add(1)
-			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
-	}))
-	defer control.Close()
-
-	c := newWarpClient(t, srv.URL, control.URL)
+	c, released := newWarpClient(srv.URL, &rotations)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
@@ -109,7 +103,9 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	if got := rotations.Load(); got != 0 {
 		t.Errorf("rotations = %d, want 0", got)
 	}
-	// The hook must rewind the body so the caller still sees the error.
+	if got := released.Load(); got != 0 {
+		t.Errorf("released before body close = %d, want 0", got)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
@@ -117,12 +113,14 @@ func TestFreeLimitHookIgnoresGeneric429(t *testing.T) {
 	if !strings.Contains(string(body), "rate limit exceeded") {
 		t.Errorf("body = %q", body)
 	}
+	_ = resp.Body.Close()
+	if got := released.Load(); got != 1 {
+		t.Errorf("released after body close = %d, want 1", got)
+	}
 }
 
-// TestFreeLimitHookRotatesUntilSuccess reproduces the production bug: a
-// request that gets a free-usage 429, rotates, and gets another free-usage
-// 429 from the still-limited IP must rotate again rather than dropping the
-// client's connection with a 429.
+// TestFreeLimitHookRotatesUntilSuccess reproduces a request that gets two
+// free-usage 429s and must rotate twice rather than dropping the connection.
 func TestFreeLimitHookRotatesUntilSuccess(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,17 +134,7 @@ func TestFreeLimitHookRotatesUntilSuccess(t *testing.T) {
 	defer srv.Close()
 
 	var rotations atomic.Int32
-	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
-			rotations.Add(1)
-			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
-	}))
-	defer control.Close()
-
-	c := newWarpClient(t, srv.URL, control.URL)
+	c, _ := newWarpClient(srv.URL, &rotations)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)
@@ -164,8 +152,61 @@ func TestFreeLimitHookRotatesUntilSuccess(t *testing.T) {
 }
 
 // TestFreeLimitHookRetriesOnlyOnce documents the bound: after the configured
-// maximum rotations, a still-limited upstream is returned to the caller
-// unchanged (body intact) rather than retried forever.
+// maximum rotations a still-limited upstream is returned unchanged.
+// TestKiloAndLLM7InstallRateLimitHook guards that their free 429s rotate too.
+func TestKiloAndLLM7InstallRateLimitHook(t *testing.T) {
+	ctx := context.Background()
+	check := func(name string, c *HTTPClient) {
+		t.Helper()
+		if c.onFreeLimit == nil {
+			t.Fatalf("%s: rate limit hook not installed", name)
+		}
+		resp := &http.Response{StatusCode: http.StatusTooManyRequests, Body: http.NoBody}
+		if !c.onFreeLimit(ctx, resp) {
+			t.Errorf("%s: generic 429 did not match the hook", name)
+		}
+		resp.StatusCode = http.StatusOK
+		if c.onFreeLimit(ctx, resp) {
+			t.Errorf("%s: 200 matched the rate limit hook", name)
+		}
+	}
+	kilo := NewKiloUpstreamWithEgress("http://example.invalid", "k", nil, egress.NewRouter())
+	check("kilo", kilo.client)
+	llm7 := NewLLM7UpstreamWithEgress("http://example.invalid", nil, egress.NewRouter())
+	check("llm7", llm7.client)
+}
+
+func TestGeneric429RotatesAndRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"too many requests"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	var rotations atomic.Int32
+	released := &atomic.Int32{}
+	d := &testWarpDialer{rotations: &rotations, released: released, dialer: &net.Dialer{}}
+	route := EgressRoute{testDialer: d}
+	c := NewHTTPClientWithTransport(srv.URL, []string{"public"}, nil, nil)
+	c.SetRoute(NewWarpTransport(route, nil), nil, &route)
+	c.SetFreeLimitHook(anyRateLimit)
+
+	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || calls.Load() != 2 || rotations.Load() != 1 {
+		t.Fatalf("status=%d calls=%d rotations=%d", resp.StatusCode, calls.Load(), rotations.Load())
+	}
+}
+
 func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,17 +217,7 @@ func TestFreeLimitHookRetriesOnlyOnce(t *testing.T) {
 	defer srv.Close()
 
 	var rotations atomic.Int32
-	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/rotate" {
-			rotations.Add(1)
-			_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34b0:10::1"}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"ip":"2a09:bac1:34a0:10::1"}`)
-	}))
-	defer control.Close()
-
-	c := newWarpClient(t, srv.URL, control.URL)
+	c, _ := newWarpClient(srv.URL, &rotations)
 	resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("Post: %v", err)

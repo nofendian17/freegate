@@ -316,7 +316,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 		attempts = 1
 	}
 	// Free-tier usage limits are counted per exit IP, so a request rotates
-	// its own WARP endpoint and retries — up to maxFreeLimitRetries times —
+	// its own WARP exit and retries — up to maxFreeLimitRetries times —
 	// instead of dropping the client's connection on the first limited IP.
 	// Key rotation below is a separate budget.
 	freeRetries := 0
@@ -327,8 +327,19 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 		if st.egress != nil {
 			reqCtx, lease = st.egress.Acquire(ctx)
 		}
+		released := false
+		release := func() {
+			if released {
+				return
+			}
+			released = true
+			if lease != nil {
+				lease.Release()
+			}
+		}
 		req, err := build(reqCtx)
 		if err != nil {
+			release()
 			return nil, err
 		}
 		key := c.currentKey()
@@ -341,6 +352,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			// relay rewriting and try direct once.
 			directReq, derr := build(reqCtx)
 			if derr != nil {
+				release()
 				return nil, derr
 			}
 			key = c.currentKey()
@@ -348,6 +360,7 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			resp, err = c.doTransport(st, directReq)
 		}
 		if err != nil {
+			release()
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
@@ -357,32 +370,50 @@ func (c *HTTPClient) doWithHeaders(ctx context.Context, build func(context.Conte
 			if c.onFreeLimit != nil && freeRetries < maxFreeLimitRetries && lease != nil && c.onFreeLimit(ctx, resp) {
 				freeRetries++
 				_ = resp.Body.Close()
-				// Drain in-flight traffic before WARP drops the tunnel: the
-				// transport releases idle connections on every poll so a
-				// finished stream does not stall the rotation.
-				done := lease.RotateAsync("upstream free usage limit", c.CloseIdleConnections)
+				done := lease.RotateAsync(ctx, "upstream free usage limit", c.CloseIdleConnections)
 				select {
 				case <-done:
 				case <-ctx.Done():
+					release()
 					return nil, ctx.Err()
 				}
-				// A pooled connection opened on the old exit would keep
-				// using it; drop them so the retry dials the new exit.
 				// The next loop iteration acquires a fresh lease, which
-				// attributes its dial to the rotated endpoint.
-				c.CloseIdleConnections()
+				// attributes its dial to the replacement exit.
+				release()
 				continue
 			}
 			if len(c.apiKeys) > 1 && attempt+1 < attempts {
 				c.cooldown.mark(key)
 				_ = resp.Body.Close()
+				release()
 				attempt++
 				continue
 			}
 		}
+		// The exit stays leased until the caller finishes the body. This
+		// covers SSE streams as well as ordinary responses; without it a
+		// retired exit could be released while a stream is still using it.
+		if resp.Body != nil {
+			resp.Body = &releaseBody{ReadCloser: resp.Body, release: release}
+		} else {
+			release()
+		}
 		return resp, nil
 	}
 	return nil, fmt.Errorf("unreachable: no attempt returned a response")
+}
+
+// releaseBody returns a WARP lease when the response body is closed.
+type releaseBody struct {
+	io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func (b *releaseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.release)
+	return err
 }
 
 // catalogAcceptEncoding is declared explicitly on every catalog fetch. Naming

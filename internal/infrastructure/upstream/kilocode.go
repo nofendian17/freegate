@@ -27,8 +27,14 @@ func NewKiloUpstreamWithEgress(baseURL, apiKey string, tr *http.Transport, route
 	if tr == nil {
 		tr = NewTransport()
 	}
+	client := NewHTTPClientWithTransport(baseURL, []string{apiKey}, nil, tr)
+	if router != nil {
+		// Kilo's free 429 has no distinctive marker; the limit is per exit,
+		// so rotate the WARP exit and retry like OpenCode does.
+		client.SetFreeLimitHook(anyRateLimit)
+	}
 	return &KiloUpstream{
-		client: NewHTTPClientWithTransport(baseURL, []string{apiKey}, nil, tr),
+		client: client,
 		cache:  NewModelCache(),
 		trs:    newTransportPair(tr, router),
 	}
